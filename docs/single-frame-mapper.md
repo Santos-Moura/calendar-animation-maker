@@ -1,71 +1,98 @@
 # Single Frame Calendar Mapper
 
-The single-frame experiment answers one question before the project scales up: can one processed video frame remain recognizable after it is translated into normal Google Calendar events?
-
-It does not upload an animation. It selects exactly one manifest frame, creates a local plan and comparison images, and optionally uploads only that frame to the dedicated laboratory calendar.
+The single-frame experiment asks whether one processed frame remains recognizable after it is translated into normal Google Calendar events. It does not upload an animation: one selected manifest frame becomes one planned Calendar week.
 
 ## Frame-to-week model
 
-One future animation frame occupies one Calendar week. The calibrated UI starts on Sunday, so the logical horizontal axis is:
+The mapper reads the calibrated grid instead of hardcoding it. With the current measurements:
 
 ```text
-x=0..5   -> Sunday, subcolumns 0..5
-x=6..11  -> Monday, subcolumns 0..5
-...
-x=36..41 -> Saturday, subcolumns 0..5
+6 subcolumns/day x 7 days = 42 columns
+06:00-18:00 / 30 minutes = 24 rows
+candidate grid = 42x24
 ```
 
-`--start-date` may be any date inside the intended week. The mapper normalizes it to the calibrated `week_starts_on`. For example, `2026-09-07` resolves to Sunday `2026-09-06`.
-
-The vertical axis is derived from the profile rather than hardcoded. With the current measurements, 06:00-18:00 and 30-minute distinguishable rows yield 24 rows:
+For a Sunday-first profile:
 
 ```text
-y=0  -> 06:00-06:30
-y=1  -> 06:30-07:00
+x=0..5   -> Sunday, logical subcolumns 0..5
+x=6..11  -> Monday, logical subcolumns 0..5
 ...
-y=23 -> 17:30-18:00
+x=36..41 -> Saturday, logical subcolumns 0..5
+
+y=0      -> 06:00-06:30
+...
+y=23     -> 17:30-18:00
 ```
 
-The current candidate capacity is `42x24`, but the mapper always reads it from the calibration profile.
+`--start-date` may be any date inside the target week. The mapper normalizes it to the recorded `week_starts_on`.
 
-## Mapping stages
+## Mapping modes
+
+### `sparse`
+
+Sparse is the backward-compatible CLI default.
 
 ```text
-ManifestBlock
-    -> LogicalCell
+manifest blocks
+    -> expanded foreground matrix
     -> contain fitting
-    -> CalendarMappedCell
-    -> CalendarEventDraft
+    -> foreground events only
 ```
 
-A source block with `width=4` is expanded to four unit cells before fitting. This prevents the mapper from claiming that `block.width` can be represented by one Calendar event. The first experiment deliberately uses one mapped cell per event; fidelity is more important than event-count optimization.
+It minimizes event count. Its limitation is horizontal: Google Calendar has no API field named `subcolumn`, so three isolated simultaneous events may be rendered as three equal columns even when the intended logical positions were 0, 3, and 5.
 
-Only `contain` is implemented. It preserves source aspect ratio, centers the fitted image in the target grid, and leaves unused target cells empty. Background pixels were already removed before the manifest was written, so absent cells do not produce events.
+### `full-grid`
 
-## Color mapping
+Full-grid is the recommended baseline for the first real visual experiment.
 
-Each source `color_hex` is compared with the calibrated usable Calendar palette. The mapper chooses the nearest RGB color and applies a centralized contrast fallback against the manifest background, or the dark Calendar background when the manifest has no explicit background.
-
-The mapper handles pixels, colors, contrast, shape, and position. It does not recognize semantic objects. Temporal color stability is reserved for multi-frame planning.
-
-## Important horizontal limitation
-
-Google Calendar has no API field named `subcolumn`. It decides horizontal placement from simultaneous events. The plan records the intended day and subcolumn and creates same-row cells with simultaneous start/end times, but the real UI must still be inspected.
-
-Sparse positions are especially experimental: Calendar can widen or reorder overlapping events because it owns the layout algorithm. `mapped-preview.png` is the mapper's logical interpretation, not a simulation of Calendar CSS.
-
-This is why dry-run is allowed while the horizontal-bar observation is pending, but `--execute` is blocked until the consolidated profile reports `READY FOR SINGLE-FRAME EXPERIMENT`.
-
-## Dry-run
-
-```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --start-date 2026-09-07 --run-id frame-test-001
+```text
+manifest blocks
+    -> expanded foreground matrix
+    -> contain fitting
+    -> complete target canvas
+    -> foreground + structural background events
 ```
 
-Use an explicit profile when needed:
+Every target cell becomes exactly one event. For every day and row, all calibrated subcolumns exist and share the same start/end interval. Structural background cells occupy otherwise empty slots, making the geometry more predictable.
+
+This does not create an API-level subcolumn property. Events are emitted deterministically in `day -> row -> subcolumn` order, while final visual ordering still belongs to Google Calendar and must be inspected in the real UI.
+
+## Source background versus structural background
+
+These are different concepts:
+
+- source background is content removed from the video before the manifest is written;
+- Calendar structural background is an intentional event that occupies a full-grid cell.
+
+Structural events carry `cell_role=background`; visible pixels carry `cell_role=foreground`. Both carry private `generated_by`, `animation_id`, `run_id`, `frame_index`, `logical_x`, `logical_y`, `subcolumn`, and `subcolumn_index` metadata. Foreground events additionally retain `source_block_index`.
+
+Event summaries contain only one blank space so coordinates do not appear over the pixel art.
+
+## Aspect ratio and background color
+
+Only `contain` fitting is implemented. It preserves the source aspect ratio, centers the image, and fills every remaining target cell in full-grid mode.
+
+The Calendar API supports a fixed event palette rather than arbitrary RGB. Full-grid therefore uses a Calendar `colorId` for its canvas:
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --calibration-profile .\output\calibration\calibration-profile.yaml --start-date 2026-09-07 --run-id frame-test-001
+--calendar-background-color-id 8
+```
+
+When omitted, the deterministic project default is `8`. Foreground RGB still passes through nearest-color and contrast mapping; the selected structural background does not. Calendar may render the same color differently in light and dark themes, so the frame plan is theme-independent and the final appearance requires visual comparison.
+
+## Dry-run commands
+
+Sparse:
+
+```powershell
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode sparse --start-date 2026-09-07 --run-id primeiro-frame-sparse-01
+```
+
+Full-grid:
+
+```powershell
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --calendar-background-color-id 8 --start-date 2026-09-07 --run-id primeiro-frame-full-grid-01
 ```
 
 Dry-run is fully local: it does not construct a Google gateway, authenticate, write a token, create a calendar, create an event, or delete an event.
@@ -78,76 +105,89 @@ output/frame-mapping/<run_id>/
 |-- mapping-report.txt
 |-- source-frame.png
 |-- mapped-preview.png
+|-- mapped-debug.png
 `-- execution-result.json
 ```
 
-The report exposes:
+- `source-frame.png` is the processed manifest image;
+- `mapped-preview.png` is a solid logical pixel canvas, not Calendar CSS;
+- `mapped-debug.png` adds rows, subcolumns, and day boundaries;
+- `mapping-report.txt` includes both mode estimates;
+- `frame-plan.json` records mode, background, roles, metrics, events, and metadata.
 
-- frame index;
-- source and target grids;
-- source blocks;
-- expanded and non-background cells;
-- mapped cells;
-- Calendar event count;
-- unique Calendar colors;
-- cells per event;
-- compression ratio;
-- execute limit and warnings.
+The report distinguishes expanded source cells, fitted foreground, structural background, total cells, foreground/background events, foreground colors, and execution limits.
 
-Compare `source-frame.png` and `mapped-preview.png` side by side before considering a real upload. Do not hide a high event count: this version intentionally starts at one event per mapped cell.
+For the tested frame 0:
+
+```text
+Source grid: 28x20
+Target grid: 42x24
+Expanded source cells: 75
+Foreground cells after fitting: 101
+
+Sparse events: 101
+Full-grid background cells: 907
+Full-grid events: 1008
+```
+
+## Cost of fidelity
+
+Full-grid intentionally performs no filler optimization:
+
+```text
+42x24 = 1008 events/frame
+1008 x 12 frames = 12096 events
+1008 x 60 frames = 60480 events
+```
+
+These totals are planning estimates, not a claim that Google Calendar will safely accept those workloads. The baseline prioritizes visual fidelity over event economy.
 
 ## Real upload safety
 
-The default single-frame execute limit is 500 events and the absolute configurable ceiling is 2000. Dry-run still produces its plan when the event count exceeds the chosen execute limit; real upload fails before authentication.
+The normal single-frame execution limit is 1200 events and the absolute configurable ceiling remains 2000. Dry-run is never blocked by the normal limit; real execution is blocked before authentication when the plan exceeds it.
 
-Real upload additionally requires:
+Real execution additionally requires:
 
 - explicit `--execute`;
 - explicit `--start-date`;
 - a complete calibration profile;
-- event count within the configured limit;
-- user confirmation, unless `--yes` is supplied;
+- confirmation defaulting to `N`, unless `--yes` is supplied;
 - the recognized secondary `Calendar Animation Lab`;
-- no existing events with the same `generated_by`, `animation_id`, `run_id`, and `frame_index`.
+- no existing frame with the same run metadata.
+
+The confirmation discloses mapping mode, target grid, foreground events, background events, total events, calendar, frame, and run ID.
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --start-date 2026-09-07 --run-id frame-test-001 --execute
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --calendar-background-color-id 8 --start-date 2026-09-07 --run-id primeiro-frame-full-grid-01 --execute
 ```
 
-Every event records `generated_by`, `animation_id`, `run_id`, `frame_index`, `logical_x`, `logical_y`, `subcolumn`, and `source_block_index` as private metadata. Partial failures preserve created IDs, created/failed counts, and errors in `execution-result.json`.
+Partial failures preserve planned, created, failed, foreground-created, background-created, IDs, and errors in `execution-result.json`.
 
-Cleanup remains dry-run by default:
+Cleanup removes foreground and background together because both share the same run metadata:
 
 ```powershell
-python -m calendar_anim calendar cleanup --animation-id primeiro-teste --run-id frame-test-001
-python -m calendar_anim calendar cleanup --animation-id primeiro-teste --run-id frame-test-001 --execute
+python -m calendar_anim calendar cleanup --animation-id primeiro-teste --run-id primeiro-frame-full-grid-01
+python -m calendar_anim calendar cleanup --animation-id primeiro-teste --run-id primeiro-frame-full-grid-01 --execute
 ```
-
-Use the actual `animation_id` shown by `map-frame`; it may differ from the output-directory name.
 
 ## Why there is no Playwright yet
 
-Calendar API writes are not visually atomic. The final animation will not create and delete events while recording. The chosen architecture is:
-
-```text
-pre-upload every frame
-    -> one frame per week
-    -> wait for Calendar to stabilize
-    -> capture that week
-    -> advance and capture the next week
-    -> compose screenshots into MP4/GIF
-```
-
-This branch does not implement multiple real frames, batching, retry/resume, Playwright, real screenshots, or MP4/GIF composition.
+Calendar API writes are not visually atomic. The future animation will pre-upload frames into separate weeks, wait for stabilization, capture each week, and compose the screenshots. This branch does not implement multi-frame upload, batching, retry/resume, Playwright, or MP4/GIF composition.
 
 ## Roadmap
 
 ```text
-Single Frame Mapper
-    -> 2-3 dry-run frames in consecutive weeks
+full-grid single frame
+    -> compare with real Calendar
+    -> validate subcolumn ordering
+    -> validate shape fidelity
+    -> test 2-3 frames
+    -> identify fillers that can be removed safely
+    -> future hybrid mapping
     -> multi-frame planner
-    -> guarded full upload
-    -> retry/resume
-    -> Playwright stable waits and screenshots
-    -> MP4/GIF composition
+    -> upload/retry/resume
+    -> Playwright capture
+    -> final MP4/GIF
 ```
+
+Sparse remains a valid future optimization. A hybrid strategy may eventually retain fillers only where they are structurally required, but it is deliberately outside this baseline.

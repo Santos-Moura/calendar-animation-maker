@@ -35,7 +35,7 @@ flowchart LR
 - opt-in OAuth upload of at most 30 calibration events by default to a dedicated lab calendar;
 - duplicate-run detection and cleanup filtered by private metadata.
 - structured color, position, and horizontal-bar observations with mapper-readiness summary.
-- one-frame `contain` fitting, Calendar color mapping, local comparison artifacts, and guarded upload.
+- sparse and full-grid one-frame mapping, Calendar color mapping, local comparison artifacts, and guarded upload.
 
 ## Install
 
@@ -135,15 +135,20 @@ The calibration observations extend the local profile without inventing defaults
 Map exactly one manifest frame without contacting Google:
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --start-date 2026-09-07 --run-id frame-test-001
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode sparse --start-date 2026-09-07 --run-id frame-sparse-001
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --calendar-background-color-id 8 --start-date 2026-09-07 --run-id frame-full-grid-001
 ```
 
-The command reads `output/calibration/calibration-profile.yaml` by default and writes `frame-plan.json`, `mapping-report.txt`, `source-frame.png`, `mapped-preview.png`, and `execution-result.json` below `output/frame-mapping/<run_id>/`. A manifest grid such as `28x20` is fitted with aspect-preserving `contain` into the calibrated candidate grid. Horizontal blocks are expanded into unit cells before fitting, background cells remain absent, and colors are mapped to the nearest calibrated Calendar color with a contrast fallback.
+The command reads `output/calibration/calibration-profile.yaml` by default and writes `frame-plan.json`, `mapping-report.txt`, `source-frame.png`, `mapped-preview.png`, `mapped-debug.png`, and `execution-result.json` below `output/frame-mapping/<run_id>/`. A manifest grid such as `28x20` is fitted with aspect-preserving `contain` into the calibrated candidate grid.
+
+`sparse` is the backward-compatible default and creates only foreground events. It is efficient, but Calendar may redistribute isolated simultaneous events. `full-grid` is recommended for the first real visual experiment: every target cell becomes an event, and structural background events keep all calibrated subcolumns occupied. The background is a configurable Calendar `colorId`, not an attempt to match the browser theme.
+
+For the current candidate grid, full-grid costs `42x24 = 1008` events for one frame. Twelve frames would require 12,096 events and 60 frames would require 60,480 events before any future optimization. These volumes are estimates, not guaranteed safe Calendar workloads.
 
 Dry-run remains available while `horizontal-bars` is pending, but real upload is blocked until the profile reports `READY FOR SINGLE-FRAME EXPERIMENT`. An upload additionally requires an explicit date, event-limit validation, confirmation, OAuth, the laboratory calendar, and a unique frame run:
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --start-date 2026-09-07 --run-id frame-test-001 --execute
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --calendar-background-color-id 8 --start-date 2026-09-07 --run-id frame-full-grid-001 --execute
 ```
 
 See [single-frame mapper](docs/single-frame-mapper.md) for mapping rules, metrics, limits, cleanup, and current visual constraints.
@@ -172,14 +177,15 @@ Playwright will eventually use a separate persistent profile after manual authen
 
 ## Limitations and roadmap
 
-Calendar colors and layout still require manual measurement. Only calibration and one-frame uploads are supported; there is no multi-frame upload, batching/resume, Playwright selector implementation, vertical block merge, or final screenshot composition.
+Calendar colors and final event ordering still require manual validation. Only calibration and one-frame uploads are supported; there is no hybrid mapping, multi-frame upload, batching/resume, Playwright selector implementation, vertical block merge, or final screenshot composition.
 
 1. **Phase 0 – calibration:** a few static events, useful resolution, event duration, zoom, and window size.
 2. **Phase 1 – local MVP:** video, frames, pixelization, GIF, manifest, and estimate (implemented).
-3. **Phase 2 – planning:** mapper, dry-run, separate calendar, metadata, and safe cleanup (single-frame experiment implemented).
-4. **Phase 3 – live upload:** multi-frame planning, batches, backoff, quotas, and resume.
-5. **Phase 4 – capture:** persistent Playwright profile, weekly navigation, stable waits, screenshots, composition.
-6. **Phase 5 – longer clips:** around 10 seconds, configurable FPS, scenes, stronger compression and resume.
+3. **Phase 2 – planning:** sparse/full-grid mapper, dry-run, separate calendar, metadata, and safe cleanup (single-frame baseline implemented).
+4. **Phase 3 – fidelity:** compare full-grid with Calendar, validate ordering and test 2–3 frames; remove fillers only when proven safe.
+5. **Phase 4 – live upload:** multi-frame planning, batches, backoff, quotas, and resume.
+6. **Phase 5 – capture:** persistent Playwright profile, weekly navigation, stable waits, screenshots, composition.
+7. **Phase 6 – longer clips:** around 10 seconds, configurable FPS, scenes, stronger compression and resume.
 
 Clips of 2–5 seconds and 4–8 FPS are initial recommendations, not architectural limits. Cost scales roughly as selected frames × blocks per frame; events do not animate on their own—the final animation is an illusion produced by switching weekly frames.
 
