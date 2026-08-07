@@ -2,6 +2,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 import calendar_anim.calendar.commands as calendar_commands
@@ -265,6 +266,10 @@ def test_summary_without_measurements_shows_pending(tmp_path: Path) -> None:
     assert "Minimum visible event: pending" in result.output
     assert "Usable overlaps per day: not measured yet" in result.output
     assert "Logical columns: pending overlap-columns calibration" in result.output
+    assert "Tested color IDs: pending calibration" in result.output
+    assert "Week alignment: pending calibration" in result.output
+    assert "Recommended strategy: pending" in result.output
+    assert "Mapper readiness: NOT READY" in result.output
 
 
 def test_summary_can_overlay_observations_by_run_id(
@@ -294,3 +299,152 @@ def test_summary_can_overlay_observations_by_run_id(
     assert result.exit_code == 0, result.output
     assert "Usable overlaps per day: 4" in result.output
     assert "Logical columns: 28" in result.output
+
+
+@pytest.mark.parametrize("pattern", ["color-palette", "position-grid", "horizontal-bars"])
+def test_remaining_calibration_dry_runs_never_create_an_api_gateway(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pattern: str,
+) -> None:
+    monkeypatch.setattr(
+        calendar_commands,
+        "_google_gateway",
+        lambda: pytest.fail("dry-run must not create an API gateway"),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "calibrate",
+            "--pattern",
+            pattern,
+            "--start-date",
+            "2026-08-17",
+            "--run-id",
+            f"dry-{pattern}",
+            "--output",
+            str(tmp_path / pattern),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Execution: DRY RUN" in result.output
+
+
+def test_cli_records_all_remaining_calibrations_and_becomes_mapper_ready(
+    tmp_path: Path,
+) -> None:
+    profile = tmp_path / "profile.yaml"
+
+    base = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "base-observation",
+            "--pattern",
+            "overlap-columns",
+            "--minimum-visible-event-minutes",
+            "5",
+            "--minimum-distinguishable-height-minutes",
+            "30",
+            "--maximum-tested-overlap-columns",
+            "6",
+            "--usable-overlap-columns",
+            "6",
+            "--output",
+            str(tmp_path / "base.yaml"),
+            "--profile-output",
+            str(profile),
+        ],
+    )
+    assert base.exit_code == 0, base.output
+
+    colors = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "color-observation",
+            "--pattern",
+            "color-palette",
+            "--preferred-color-ids",
+            "1,5,7,9",
+            "--recommended-color-count",
+            "4",
+            "--poor-contrast-color-ids",
+            "8",
+            "--similar-color-groups",
+            "1,9;2,10",
+            "--notes",
+            "Measured palette.",
+            "--output",
+            str(tmp_path / "colors.yaml"),
+            "--profile-output",
+            str(profile),
+        ],
+    )
+    assert colors.exit_code == 0, colors.output
+    color_yaml = yaml.safe_load((tmp_path / "colors.yaml").read_text(encoding="utf-8"))
+    assert color_yaml["observations"]["tested_color_ids"] == [str(value) for value in range(1, 12)]
+    assert color_yaml["observations"]["preferred_color_ids"] == ["1", "5", "7", "9"]
+
+    position = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "position-observation",
+            "--pattern",
+            "position-grid",
+            "--week-alignment-ok",
+            "--timezone-alignment-ok",
+            "--day-alignment-ok",
+            "--vertical-alignment-ok",
+            "--week-starts-on",
+            "monday",
+            "--output",
+            str(tmp_path / "position.yaml"),
+            "--profile-output",
+            str(profile),
+        ],
+    )
+    assert position.exit_code == 0, position.output
+
+    bars = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "bars-observation",
+            "--pattern",
+            "horizontal-bars",
+            "--independent-cells-contiguous",
+            "--no-visible-cell-gaps",
+            "--same-color-cells-merge",
+            "--maximum-useful-bar-width",
+            "6",
+            "--recommended-horizontal-strategy",
+            "independent-cells",
+            "--output",
+            str(tmp_path / "bars.yaml"),
+            "--profile-output",
+            str(profile),
+        ],
+    )
+    assert bars.exit_code == 0, bars.output
+
+    summary = runner.invoke(
+        app,
+        ["calendar", "calibration-summary", "--profile", str(profile)],
+    )
+    assert summary.exit_code == 0, summary.output
+    assert "Preferred color IDs: 1, 5, 7, 9" in summary.output
+    assert "Week alignment: OK" in summary.output
+    assert "Recommended strategy: independent-cells" in summary.output
+    assert "Candidate logical grid: 42x24" in summary.output
+    assert "Mapper readiness: READY FOR SINGLE-FRAME EXPERIMENT" in summary.output

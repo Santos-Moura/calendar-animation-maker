@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 from calendar_anim.calendar.calibration.patterns import (
+    EVENT_COLOR_NAMES,
     EVENT_COLORS,
     PATTERNS,
     build_calibration_plan,
@@ -17,8 +18,8 @@ EXPECTED_COUNTS = {
     "duration-scale": 7,
     "overlap-columns": 21,
     "color-palette": 11,
-    "position-grid": 6,
-    "horizontal-bars": 15,
+    "position-grid": 9,
+    "horizontal-bars": 21,
     "combined": 27,
 }
 
@@ -71,26 +72,96 @@ def test_overlap_columns_has_exact_deterministic_group_structure() -> None:
 def test_color_palette_covers_supported_colors() -> None:
     plan = build_calibration_plan("color-palette", START, run_id="colors-run")
     assert [(event.color_id, event.color_hex) for event in plan.events] == EVENT_COLORS
+    assert [event.private_metadata["color_id"] for event in plan.events] == [
+        color_id for color_id, _ in EVENT_COLORS
+    ]
+    assert [event.private_metadata["logical_color_name"] for event in plan.events] == [
+        EVENT_COLOR_NAMES[color_id] for color_id, _ in EVENT_COLORS
+    ]
+    assert all(round((event.end - event.start).total_seconds() / 60) == 40 for event in plan.events)
+    assert all(
+        left.end <= right.start or left.start.date() != right.start.date()
+        for left, right in zip(plan.events, plan.events[1:], strict=False)
+    )
 
 
 def test_position_grid_uses_known_days_and_hours() -> None:
     plan = build_calibration_plan("position-grid", START, run_id="positions-run")
-    assert [(event.start.weekday(), event.start.hour) for event in plan.events] == [
-        (0, 8),
-        (0, 15),
-        (2, 8),
-        (2, 15),
-        (4, 8),
-        (4, 15),
+    assert [
+        (event.start.weekday(), event.start.hour, event.start.minute) for event in plan.events
+    ] == [
+        (0, 6, 0),
+        (0, 12, 0),
+        (0, 17, 30),
+        (2, 6, 0),
+        (2, 12, 0),
+        (2, 17, 30),
+        (4, 6, 0),
+        (4, 12, 0),
+        (4, 17, 30),
     ]
+    assert [event.summary for event in plan.events] == [
+        "M-AM",
+        "M-MID",
+        "M-PM",
+        "W-AM",
+        "W-MID",
+        "W-PM",
+        "F-AM",
+        "F-MID",
+        "F-PM",
+    ]
+    assert [event.private_metadata["logical_day"] for event in plan.events] == [
+        "monday",
+        "monday",
+        "monday",
+        "wednesday",
+        "wednesday",
+        "wednesday",
+        "friday",
+        "friday",
+        "friday",
+    ]
+    assert [event.private_metadata["logical_row"] for event in plan.events] == [
+        "0",
+        "12",
+        "23",
+        "0",
+        "12",
+        "23",
+        "0",
+        "12",
+        "23",
+    ]
+    assert all(
+        event.private_metadata["expected_start"] == event.start.isoformat() for event in plan.events
+    )
+    assert all(str(event.start.tzinfo) == "America/Sao_Paulo" for event in plan.events)
 
 
 def test_horizontal_bars_are_explicitly_grouped() -> None:
     plan = build_calibration_plan("horizontal-bars", START, run_id="bars-run")
     assert [
         sum(event.private_metadata["group"] == f"bar-{size}" for event in plan.events)
-        for size in range(1, 6)
-    ] == [1, 2, 3, 4, 5]
+        for size in range(1, 7)
+    ] == [1, 2, 3, 4, 5, 6]
+    groups = {
+        size: [event for event in plan.events if event.private_metadata["group"] == f"bar-{size}"]
+        for size in range(1, 7)
+    }
+    for size, events in groups.items():
+        assert len({event.start for event in events}) == 1
+        assert len({event.end for event in events}) == 1
+        assert len({event.color_id for event in events}) == 1
+        assert [event.private_metadata["bar_width"] for event in events] == [str(size)] * size
+        assert [event.private_metadata["cell_position"] for event in events] == [
+            str(position) for position in range(1, size + 1)
+        ]
+        assert {event.private_metadata["strategy"] for event in events} == {"independent-cells"}
+    ordered = list(groups.values())
+    assert all(
+        left[0].end <= right[0].start for left, right in zip(ordered, ordered[1:], strict=False)
+    )
 
 
 def test_limit_is_enforced_and_can_be_explicitly_increased() -> None:

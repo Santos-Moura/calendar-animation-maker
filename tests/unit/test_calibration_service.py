@@ -80,7 +80,7 @@ def test_cleanup_filters_metadata_and_preserves_unrelated_events(tmp_path: Path)
     result = service.cleanup(match)
     assert result.deleted_events == 7
     remaining = gateway.events[target_result.calendar_id]
-    assert len(remaining) == 7
+    assert len(remaining) == other.event_count + 1
     assert any(event.id == "unrelated" for event in remaining)
 
 
@@ -92,3 +92,26 @@ def test_cleanup_with_no_matches_changes_nothing(tmp_path: Path) -> None:
     result = service.cleanup(match)
     assert result.deleted_events == 0
     assert gateway.delete_event_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("pattern", "count"),
+    [("color-palette", 11), ("position-grid", 9), ("horizontal-bars", 21)],
+)
+def test_remaining_calibrations_execute_and_cleanup_only_the_requested_run(
+    tmp_path: Path, pattern: str, count: int
+) -> None:
+    service, gateway = make_service(tmp_path)
+    target = build_calibration_plan(pattern, date(2026, 8, 17), run_id=f"{pattern}-target")  # type: ignore[arg-type]
+    other = build_calibration_plan(pattern, date(2026, 8, 17), run_id=f"{pattern}-other")  # type: ignore[arg-type]
+    target_result = service.execute(target)
+    service.execute(other)
+    assert target_result.created_events == count
+
+    match = service.find_cleanup_matches(target.calendar_name, target.animation_id, target.run_id)
+    result = service.cleanup(match)
+    assert result.deleted_events == count
+    assert target_result.calendar_id is not None
+    remaining = gateway.events[target_result.calendar_id]
+    assert len(remaining) == count
+    assert {event.private_metadata["run_id"] for event in remaining} == {f"{pattern}-other"}
