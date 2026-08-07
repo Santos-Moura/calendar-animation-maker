@@ -34,6 +34,7 @@ flowchart LR
 - deterministic Calendar calibration patterns with JSON/text/PNG artifacts;
 - opt-in OAuth upload of at most 30 calibration events by default to a dedicated lab calendar;
 - duplicate-run detection and cleanup filtered by private metadata.
+- structured color, position, and horizontal-bar observations with mapper-readiness summary.
 
 ## Install
 
@@ -120,11 +121,13 @@ The shortest overlap-calibration flow is:
 
 ```powershell
 python -m calendar_anim calendar calibrate --pattern overlap-columns --start-date 2026-08-10 --run-id overlap-real-01 --execute
-python -m calendar_anim calendar record-calibration --run-id overlap-real-01 --pattern overlap-columns --maximum-tested-overlap-columns 6 --usable-overlap-columns 5 --browser-zoom 100 --viewport-width 1920 --viewport-height 1080
+python -m calendar_anim calendar record-calibration --run-id overlap-real-01 --pattern overlap-columns --maximum-tested-overlap-columns 6 --usable-overlap-columns 6 --browser-zoom 100 --viewport-width 1920 --viewport-height 1080
 python -m calendar_anim calendar calibration-summary
 ```
 
-Replace `5` with the conservative number of columns that remain usable in your real Calendar UI. The local profile separates minimum visible duration from minimum distinguishable height, derives logical rows and columns, and leaves missing measurements as `pending`. The expected-layout PNG is only a logical reference—not a simulation of Google's layout. See [Google setup](docs/google-calendar-setup.md), [calibration guide](docs/calendar-calibration.md), and [security](docs/calendar-security.md).
+The current measured profile records six usable overlap columns per day and therefore derives a candidate `42x24` grid. The local profile separates minimum visible duration from minimum distinguishable height and leaves missing measurements as `pending`. The expected-layout PNG is only a logical reference—not a simulation of Google's layout. See [Google setup](docs/google-calendar-setup.md), [calibration guide](docs/calendar-calibration.md), and [security](docs/calendar-security.md).
+
+The remaining pre-mapper experiments are `color-palette`, `position-grid`, and `horizontal-bars`. Their observations extend the local profile without inventing defaults. `calendar calibration-summary` reports each section as pending, incomplete, or recorded and only reports readiness for a single-frame experiment after all five calibration areas have measurements.
 
 Every render produces:
 
