@@ -4,11 +4,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from calendar_anim.calendar.calibration.models import CalibrationProfile
 from calendar_anim.calendar.frame_mapping.colors import (
     DEFAULT_CALENDAR_BACKGROUND,
+    calendar_palette_color,
     map_calendar_color,
 )
 from calendar_anim.calendar.frame_mapping.models import (
     CalendarMappedCell,
+    CellRole,
     FitMode,
+    FrameMappingMode,
     FrameMappingStatistics,
     LogicalCell,
     SingleFrameCalendarPlan,
@@ -48,6 +51,8 @@ def select_frame(manifest: AnimationManifest, frame_index: int) -> AnimationFram
 def expand_frame_blocks(
     frame: AnimationFrame, source_width: int, source_height: int
 ) -> list[LogicalCell]:
+    """Reconstruct the sparse foreground matrix from compact manifest blocks."""
+
     cells: list[LogicalCell] = []
     occupied: set[tuple[int, int]] = set()
     for block_index, block in enumerate(frame.blocks):
@@ -71,6 +76,7 @@ def expand_frame_blocks(
                         source_y=y,
                         color_hex=block.color_hex.upper(),
                         source_block_index=block_index,
+                        cell_role=CellRole.FOREGROUND,
                     )
                 )
     return cells
@@ -83,6 +89,8 @@ def fit_cells_contain(
     target_width: int,
     target_height: int,
 ) -> list[LogicalCell]:
+    """Fit foreground into the target without stretching or generating background."""
+
     if min(source_width, source_height, target_width, target_height) <= 0:
         raise CalendarAnimError("source and target grid dimensions must be positive")
     scale = min(target_width / source_width, target_height / source_height)
@@ -107,9 +115,75 @@ def fit_cells_contain(
                     source_y=source.source_y,
                     color_hex=source.color_hex,
                     source_block_index=source.source_block_index,
+                    cell_role=CellRole.FOREGROUND,
                 )
             )
     return fitted
+
+
+def build_sparse_cells(foreground_cells: list[LogicalCell]) -> list[LogicalCell]:
+    """Keep only fitted foreground cells for the event-efficient legacy mode."""
+
+    return sorted(foreground_cells, key=lambda cell: (cell.y, cell.x))
+
+
+def build_full_grid_cells(
+    foreground_cells: list[LogicalCell],
+    target_width: int,
+    target_height: int,
+    background_color_hex: str,
+) -> list[LogicalCell]:
+    """Complete the target canvas with structural Calendar background cells."""
+
+    if target_width <= 0 or target_height <= 0:
+        raise CalendarAnimError("target grid dimensions must be positive")
+    foreground_by_position: dict[tuple[int, int], LogicalCell] = {}
+    for cell in foreground_cells:
+        if cell.x >= target_width or cell.y >= target_height:
+            raise CalendarAnimError(
+                f"Fitted cell ({cell.x}, {cell.y}) exceeds target grid "
+                f"{target_width}x{target_height}"
+            )
+        position = (cell.x, cell.y)
+        if position in foreground_by_position:
+            raise CalendarAnimError(f"Duplicate fitted cell at ({cell.x}, {cell.y})")
+        foreground_by_position[position] = cell
+
+    canvas: list[LogicalCell] = []
+    for y in range(target_height):
+        for x in range(target_width):
+            foreground = foreground_by_position.get((x, y))
+            if foreground is not None:
+                canvas.append(foreground)
+            else:
+                canvas.append(
+                    LogicalCell(
+                        x=x,
+                        y=y,
+                        color_hex=background_color_hex,
+                        cell_role=CellRole.BACKGROUND,
+                    )
+                )
+    return canvas
+
+
+def generate_mapping_cells(
+    mode: FrameMappingMode,
+    foreground_cells: list[LogicalCell],
+    target_width: int,
+    target_height: int,
+    background_color_hex: str,
+) -> list[LogicalCell]:
+    """Select one of the two explicit cell-generation strategies."""
+
+    if mode is FrameMappingMode.SPARSE:
+        return build_sparse_cells(foreground_cells)
+    return build_full_grid_cells(
+        foreground_cells,
+        target_width,
+        target_height,
+        background_color_hex,
+    )
 
 
 def resolve_week_start(anchor: date, week_starts_on: str) -> date:
@@ -129,6 +203,7 @@ def map_cells_to_calendar(
     run_id: str,
     frame_index: int,
     background_hex: str,
+    background_color_id: str | None = None,
 ) -> tuple[list[CalendarMappedCell], list[CalendarEventDraft]]:
     columns_per_day = profile.horizontal_mapping.usable_overlap_columns_per_day
     row_minutes = profile.vertical_mapping.minimum_distinguishable_height_minutes
@@ -144,9 +219,20 @@ def map_cells_to_calendar(
         raise CalendarAnimError(f"Unknown timezone: {timezone}") from error
 
     allowed_colors = profile.color_mapping.preferred_color_ids
+    structural_background = (
+        calendar_palette_color(background_color_id) if background_color_id is not None else None
+    )
     mapped: list[CalendarMappedCell] = []
     events: list[CalendarEventDraft] = []
-    for cell in sorted(cells, key=lambda item: (item.y, item.x)):
+    ordered_cells = sorted(
+        cells,
+        key=lambda cell: (
+            cell.x // columns_per_day,
+            cell.y,
+            cell.x % columns_per_day,
+        ),
+    )
+    for cell in ordered_cells:
         if cell.x >= target_width or cell.y >= target_height:
             raise CalendarAnimError(
                 f"Fitted cell ({cell.x}, {cell.y}) exceeds target grid "
@@ -163,13 +249,19 @@ def map_cells_to_calendar(
             zone,
         ) + timedelta(minutes=cell.y * row_minutes)
         end = start + timedelta(minutes=row_minutes)
-        if end > datetime.combine(
+        visible_end = datetime.combine(
             event_day,
             time(profile.calendar_ui.visible_end_hour % 24),
             zone,
-        ) + (timedelta(days=1) if profile.calendar_ui.visible_end_hour == 24 else timedelta()):
+        ) + (timedelta(days=1) if profile.calendar_ui.visible_end_hour == 24 else timedelta())
+        if end > visible_end:
             raise CalendarAnimError(f"Logical y={cell.y} exceeds calibrated visible hours")
-        calendar_color = map_calendar_color(cell.color_hex, allowed_colors, background_hex)
+        if cell.cell_role is CellRole.BACKGROUND:
+            if structural_background is None:
+                raise CalendarAnimError("Structural background cell has no background color ID")
+            calendar_color = structural_background
+        else:
+            calendar_color = map_calendar_color(cell.color_hex, allowed_colors, background_hex)
         mapped_cell = CalendarMappedCell(
             logical_x=cell.x,
             logical_y=cell.y,
@@ -182,7 +274,21 @@ def map_cells_to_calendar(
             color_id=calendar_color.id,
             color_hex=calendar_color.hex,
             source_block_index=cell.source_block_index,
+            cell_role=cell.cell_role,
         )
+        metadata = {
+            "generated_by": "calendar-anim",
+            "animation_id": animation_id,
+            "run_id": run_id,
+            "frame_index": str(frame_index),
+            "logical_x": str(cell.x),
+            "logical_y": str(cell.y),
+            "subcolumn": str(subcolumn),
+            "subcolumn_index": str(subcolumn),
+            "cell_role": cell.cell_role.value,
+        }
+        if cell.source_block_index is not None:
+            metadata["source_block_index"] = str(cell.source_block_index)
         mapped.append(mapped_cell)
         events.append(
             CalendarEventDraft(
@@ -192,17 +298,8 @@ def map_cells_to_calendar(
                 end=end,
                 color_id=calendar_color.id,
                 color_hex=calendar_color.hex,
-                summary=f"calendar-anim:{animation_id}:frame-{frame_index}",
-                private_metadata={
-                    "generated_by": "calendar-anim",
-                    "animation_id": animation_id,
-                    "run_id": run_id,
-                    "frame_index": str(frame_index),
-                    "logical_x": str(cell.x),
-                    "logical_y": str(cell.y),
-                    "subcolumn": str(subcolumn),
-                    "source_block_index": str(cell.source_block_index),
-                },
+                summary=" ",
+                private_metadata=metadata,
             )
         )
     return mapped, events
@@ -217,6 +314,8 @@ def build_single_frame_plan(
     max_execute_events: int,
     fit: FitMode = "contain",
     calendar_name: str = "Calendar Animation Lab",
+    mapping_mode: FrameMappingMode = FrameMappingMode.SPARSE,
+    calendar_background_color_id: str | None = None,
 ) -> SingleFrameCalendarPlan:
     if fit != "contain":
         raise CalendarAnimError(f"Unsupported frame fit: {fit}")
@@ -245,24 +344,48 @@ def build_single_frame_plan(
     horizontal_strategy = recorded_strategy or "unit-cells-only"
     if horizontal_strategy not in SUPPORTED_HORIZONTAL_STRATEGIES:
         raise CalendarAnimError(
-            f"Horizontal strategy is not supported by the single-frame mapper: "
+            "Horizontal strategy is not supported by the single-frame mapper: "
             f"{horizontal_strategy}"
         )
-    background_hex = manifest.render.background or DEFAULT_CALENDAR_BACKGROUND
-    mapped, events = map_cells_to_calendar(
+
+    background_color = calendar_palette_color(calendar_background_color_id)
+    mapping_cells = generate_mapping_cells(
+        mapping_mode,
         fitted,
+        target_width,
+        target_height,
+        background_color.hex,
+    )
+    contrast_background = (
+        background_color.hex
+        if mapping_mode is FrameMappingMode.FULL_GRID
+        else manifest.render.background or DEFAULT_CALENDAR_BACKGROUND
+    )
+    mapped, events = map_cells_to_calendar(
+        mapping_cells,
         profile,
         week_start_date,
         profile.calendar_ui.timezone,
         manifest.animation_id,
         run_id,
         frame_index,
-        background_hex,
+        contrast_background,
+        background_color.id if mapping_mode is FrameMappingMode.FULL_GRID else None,
     )
-    warnings = [
-        "Calendar has no subcolumn field; placement is inferred from simultaneous events "
-        "and must be verified visually."
-    ]
+
+    warnings: list[str] = []
+    if mapping_mode is FrameMappingMode.FULL_GRID:
+        warnings.append(
+            "Full-grid creates every calibrated cell in deterministic day/row/subcolumn "
+            "order, but final visual ordering still depends on Google Calendar."
+        )
+    else:
+        warnings.append(
+            "Sparse mapping cannot guarantee absolute subcolumn positions because Calendar "
+            "controls the layout of simultaneous events."
+        )
+        if calendar_background_color_id is not None:
+            warnings.append("Calendar background color is ignored in sparse mode.")
     if not profile.mapper_ready:
         warnings.append(
             "Calibration profile is NOT READY; dry-run is allowed but real upload is blocked."
@@ -273,9 +396,11 @@ def build_single_frame_plan(
         warnings.append(
             f"Event count {len(events)} exceeds the configured execute limit {max_execute_events}."
         )
+
+    foreground_mapped = [cell for cell in mapped if cell.cell_role is CellRole.FOREGROUND]
+    background_count = len(mapped) - len(foreground_mapped)
     event_count = len(events)
     mapped_count = len(mapped)
-    unique_colors = len({cell.color_id for cell in mapped})
     return SingleFrameCalendarPlan(
         animation_id=manifest.animation_id,
         run_id=run_id,
@@ -288,6 +413,10 @@ def build_single_frame_plan(
         target_grid_width=target_width,
         target_grid_height=target_height,
         fit=fit,
+        mapping_mode=mapping_mode,
+        background_color_id=(
+            background_color.id if mapping_mode is FrameMappingMode.FULL_GRID else None
+        ),
         profile_ready=profile.mapper_ready,
         horizontal_strategy=horizontal_strategy,
         max_execute_events=max_execute_events,
@@ -298,9 +427,17 @@ def build_single_frame_plan(
             non_background_cells=len(expanded),
             mapped_cells=mapped_count,
             calendar_events=event_count,
-            unique_calendar_colors=unique_colors,
+            unique_calendar_colors=len({cell.color_id for cell in mapped}),
             cells_per_event=(mapped_count / event_count if event_count else 0),
             compression_ratio=(event_count / mapped_count if mapped_count else 0),
+            foreground_cells_after_fitting=len(foreground_mapped),
+            background_structural_cells=background_count,
+            total_logical_cells=mapped_count,
+            foreground_events=len(foreground_mapped),
+            background_events=background_count,
+            foreground_calendar_colors=len({cell.color_id for cell in foreground_mapped}),
+            sparse_event_estimate=len(fitted),
+            full_grid_event_estimate=target_width * target_height,
         ),
         mapped_cells=mapped,
         events=events,

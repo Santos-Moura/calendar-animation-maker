@@ -3,8 +3,12 @@ from datetime import date, timedelta
 import pytest
 
 from calendar_anim.calendar.calibration.models import CalibrationProfile
-from calendar_anim.calendar.frame_mapping.colors import map_calendar_color
+from calendar_anim.calendar.frame_mapping.colors import (
+    calendar_palette_color,
+    map_calendar_color,
+)
 from calendar_anim.calendar.frame_mapping.mapper import (
+    build_full_grid_cells,
     build_single_frame_plan,
     expand_frame_blocks,
     fit_cells_contain,
@@ -12,12 +16,21 @@ from calendar_anim.calendar.frame_mapping.mapper import (
     resolve_week_start,
     select_frame,
 )
-from calendar_anim.calendar.frame_mapping.models import LogicalCell
+from calendar_anim.calendar.frame_mapping.models import CellRole, FrameMappingMode, LogicalCell
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.frame import Block
 from tests.factories import make_manifest, make_ready_calibration_profile
 
 pytestmark = pytest.mark.unit
+
+
+def _small_profile(height: int = 1) -> CalibrationProfile:
+    data = make_ready_calibration_profile().model_dump()
+    data["calendar_ui"]["visible_start_hour"] = 6
+    data["calendar_ui"]["visible_end_hour"] = 6 + height
+    data["vertical_mapping"]["minimum_distinguishable_height_minutes"] = 60
+    data["horizontal_mapping"]["days_used"] = 1
+    return CalibrationProfile.model_validate(data)
 
 
 @pytest.mark.parametrize("width", [1, 4])
@@ -147,6 +160,183 @@ def test_color_mapper_handles_exact_nearest_contrast_and_determinism() -> None:
     first = map_calendar_color("#616161", ["7", "8"], "#616161", 3.0)
     second = map_calendar_color("#616161", ["7", "8"], "#616161", 3.0)
     assert first.id == second.id == "7"
+
+
+def test_calendar_background_color_is_explicit_deterministic_and_validated() -> None:
+    assert calendar_palette_color().id == "8"
+    assert calendar_palette_color("5").hex == "#F6BF26"
+    with pytest.raises(CalendarAnimError, match="Unsupported Calendar background color ID"):
+        calendar_palette_color("99")
+
+
+def test_full_grid_six_by_one_fills_every_cell_and_marks_roles() -> None:
+    foreground = [
+        LogicalCell(
+            x=3,
+            y=0,
+            source_x=3,
+            source_y=0,
+            color_hex="#039BE5",
+            source_block_index=0,
+        )
+    ]
+    cells = build_full_grid_cells(foreground, 6, 1, "#616161")
+    assert len(cells) == 6
+    assert [cell.cell_role for cell in cells] == [
+        CellRole.BACKGROUND,
+        CellRole.BACKGROUND,
+        CellRole.BACKGROUND,
+        CellRole.FOREGROUND,
+        CellRole.BACKGROUND,
+        CellRole.BACKGROUND,
+    ]
+    assert {cell.color_hex for cell in cells if cell.cell_role is CellRole.BACKGROUND} == {
+        "#616161"
+    }
+
+
+def test_full_grid_plan_has_fillers_metadata_and_exact_canvas_size() -> None:
+    manifest = make_manifest(Block(x=3, y=0, width=1, color_id="0", color_hex="#039BE5"))
+    manifest.render.grid_width = 6
+    manifest.render.grid_height = 1
+    plan = build_single_frame_plan(
+        manifest,
+        _small_profile(),
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="full-grid",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+        calendar_background_color_id="8",
+    )
+    assert plan.event_count == plan.target_grid_width * plan.target_grid_height == 6
+    assert plan.statistics.foreground_events == 1
+    assert plan.statistics.background_events == 5
+    assert plan.statistics.total_logical_cells == 6
+    assert plan.statistics.sparse_event_estimate == 1
+    assert plan.statistics.full_grid_event_estimate == 6
+    assert plan.background_color_id == "8"
+    assert [event.private_metadata["subcolumn_index"] for event in plan.events] == [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+    ]
+    assert plan.events[0].private_metadata["cell_role"] == "background"
+    assert plan.events[3].private_metadata["cell_role"] == "foreground"
+    assert plan.events[0].color_id == "8"
+    assert plan.events[3].summary == " "
+
+
+def test_full_grid_contain_centers_foreground_and_fills_borders() -> None:
+    manifest = make_manifest(Block(x=0, y=0, width=2, color_id="0", color_hex="#039BE5"))
+    manifest.render.grid_width = 2
+    manifest.render.grid_height = 2
+    manifest.frames[0].blocks.append(Block(x=0, y=1, width=2, color_id="0", color_hex="#039BE5"))
+    profile = _small_profile(height=4)
+    plan = build_single_frame_plan(
+        manifest,
+        profile,
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="contained",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+    )
+    foreground_x = {
+        cell.logical_x for cell in plan.mapped_cells if cell.cell_role is CellRole.FOREGROUND
+    }
+    assert foreground_x == {1, 2, 3, 4}
+    assert all(
+        cell.cell_role is CellRole.BACKGROUND
+        for cell in plan.mapped_cells
+        if cell.logical_x in {0, 5}
+    )
+
+
+def test_full_grid_with_full_foreground_needs_no_fillers() -> None:
+    manifest = make_manifest(Block(x=0, y=0, width=6, color_id="0", color_hex="#039BE5"))
+    manifest.render.grid_width = 6
+    manifest.render.grid_height = 1
+    plan = build_single_frame_plan(
+        manifest,
+        _small_profile(),
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="all-foreground",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+    )
+    assert plan.statistics.foreground_events == 6
+    assert plan.statistics.background_events == 0
+
+
+def test_sparse_mode_preserves_foreground_only_count() -> None:
+    plan = build_single_frame_plan(
+        make_manifest(),
+        make_ready_calibration_profile(),
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="sparse",
+        max_execute_events=500,
+        mapping_mode=FrameMappingMode.SPARSE,
+    )
+    assert plan.background_color_id is None
+    assert plan.statistics.background_events == 0
+    assert plan.event_count == plan.statistics.foreground_events
+    assert all(event.private_metadata["cell_role"] == "foreground" for event in plan.events)
+
+
+def test_full_grid_order_and_six_columns_are_deterministic_for_every_day_row() -> None:
+    plan = build_single_frame_plan(
+        make_manifest(),
+        make_ready_calibration_profile(),
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="ordered",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+    )
+    order = [
+        (
+            cell.day_offset,
+            cell.logical_y,
+            cell.subcolumn,
+        )
+        for cell in plan.mapped_cells
+    ]
+    assert order == sorted(order)
+    assert order[-1] == (6, 23, 5)
+    groups: dict[tuple[int, int], list[int]] = {}
+    for cell in plan.mapped_cells:
+        groups.setdefault((cell.day_offset, cell.logical_y), []).append(cell.subcolumn)
+    assert len(groups) == 7 * 24
+    assert all(subcolumns == list(range(6)) for subcolumns in groups.values())
+    for day_row, subcolumns in groups.items():
+        cells = [cell for cell in plan.mapped_cells if (cell.day_offset, cell.logical_y) == day_row]
+        assert len(subcolumns) == 6
+        assert len({(cell.start, cell.end) for cell in cells}) == 1
+
+
+def test_background_color_is_not_remapped_by_foreground_contrast() -> None:
+    manifest = make_manifest(Block(x=0, y=0, width=1, color_id="0", color_hex="#616161"))
+    manifest.render.grid_width = 6
+    manifest.render.grid_height = 1
+    plan = build_single_frame_plan(
+        manifest,
+        _small_profile(),
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="background-color",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+        calendar_background_color_id="8",
+    )
+    background = [cell for cell in plan.mapped_cells if cell.cell_role is CellRole.BACKGROUND]
+    assert background
+    assert {cell.color_id for cell in background} == {"8"}
 
 
 def test_build_plan_expands_blocks_adds_metadata_and_statistics() -> None:
