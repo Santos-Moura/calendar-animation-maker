@@ -1,0 +1,17 @@
+animation:
+  id: ghost-demo
+clip:
+  start_seconds: 0
+  duration_seconds: 2.5
+  frames: 10
+grid:
+  width: 28
+  height: 32
+  fit: contain
+palette:
+  name: calendar
+  colors: 4
+  background: "#000000"
+  background_tolerance: 30
+preview:
+  fps: 6
