@@ -77,3 +77,12 @@ def test_remaining_patterns_have_specific_reports_and_previews(
     assert expected in report
     with Image.open(tmp_path / "expected-layout.png") as image:
         assert image.size == (1400, 900)
+
+
+def test_horizontal_bar_report_has_a_manual_checklist_for_each_width(tmp_path: Path) -> None:
+    plan = build_calibration_plan("horizontal-bars", date(2026, 8, 31), run_id="bar-checklist")
+    write_dry_run_artifacts(plan, tmp_path)
+    report = (tmp_path / "calibration-report.txt").read_text(encoding="utf-8")
+    assert report.count("Visually contiguous:") == 6
+    assert report.count("Visible gaps:") == 6
+    assert "Expected logical width: 6" in report

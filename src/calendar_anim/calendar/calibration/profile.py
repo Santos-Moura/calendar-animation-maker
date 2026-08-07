@@ -189,6 +189,7 @@ def profile_summary(profile: CalibrationProfile) -> str:
         f"  Visible gaps between cells: {_yes_no(bars.visible_gaps_between_cells)}",
         (f"  Same-color cells merge visually: {_yes_no(bars.same_color_cells_merge_visually)}"),
         f"  Maximum useful bar width: {_value(bars.maximum_useful_bar_width)}",
+        (f"  Partial positioning predictable: {_yes_no(bars.partial_bar_positioning_predictable)}"),
         "",
         (
             "Candidate logical grid: "
@@ -265,6 +266,7 @@ def _position_status(profile: CalibrationProfile) -> str:
         mapping.timezone_alignment_ok is not None,
         mapping.day_alignment_ok is not None,
         mapping.vertical_alignment_ok is not None,
+        mapping.week_starts_on is not None,
     )
     return _completion_status(required, "position-grid")
 
@@ -273,6 +275,9 @@ def _bar_status(profile: CalibrationProfile) -> str:
     mapping = profile.horizontal_bar_mapping
     required = (
         mapping.independent_cells_appear_contiguous is not None,
+        mapping.visible_gaps_between_cells is not None,
+        mapping.same_color_cells_merge_visually is not None,
+        mapping.maximum_useful_bar_width is not None,
         mapping.recommended_horizontal_strategy is not None,
     )
     return _completion_status(required, "horizontal-bars")

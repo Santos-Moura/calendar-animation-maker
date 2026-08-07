@@ -197,3 +197,41 @@ def test_mapper_readiness_stays_not_ready_while_any_calibration_is_missing() -> 
     )
     assert profile.mapper_readiness == "NOT READY"
     assert "Horizontal bar mapping" in profile_summary(profile)
+
+
+def test_mapper_readiness_requires_week_start_and_complete_bar_observation() -> None:
+    profile = CalibrationProfile.model_validate(
+        {
+            "vertical_mapping": {
+                "minimum_visible_event_minutes": 5,
+                "minimum_distinguishable_height_minutes": 30,
+            },
+            "horizontal_mapping": {
+                "maximum_tested_overlap_columns": 6,
+                "usable_overlap_columns_per_day": 6,
+            },
+            "color_mapping": {
+                "tested_color_ids": ["1"],
+                "preferred_color_ids": ["1"],
+                "recommended_color_count": 1,
+            },
+            "position_mapping": {
+                "week_alignment_ok": True,
+                "timezone_alignment_ok": True,
+                "day_alignment_ok": True,
+                "vertical_alignment_ok": True,
+            },
+            "horizontal_bar_mapping": {
+                "independent_cells_appear_contiguous": True,
+                "visible_gaps_between_cells": False,
+                "same_color_cells_merge_visually": True,
+                "maximum_useful_bar_width": 6,
+                "recommended_horizontal_strategy": "independent-cells",
+            },
+        }
+    )
+    assert profile.mapper_ready is False
+    profile.position_mapping.week_starts_on = "sunday"
+    profile.horizontal_bar_mapping.visible_gaps_between_cells = None
+    profile = CalibrationProfile.model_validate(profile.model_dump())
+    assert profile.mapper_ready is False

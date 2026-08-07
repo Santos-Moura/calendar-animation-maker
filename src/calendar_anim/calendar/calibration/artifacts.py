@@ -262,6 +262,9 @@ def _build_horizontal_bars_report(plan: CalibrationPlan, executed: bool) -> str:
                 f"  Time: {events[0].start:%H:%M}-{events[0].end:%H:%M}",
                 f"  Cells: {len(events)}",
                 f"  Shared color ID: {events[0].color_id}",
+                "  Visually contiguous:",
+                "  Visible gaps:",
+                f"  Expected logical width: {width}",
             ]
         )
     lines.extend(

@@ -64,6 +64,9 @@ def make_ready_calibration_profile() -> CalibrationProfile:
             },
             "horizontal_bar_mapping": {
                 "independent_cells_appear_contiguous": True,
+                "visible_gaps_between_cells": False,
+                "same_color_cells_merge_visually": True,
+                "maximum_useful_bar_width": 6,
                 "recommended_horizontal_strategy": "independent-cells",
             },
         }

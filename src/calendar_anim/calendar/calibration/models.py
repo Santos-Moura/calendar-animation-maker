@@ -263,12 +263,17 @@ class CalibrationProfile(BaseModel):
             self.position_mapping.timezone_alignment_ok,
             self.position_mapping.day_alignment_ok,
             self.position_mapping.vertical_alignment_ok,
+            self.position_mapping.week_starts_on,
         )
         position_ready = all(value is not None for value in position_values)
-        bars_ready = (
-            self.horizontal_bar_mapping.independent_cells_appear_contiguous is not None
-            and self.horizontal_bar_mapping.recommended_horizontal_strategy is not None
+        bar_values = (
+            self.horizontal_bar_mapping.independent_cells_appear_contiguous,
+            self.horizontal_bar_mapping.visible_gaps_between_cells,
+            self.horizontal_bar_mapping.same_color_cells_merge_visually,
+            self.horizontal_bar_mapping.maximum_useful_bar_width,
+            self.horizontal_bar_mapping.recommended_horizontal_strategy,
         )
+        bars_ready = all(value is not None for value in bar_values)
         return all((vertical_ready, horizontal_ready, colors_ready, position_ready, bars_ready))
 
     @property
