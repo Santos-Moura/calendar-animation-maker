@@ -258,6 +258,67 @@ def test_execute_requires_explicit_date_and_confirmation(tmp_path: Path) -> None
     assert "Continue?" in aborted.output
 
 
+def test_full_grid_confirmation_discloses_cost_and_limit_blocks_before_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _mapping_inputs(tmp_path)
+    monkeypatch.setattr(
+        calendar_commands,
+        "_google_gateway",
+        lambda: pytest.fail("guard must run before API gateway construction"),
+    )
+    aborted = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--start-date",
+            "2026-09-07",
+            "--mapping-mode",
+            "full-grid",
+            "--run-id",
+            "confirm-full-grid",
+            "--output",
+            str(tmp_path / "confirm"),
+            "--execute",
+        ],
+        input="n\n",
+    )
+    assert aborted.exit_code != 0
+    assert "Mapping mode: FULL-GRID" in aborted.output
+    assert "Foreground events:" in aborted.output
+    assert "Background events:" in aborted.output
+    assert "This will create 1008 real Google Calendar events" in aborted.output
+
+    blocked = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--start-date",
+            "2026-09-07",
+            "--mapping-mode",
+            "full-grid",
+            "--max-events",
+            "1000",
+            "--run-id",
+            "limited-full-grid",
+            "--output",
+            str(tmp_path / "limited-full-grid"),
+            "--execute",
+            "--yes",
+        ],
+    )
+    assert blocked.exit_code == 1
+    assert "above the configured execute limit" in blocked.output
+
+
 def test_execute_uses_fake_gateway_and_limit_blocks_before_api(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

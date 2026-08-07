@@ -173,3 +173,26 @@ def test_full_grid_execute_reports_foreground_and_background_created(tmp_path: P
     assert len(matches) == 42 * 24
     deleted = gateway.delete_events(result.calendar_id or "", [event.id for event in matches])
     assert deleted.deleted_events == 42 * 24
+
+
+def test_full_grid_partial_failure_counts_created_background_role(tmp_path: Path) -> None:
+    gateway = PartialFailureGateway()
+    service = SingleFrameMappingService(
+        gateway,
+        LabCalendarService(gateway, CalendarConfigStore(tmp_path / "calendar.json")),
+    )
+    plan = build_single_frame_plan(
+        make_manifest(),
+        make_ready_calibration_profile(),
+        frame_index=0,
+        anchor_date=date(2026, 9, 7),
+        run_id="full-grid-partial",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+    )
+    result = service.execute(plan)
+    assert plan.events[0].private_metadata["cell_role"] == "background"
+    assert result.created_events == 1
+    assert result.foreground_created == 0
+    assert result.background_created == 1
+    assert result.failed_events == plan.event_count - 1
