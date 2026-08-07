@@ -1,0 +1,95 @@
+from datetime import date, datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field, computed_field, model_validator
+
+from calendar_anim.calendar.models import CalendarEventDraft
+
+FitMode = Literal["contain"]
+
+
+class LogicalCell(BaseModel):
+    """One non-background cell, before or after fitting into the target grid."""
+
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    source_x: int = Field(ge=0)
+    source_y: int = Field(ge=0)
+    color_hex: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    source_block_index: int = Field(ge=0)
+
+
+class CalendarMappedCell(BaseModel):
+    """A fitted cell with its intended Calendar coordinates and color."""
+
+    logical_x: int = Field(ge=0)
+    logical_y: int = Field(ge=0)
+    source_x: int = Field(ge=0)
+    source_y: int = Field(ge=0)
+    day_offset: int = Field(ge=0, le=6)
+    subcolumn: int = Field(ge=0)
+    start: datetime
+    end: datetime
+    color_id: str
+    color_hex: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    source_block_index: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def valid_interval(self) -> "CalendarMappedCell":
+        if self.start.tzinfo is None or self.end.tzinfo is None:
+            raise ValueError("mapped cell datetimes must be timezone-aware")
+        if self.start >= self.end:
+            raise ValueError("mapped cell start must be before end")
+        return self
+
+
+class FrameMappingStatistics(BaseModel):
+    source_blocks: int = Field(ge=0)
+    expanded_logical_cells: int = Field(ge=0)
+    non_background_cells: int = Field(ge=0)
+    mapped_cells: int = Field(ge=0)
+    calendar_events: int = Field(ge=0)
+    unique_calendar_colors: int = Field(ge=0)
+    cells_per_event: float = Field(ge=0)
+    compression_ratio: float = Field(ge=0)
+
+
+class SingleFrameCalendarPlan(BaseModel):
+    schema_version: str = "1.0"
+    animation_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    frame_index: int = Field(ge=0)
+    timezone: str
+    week_start_date: date
+    source_grid_width: int = Field(gt=0)
+    source_grid_height: int = Field(gt=0)
+    target_grid_width: int = Field(gt=0)
+    target_grid_height: int = Field(gt=0)
+    fit: FitMode = "contain"
+    profile_ready: bool
+    horizontal_strategy: str
+    max_execute_events: int = Field(gt=0)
+    warnings: list[str] = Field(default_factory=list)
+    statistics: FrameMappingStatistics
+    mapped_cells: list[CalendarMappedCell]
+    events: list[CalendarEventDraft]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def event_count(self) -> int:
+        return len(self.events)
+
+
+class SingleFrameExecutionResult(BaseModel):
+    schema_version: str = "1.0"
+    executed: bool
+    run_id: str
+    animation_id: str
+    frame_index: int = Field(ge=0)
+    calendar_id: str | None = None
+    calendar_created: bool = False
+    planned_events: int = Field(ge=0)
+    created_events: int = Field(default=0, ge=0)
+    failed_events: int = Field(default=0, ge=0)
+    created_event_ids: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
