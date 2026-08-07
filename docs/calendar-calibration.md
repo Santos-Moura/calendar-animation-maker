@@ -118,7 +118,7 @@ python -m calendar_anim calendar calibrate --pattern position-grid --start-date 
 Use the positive or negative form of every measured flag. The following example represents a fully aligned observation and must not be copied if the UI differs:
 
 ```powershell
-python -m calendar_anim calendar record-calibration --run-id position-real-20260807-01 --pattern position-grid --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --visible-start-hour 6 --visible-end-hour 18 --week-alignment-ok --timezone-alignment-ok --day-alignment-ok --vertical-alignment-ok --week-starts-on monday --notes "Replace with real observations."
+python -m calendar_anim calendar record-calibration --run-id position-real-20260807-01 --pattern position-grid --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --visible-start-hour 6 --visible-end-hour 18 --week-alignment-ok --timezone-alignment-ok --day-alignment-ok --vertical-alignment-ok --week-starts-on sunday --notes "Observed Sunday-to-Saturday week with correct days, times, and timezone."
 ```
 
 Negative forms include `--week-alignment-not-ok`, `--timezone-alignment-not-ok`, `--day-alignment-not-ok`, and `--vertical-alignment-not-ok`.
@@ -172,7 +172,7 @@ The profile schema keeps old vertical and overlap YAML compatible while adding o
 - `NOT READY`: at least one required experiment has no recorded measurements;
 - `READY FOR SINGLE-FRAME EXPERIMENT`: vertical, overlap, colors, position, and horizontal bars all have recorded measurements.
 
-Readiness does not block other commands and does not mark `42x24` as final.
+Readiness does not block local mapping and does not mark `42x24` as final. It does block a real single-frame upload. Position readiness includes `week_starts_on`; horizontal-bar readiness includes continuity, gaps, same-color merging, maximum useful width, and the recommended strategy.
 
 ## Cleanup
 
@@ -188,6 +188,6 @@ Cleanup matches only `generated_by`, `animation_id`, and `run_id` in the recogni
 
 ## Next delivery
 
-After all five experiments are recorded, the next delivery is **Single Frame Calendar Mapper**. It will read one manifest frame, use the calibration profile, create a dry-run event plan, report its event count, and optionally upload only that frame for visual comparison.
+The **Single Frame Calendar Mapper** is now available as `calendar map-frame`. Dry-run can be used before horizontal observation; real upload waits for a complete profile. See [single-frame mapper](single-frame-mapper.md).
 
 Multiple frames, full animation, Playwright, browser capture, batching, retry, and resume remain outside this phase.
