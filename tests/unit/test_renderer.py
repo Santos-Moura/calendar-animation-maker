@@ -3,7 +3,12 @@ import pytest
 
 from calendar_anim.renderer.block_merger import merge_horizontal
 from calendar_anim.renderer.palette import palette_colors, quantize
-from calendar_anim.renderer.pixelizer import background_mask, color_distance, parse_hex_color
+from calendar_anim.renderer.pixelizer import (
+    background_mask,
+    color_distance,
+    final_background_mask,
+    parse_hex_color,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -22,6 +27,14 @@ def test_background_distance_and_mask() -> None:
     assert distance.tolist() == [[0.0, 50.0]]
     assert background_mask(frame, "#000000", 30).tolist() == [[True, False]]
     assert not background_mask(frame, None, 30).any()
+
+
+def test_final_background_mask_removes_colors_quantized_to_background() -> None:
+    source = np.array([[[40, 40, 40], [85, 85, 85]]], dtype=np.uint8)
+    quantized = np.array([[[0, 0, 0], [85, 85, 85]]], dtype=np.uint8)
+
+    assert final_background_mask(source, quantized, "#000000", 30).tolist() == [[True, False]]
+    assert not final_background_mask(source, quantized, None, 30).any()
 
 
 def test_horizontal_block_merging() -> None:

@@ -54,6 +54,15 @@ def test_expand_rejects_out_of_bounds_and_overlapping_blocks() -> None:
         expand_frame_blocks(manifest.frames[0], 4, 4)
 
 
+def test_expand_ignores_legacy_blocks_matching_configured_background() -> None:
+    manifest = make_manifest(Block(x=0, y=0, width=1, color_id="0", color_hex="#000000"))
+    manifest.frames[0].blocks.append(Block(x=1, y=0, width=1, color_id="1", color_hex="#555555"))
+
+    cells = expand_frame_blocks(manifest.frames[0], 2, 1, "#000000")
+
+    assert [(cell.x, cell.color_hex) for cell in cells] == [(1, "#555555")]
+
+
 def test_contain_preserves_aspect_ratio_and_centers_cells() -> None:
     cells = [
         LogicalCell(
@@ -337,6 +346,29 @@ def test_background_color_is_not_remapped_by_foreground_contrast() -> None:
     background = [cell for cell in plan.mapped_cells if cell.cell_role is CellRole.BACKGROUND]
     assert background
     assert {cell.color_id for cell in background} == {"8"}
+
+
+def test_build_plan_reports_and_ignores_legacy_background_cells() -> None:
+    manifest = make_manifest(Block(x=0, y=0, width=1, color_id="0", color_hex="#000000"))
+    manifest.render.grid_width = 2
+    manifest.render.grid_height = 1
+    manifest.render.background = "#000000"
+    manifest.frames[0].blocks.append(Block(x=1, y=0, width=1, color_id="1", color_hex="#555555"))
+
+    plan = build_single_frame_plan(
+        manifest,
+        _small_profile(),
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="legacy-background",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+    )
+
+    assert plan.statistics.source_blocks == 2
+    assert plan.statistics.expanded_logical_cells == 1
+    assert plan.statistics.foreground_events == 1
+    assert any("Ignored 1 legacy manifest cell" in warning for warning in plan.warnings)
 
 
 def test_build_plan_expands_blocks_adds_metadata_and_statistics() -> None:
