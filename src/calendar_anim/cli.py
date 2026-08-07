@@ -7,6 +7,7 @@ from typing import Annotated, Any
 import typer
 from pydantic import ValidationError
 
+from calendar_anim.calendar.commands import register_calendar_commands
 from calendar_anim.calendar.dry_run import DryRunCalendarGateway
 from calendar_anim.calendar.mapper import plan_events
 from calendar_anim.config import RenderConfig, config_from_yaml
@@ -20,6 +21,7 @@ app = typer.Typer(
 )
 calendar_app = typer.Typer(help="Plan safe, local calendar operations.", no_args_is_help=True)
 app.add_typer(calendar_app, name="calendar")
+register_calendar_commands(calendar_app)
 
 
 @app.callback()
