@@ -19,14 +19,18 @@ from tests.factories import make_manifest, make_ready_calibration_profile
 pytestmark = pytest.mark.integration
 
 
-def _plan(run_id: str = "frame-test"):
+def _plan(
+    run_id: str = "frame-test",
+    mapping_mode: FrameMappingMode = FrameMappingMode.SPARSE,
+):
     return build_single_frame_plan(
         make_manifest(),
         make_ready_calibration_profile(),
         frame_index=0,
         anchor_date=date(2026, 9, 7),
         run_id=run_id,
-        max_execute_events=500,
+        max_execute_events=1200,
+        mapping_mode=mapping_mode,
     )
 
 
@@ -41,15 +45,37 @@ def test_mapping_artifacts_include_plan_report_and_previews(tmp_path: Path) -> N
         "mapping-report.txt",
         "source-frame.png",
         "mapped-preview.png",
+        "mapped-debug.png",
         "execution-result.json",
     }
     report = (output / "mapping-report.txt").read_text(encoding="utf-8")
     assert "Source grid: 4x4" in report
     assert "Target grid: 42x24" in report
-    assert "Expanded logical cells:" in report
+    assert "Mapping mode: sparse" in report
+    assert "Expanded source cells:" in report
     assert "Calendar events:" in report
+    assert "Sparse estimate:" in report
+    assert "Full-grid estimate: 1008 events" in report
     assert "Cells per event: 1.00" in report
-    assert Image.open(output / "mapped-preview.png").size == (920, 570)
+    assert Image.open(output / "mapped-preview.png").size == (840, 480)
+    assert Image.open(output / "mapped-debug.png").size == (920, 570)
+
+
+def test_full_grid_artifacts_serialize_background_and_solid_canvas(tmp_path: Path) -> None:
+    source = tmp_path / "input.png"
+    Image.new("RGB", (4, 4), "#808080").save(source)
+    output = tmp_path / "full-grid"
+    plan = _plan(mapping_mode=FrameMappingMode.FULL_GRID)
+    write_frame_mapping_artifacts(plan, source, output)
+    report = (output / "mapping-report.txt").read_text(encoding="utf-8")
+    serialized = (output / "frame-plan.json").read_text(encoding="utf-8")
+    assert "Mapping mode: full-grid" in report
+    assert "Background colorId: 8" in report
+    assert "Total logical cells: 1008" in report
+    assert "Calendar events: 1008" in report
+    assert '"mapping_mode": "full-grid"' in serialized
+    assert '"background_color_id": "8"' in serialized
+    assert Image.open(output / "mapped-preview.png").getpixel((0, 0)) == (97, 97, 97)
 
 
 def test_execute_is_idempotent_and_uses_private_frame_metadata(tmp_path: Path) -> None:

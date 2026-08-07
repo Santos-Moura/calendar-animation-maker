@@ -412,6 +412,8 @@ def build_single_frame_plan(
         source_grid_height=manifest.render.grid_height,
         target_grid_width=target_width,
         target_grid_height=target_height,
+        columns_per_day=(profile.horizontal_mapping.usable_overlap_columns_per_day or 1),
+        days_used=profile.horizontal_mapping.days_used,
         fit=fit,
         mapping_mode=mapping_mode,
         background_color_id=(

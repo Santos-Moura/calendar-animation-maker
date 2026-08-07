@@ -39,7 +39,11 @@ from calendar_anim.calendar.frame_mapping.artifacts import (
     write_frame_mapping_artifacts,
 )
 from calendar_anim.calendar.frame_mapping.mapper import build_single_frame_plan, select_frame
-from calendar_anim.calendar.frame_mapping.models import FitMode, SingleFrameExecutionResult
+from calendar_anim.calendar.frame_mapping.models import (
+    FitMode,
+    FrameMappingMode,
+    SingleFrameExecutionResult,
+)
 from calendar_anim.calendar.frame_mapping.service import (
     ABSOLUTE_SINGLE_FRAME_MAX_EVENTS,
     DEFAULT_SINGLE_FRAME_MAX_EVENTS,
@@ -553,6 +557,20 @@ def map_frame_command(
     run_id: Annotated[str | None, typer.Option("--run-id")] = None,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     fit: Annotated[str, typer.Option("--fit")] = "contain",
+    mapping_mode: Annotated[
+        FrameMappingMode,
+        typer.Option(
+            "--mapping-mode",
+            help="Cell generation mode: sparse or full-grid.",
+        ),
+    ] = FrameMappingMode.SPARSE,
+    calendar_background_color_id: Annotated[
+        str | None,
+        typer.Option(
+            "--calendar-background-color-id",
+            help="Calendar colorId used by full-grid structural background cells (default: 8).",
+        ),
+    ] = None,
     max_events: Annotated[int, typer.Option("--max-events", min=1)] = (
         DEFAULT_SINGLE_FRAME_MAX_EVENTS
     ),
@@ -581,7 +599,8 @@ def map_frame_command(
         if execute and start_date_value is None:
             raise CalendarAnimError("--start-date is required with --execute")
         anchor_date = date.fromisoformat(start_date_value) if start_date_value else date.today()
-        default_run_id = f"frame-{frame_index:03d}-{manifest.animation_id}"[:64]
+        mode_suffix = "" if mapping_mode is FrameMappingMode.SPARSE else "-full-grid"
+        default_run_id = f"frame-{frame_index:03d}-{manifest.animation_id}{mode_suffix}"[:64]
         resolved_run_id = _valid_identifier(run_id or default_run_id, "run-id")
         plan = build_single_frame_plan(
             manifest,
@@ -592,6 +611,8 @@ def map_frame_command(
             max_execute_events=max_events,
             fit=fit_mode,
             calendar_name=calendar_name,
+            mapping_mode=mapping_mode,
+            calendar_background_color_id=calendar_background_color_id,
         )
         output_dir = output or Path("output/frame-mapping") / plan.run_id
         source_image = manifest_path.resolve().parent / selected_frame.image
@@ -603,14 +624,20 @@ def map_frame_command(
     typer.echo(f"Animation ID: {plan.animation_id}")
     typer.echo(f"Run ID: {plan.run_id}")
     typer.echo(f"Frame: {plan.frame_index}")
+    typer.echo(f"Mapping mode: {plan.mapping_mode.value}")
     typer.echo(f"Week start: {plan.week_start_date}")
     typer.echo(f"Source grid: {plan.source_grid_width}x{plan.source_grid_height}")
     typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
     typer.echo(f"Source blocks: {stats.source_blocks}")
     typer.echo(f"Expanded logical cells: {stats.expanded_logical_cells}")
-    typer.echo(f"Mapped cells: {stats.mapped_cells}")
+    typer.echo(f"Foreground cells: {stats.foreground_cells_after_fitting}")
+    typer.echo(f"Background structural cells: {stats.background_structural_cells}")
+    typer.echo(f"Mapped cells: {stats.total_logical_cells}")
     typer.echo(f"Calendar events: {stats.calendar_events} / {plan.max_execute_events}")
-    typer.echo(f"Unique Calendar colors: {stats.unique_calendar_colors}")
+    typer.echo(f"Foreground events: {stats.foreground_events}")
+    typer.echo(f"Background events: {stats.background_events}")
+    typer.echo(f"Foreground Calendar colors: {stats.foreground_calendar_colors}")
+    typer.echo(f"Background colorId: {plan.background_color_id or 'not used'}")
     typer.echo(f"Mapper readiness: {'READY' if plan.profile_ready else 'NOT READY'}")
     typer.echo(f"Execution: {'REAL' if execute else 'DRY RUN'}")
     typer.echo(f"Artifacts: {output_dir}")
@@ -634,7 +661,15 @@ def map_frame_command(
             )
         )
     if not yes:
-        typer.echo("\nThis will upload one frame to the dedicated laboratory calendar.")
+        typer.echo(f"\nMapping mode: {plan.mapping_mode.value.upper()}")
+        typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
+        typer.echo(f"Foreground events: {stats.foreground_events}")
+        typer.echo(f"Background events: {stats.background_events}")
+        typer.echo(f"Total events: {stats.calendar_events}")
+        typer.echo(f"Calendar: {plan.calendar_name}")
+        typer.echo(f"Frame: {plan.frame_index}")
+        typer.echo(f"Run ID: {plan.run_id}")
+        typer.echo(f"\nThis will create {stats.calendar_events} real Google Calendar events.")
         typer.confirm("Continue?", default=False, abort=True)
     try:
         gateway = _google_gateway()
@@ -649,6 +684,8 @@ def map_frame_command(
     typer.echo(f"Calendar ID: {result.calendar_id}")
     typer.echo(f"Planned events: {result.planned_events}")
     typer.echo(f"Created events: {result.created_events}")
+    typer.echo(f"Foreground created: {result.foreground_created}")
+    typer.echo(f"Background created: {result.background_created}")
     typer.echo(f"Failed events: {result.failed_events}")
     for result_error in result.errors:
         typer.secho(f"Error: {result_error}", fg=typer.colors.RED, err=True)

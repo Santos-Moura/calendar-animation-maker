@@ -87,6 +87,8 @@ class SingleFrameCalendarPlan(BaseModel):
     source_grid_height: int = Field(gt=0)
     target_grid_width: int = Field(gt=0)
     target_grid_height: int = Field(gt=0)
+    columns_per_day: int = Field(default=1, gt=0)
+    days_used: int = Field(default=7, ge=1, le=7)
     fit: FitMode = "contain"
     mapping_mode: FrameMappingMode = FrameMappingMode.SPARSE
     background_color_id: str | None = None

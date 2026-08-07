@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -66,8 +67,95 @@ def test_map_frame_dry_run_is_local_and_writes_all_artifacts(
         "mapping-report.txt",
         "source-frame.png",
         "mapped-preview.png",
+        "mapped-debug.png",
         "execution-result.json",
     }
+    assert "Mapping mode: sparse" in result.output
+
+
+def test_map_frame_full_grid_and_background_flag_are_fully_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _mapping_inputs(tmp_path)
+    output = tmp_path / "full-grid"
+    monkeypatch.setattr(
+        calendar_commands,
+        "_google_gateway",
+        lambda: pytest.fail("full-grid dry-run must not create an API gateway"),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--start-date",
+            "2026-09-07",
+            "--mapping-mode",
+            "full-grid",
+            "--calendar-background-color-id",
+            "5",
+            "--run-id",
+            "full-grid-dry",
+            "--output",
+            str(output),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Mapping mode: full-grid" in result.output
+    assert "Background structural cells:" in result.output
+    assert "Calendar events: 1008 / 1200" in result.output
+    assert "Background colorId: 5" in result.output
+    plan = json.loads((output / "frame-plan.json").read_text(encoding="utf-8"))
+    assert plan["mapping_mode"] == "full-grid"
+    assert plan["background_color_id"] == "5"
+    assert plan["statistics"]["calendar_events"] == 1008
+
+
+def test_map_frame_rejects_invalid_mode_and_background_color(tmp_path: Path) -> None:
+    manifest, profile = _mapping_inputs(tmp_path)
+    invalid_mode = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--mapping-mode",
+            "filled-sometimes",
+        ],
+    )
+    assert invalid_mode.exit_code != 0
+    assert "Invalid value for '--mapping-mode'" in invalid_mode.output
+
+    invalid_background = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--mapping-mode",
+            "full-grid",
+            "--calendar-background-color-id",
+            "99",
+        ],
+    )
+    assert invalid_background.exit_code == 1
+    assert "Unsupported Calendar background color ID" in invalid_background.output
+
+
+def test_map_frame_help_lists_both_mapping_modes_and_background_option() -> None:
+    result = runner.invoke(app, ["calendar", "map-frame", "--help"])
+    assert result.exit_code == 0
+    assert "--mapping-mode" in result.output
+    assert "sparse" in result.output
+    assert "full-grid" in result.output
+    assert "Calendar colorId used" in result.output
 
 
 def test_map_frame_reports_invalid_frame_range(tmp_path: Path) -> None:
