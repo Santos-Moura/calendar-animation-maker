@@ -25,9 +25,14 @@ def test_calibration_artifacts_are_serializable_and_deterministic(tmp_path: Path
     )
     assert loaded == plan
     report = (tmp_path / "calibration-report.txt").read_text(encoding="utf-8")
+    assert report.startswith("Overlap Columns Calibration")
     assert "Execution: DRY RUN" in report
-    assert "overlap-6: 6 event(s)" in report
-    assert "logical preview" in report
+    assert "overlap-6\n  Time: 14:00-14:45\n  Events: 6" in report
+    assert "Target viewport: 1920x1080" in report
+    assert "Observed results" in report
+    assert "Group 6:\n- visually separated:" in report
+    assert "Decision priority: visual separation" in report
+    assert "logical expectation only" in report
     with Image.open(tmp_path / "expected-layout.png") as image:
         assert image.size == (1400, 900)
     execution = CalibrationExecutionResult.model_validate_json(

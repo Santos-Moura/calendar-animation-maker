@@ -39,17 +39,33 @@ def test_duration_scale_has_expected_durations_and_no_overlap() -> None:
     )
 
 
-def test_overlap_columns_has_simultaneous_members_and_separate_groups() -> None:
+def test_overlap_columns_has_exact_deterministic_group_structure() -> None:
     plan = build_calibration_plan("overlap-columns", START, run_id="overlap-run")
-    groups: dict[str, list[object]] = {}
+    groups: dict[str, list] = {}
     for event in plan.events:
         groups.setdefault(event.private_metadata["group"], []).append(event)
+
+    assert list(groups) == [f"overlap-{size}" for size in range(1, 7)]
     assert [len(group) for group in groups.values()] == [1, 2, 3, 4, 5, 6]
-    starts = []
-    for group in groups.values():
-        starts.append({event.start for event in group})  # type: ignore[attr-defined]
-        assert len(starts[-1]) == 1
-    assert len({next(iter(value)) for value in starts}) == 6
+    for size, (name, group) in enumerate(groups.items(), start=1):
+        assert name == f"overlap-{size}"
+        assert {event.start for event in group} == {group[0].start}
+        assert {event.end for event in group} == {group[0].end}
+        assert round((group[0].end - group[0].start).total_seconds() / 60) == 45
+        assert [event.summary for event in group] == [
+            f"{size}/{position}" for position in range(1, size + 1)
+        ]
+        assert [event.private_metadata["group_size"] for event in group] == [str(size)] * size
+        assert [event.private_metadata["group_position"] for event in group] == [
+            str(position) for position in range(1, size + 1)
+        ]
+        assert [(event.color_id, event.color_hex) for event in group] == EVENT_COLORS[:size]
+
+    ordered_groups = list(groups.values())
+    assert all(
+        left[0].end <= right[0].start
+        for left, right in zip(ordered_groups, ordered_groups[1:], strict=False)
+    )
 
 
 def test_color_palette_covers_supported_colors() -> None:

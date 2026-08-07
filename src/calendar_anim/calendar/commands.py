@@ -24,6 +24,14 @@ from calendar_anim.calendar.calibration.patterns import (
     PATTERNS,
     build_calibration_plan,
 )
+from calendar_anim.calendar.calibration.profile import (
+    DEFAULT_PROFILE_PATH,
+    apply_observations,
+    load_observations,
+    load_profile,
+    profile_summary,
+    save_profile,
+)
 from calendar_anim.calendar.calibration.service import CalibrationService, CleanupMatch
 from calendar_anim.calendar.gateway import CalendarGateway
 from calendar_anim.calendar.google_auth import GoogleOAuthClient, GoogleOAuthConfig
@@ -265,42 +273,109 @@ def record_calibration_command(
     run_id: Annotated[str, typer.Option("--run-id")],
     pattern: Annotated[str | None, typer.Option("--pattern")] = None,
     minimum_event_minutes: Annotated[int | None, typer.Option("--minimum-event-minutes")] = None,
+    minimum_visible_event_minutes: Annotated[
+        int | None, typer.Option("--minimum-visible-event-minutes")
+    ] = None,
+    minimum_distinguishable_height_minutes: Annotated[
+        int | None, typer.Option("--minimum-distinguishable-height-minutes")
+    ] = None,
     usable_overlap_columns: Annotated[int | None, typer.Option("--usable-overlap-columns")] = None,
+    maximum_tested_overlap_columns: Annotated[
+        int | None, typer.Option("--maximum-tested-overlap-columns")
+    ] = None,
     browser_zoom: Annotated[int | None, typer.Option("--browser-zoom")] = None,
     viewport_width: Annotated[int | None, typer.Option("--viewport-width")] = None,
     viewport_height: Annotated[int | None, typer.Option("--viewport-height")] = None,
+    timezone: Annotated[str, typer.Option("--timezone")] = "America/Sao_Paulo",
+    visible_start_hour: Annotated[int, typer.Option("--visible-start-hour")] = 6,
+    visible_end_hour: Annotated[int, typer.Option("--visible-end-hour")] = 18,
+    sidebar_visible: Annotated[bool, typer.Option("--sidebar-visible/--sidebar-hidden")] = False,
+    weekends_visible: Annotated[bool, typer.Option("--weekends-visible/--weekends-hidden")] = True,
+    titles_visible: Annotated[
+        bool | None, typer.Option("--titles-visible/--titles-not-visible")
+    ] = None,
+    colors_distinguishable: Annotated[
+        bool | None,
+        typer.Option("--colors-distinguishable/--colors-not-distinguishable"),
+    ] = None,
     notes: Annotated[str, typer.Option("--notes")] = "",
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+    profile_output: Annotated[Path | None, typer.Option("--profile-output")] = None,
 ) -> None:
     """Record manual observations from the Google Calendar UI."""
     try:
         run_id = _valid_identifier(run_id, "run-id")
+        if (
+            minimum_event_minutes is not None
+            and minimum_visible_event_minutes is not None
+            and minimum_event_minutes != minimum_visible_event_minutes
+        ):
+            raise CalendarAnimError(
+                "--minimum-event-minutes and --minimum-visible-event-minutes conflict"
+            )
+        effective_minimum_visible = (
+            minimum_visible_event_minutes
+            if minimum_visible_event_minutes is not None
+            else minimum_event_minutes
+        )
         observations = CalibrationObservations(
             run_id=run_id,
             pattern=pattern,
             calendar_ui={
                 "view": "week",
+                "timezone": timezone,
                 "browser_zoom_percent": browser_zoom,
                 "viewport_width": viewport_width,
                 "viewport_height": viewport_height,
-                "weekends_visible": None,
-                "sidebar_visible": None,
-                "density": None,
+                "weekends_visible": weekends_visible,
+                "sidebar_visible": sidebar_visible,
+                "visible_start_hour": visible_start_hour,
+                "visible_end_hour": visible_end_hour,
             },
             observations={
+                "minimum_visible_event_minutes": effective_minimum_visible,
+                "minimum_distinguishable_height_minutes": (minimum_distinguishable_height_minutes),
                 "minimum_event_minutes": minimum_event_minutes,
                 "usable_overlap_columns": usable_overlap_columns,
-                "maximum_tested_overlap_columns": None,
-                "titles_visible": None,
-                "colors_distinguishable": None,
+                "maximum_tested_overlap_columns": maximum_tested_overlap_columns,
+                "titles_visible": titles_visible,
+                "colors_distinguishable": colors_distinguishable,
                 "notes": notes,
             },
         )
         path = output or Path("output/calibration") / run_id / "calibration-observations.yaml"
         write_observations(observations, path)
+        resolved_profile_path = profile_output or (
+            DEFAULT_PROFILE_PATH if output is None else path.with_name("calibration-profile.yaml")
+        )
+        profile = apply_observations(load_profile(resolved_profile_path), observations)
+        save_profile(profile, resolved_profile_path)
     except (CalendarAnimError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Observations: {path}")
+    typer.echo(f"Calibration profile: {resolved_profile_path}")
+
+
+def calibration_summary_command(
+    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
+    profile_path: Annotated[Path, typer.Option("--profile")] = DEFAULT_PROFILE_PATH,
+) -> None:
+    """Print the locally recorded Calendar UI-to-pixel mapping; never calls an API."""
+    try:
+        profile = load_profile(profile_path)
+        source = str(profile_path)
+        if run_id is not None:
+            run_id = _valid_identifier(run_id, "run-id")
+            observation_path = Path("output/calibration") / run_id / "calibration-observations.yaml"
+            if not observation_path.is_file():
+                raise CalendarAnimError(f"Calibration observations not found for run ID: {run_id}")
+            profile = apply_observations(profile, load_observations(observation_path))
+            source = f"{source} + {observation_path}"
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(profile_summary(profile))
+    typer.echo(f"\nSource: {source}")
+    typer.echo("This command used local files only; no Calendar API call was made.")
 
 
 def register_calendar_commands(app: typer.Typer) -> None:
@@ -309,3 +384,4 @@ def register_calendar_commands(app: typer.Typer) -> None:
     app.command("cleanup")(cleanup_command)
     app.command("lab-info")(lab_info_command)
     app.command("record-calibration")(record_calibration_command)
+    app.command("calibration-summary")(calibration_summary_command)

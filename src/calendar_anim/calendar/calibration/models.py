@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from calendar_anim.calendar.models import CalendarEventDraft
 
@@ -46,12 +46,120 @@ class CalibrationExecutionResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class CalendarUIProfile(BaseModel):
+    """Calendar UI conditions under which a calibration was observed."""
+
+    model_config = ConfigDict(extra="allow")
+
+    view: str = "week"
+    timezone: str = "America/Sao_Paulo"
+    browser_zoom_percent: int | None = None
+    viewport_width: int | None = None
+    viewport_height: int | None = None
+    sidebar_visible: bool = False
+    weekends_visible: bool = True
+    visible_start_hour: int = 6
+    visible_end_hour: int = 18
+
+    @model_validator(mode="after")
+    def validate_visible_range(self) -> "CalendarUIProfile":
+        if not 0 <= self.visible_start_hour < self.visible_end_hour <= 24:
+            raise ValueError("visible hours must satisfy 0 <= start < end <= 24")
+        return self
+
+
+class CalibrationObservationValues(BaseModel):
+    """Human observations, including fields written by older releases."""
+
+    model_config = ConfigDict(extra="allow")
+
+    minimum_visible_event_minutes: int | None = Field(default=None, ge=1)
+    minimum_distinguishable_height_minutes: int | None = Field(default=None, ge=1)
+    usable_overlap_columns: int | None = Field(default=None, ge=1)
+    maximum_tested_overlap_columns: int | None = Field(default=None, ge=1)
+    titles_visible: bool | None = None
+    colors_distinguishable: bool | None = None
+    notes: str = ""
+
+    # Compatibility with observation YAML written before the two vertical
+    # measurements received distinct names.
+    minimum_event_minutes: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def migrate_legacy_minimum(self) -> "CalibrationObservationValues":
+        if self.minimum_visible_event_minutes is None and self.minimum_event_minutes is not None:
+            self.minimum_visible_event_minutes = self.minimum_event_minutes
+        if (
+            self.usable_overlap_columns is not None
+            and self.maximum_tested_overlap_columns is not None
+            and self.usable_overlap_columns > self.maximum_tested_overlap_columns
+        ):
+            raise ValueError("usable overlap columns cannot exceed the maximum tested")
+        return self
+
+
 class CalibrationObservations(BaseModel):
     schema_version: str = "1.0"
     run_id: str
     pattern: str | None = None
-    calendar_ui: dict[str, str | int | bool | None]
-    observations: dict[str, str | int | bool | None]
+    calendar_ui: CalendarUIProfile = Field(default_factory=CalendarUIProfile)
+    observations: CalibrationObservationValues = Field(default_factory=CalibrationObservationValues)
+
+
+class VerticalMappingProfile(BaseModel):
+    minimum_visible_event_minutes: int | None = Field(default=None, ge=1)
+    minimum_distinguishable_height_minutes: int | None = Field(default=None, ge=1)
+    logical_rows: int | None = Field(default=None, ge=1)
+
+
+class HorizontalMappingProfile(BaseModel):
+    maximum_tested_overlap_columns: int | None = Field(default=None, ge=1)
+    usable_overlap_columns_per_day: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("usable_overlap_columns_per_day", "usable_overlap_columns"),
+    )
+    days_used: int = Field(default=7, ge=1, le=7)
+    logical_columns: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_measured_columns(self) -> "HorizontalMappingProfile":
+        if (
+            self.usable_overlap_columns_per_day is not None
+            and self.maximum_tested_overlap_columns is not None
+            and self.usable_overlap_columns_per_day > self.maximum_tested_overlap_columns
+        ):
+            raise ValueError("usable overlap columns cannot exceed the maximum tested")
+        return self
+
+
+class CalibrationProfile(BaseModel):
+    """Consolidated, local mapping from Calendar UI space to logical pixels."""
+
+    schema_version: str = "1.0"
+    calendar_ui: CalendarUIProfile = Field(default_factory=CalendarUIProfile)
+    vertical_mapping: VerticalMappingProfile = Field(default_factory=VerticalMappingProfile)
+    horizontal_mapping: HorizontalMappingProfile = Field(default_factory=HorizontalMappingProfile)
+
+    @model_validator(mode="after")
+    def derive_logical_capacity(self) -> "CalibrationProfile":
+        row_minutes = self.vertical_mapping.minimum_distinguishable_height_minutes
+        if row_minutes is None:
+            self.vertical_mapping.logical_rows = None
+        else:
+            visible_minutes = (
+                self.calendar_ui.visible_end_hour - self.calendar_ui.visible_start_hour
+            ) * 60
+            self.vertical_mapping.logical_rows = visible_minutes // row_minutes
+
+        usable_columns = self.horizontal_mapping.usable_overlap_columns_per_day
+        if usable_columns is None:
+            self.horizontal_mapping.logical_columns = None
+        else:
+            self.horizontal_mapping.logical_columns = (
+                self.horizontal_mapping.days_used * usable_columns
+            )
+        return self
 
 
 class PatternDescription(BaseModel):
