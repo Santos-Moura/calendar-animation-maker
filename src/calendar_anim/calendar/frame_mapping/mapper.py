@@ -216,6 +216,7 @@ def build_single_frame_plan(
     run_id: str,
     max_execute_events: int,
     fit: FitMode = "contain",
+    calendar_name: str = "Calendar Animation Lab",
 ) -> SingleFrameCalendarPlan:
     if fit != "contain":
         raise CalendarAnimError(f"Unsupported frame fit: {fit}")
@@ -278,6 +279,7 @@ def build_single_frame_plan(
     return SingleFrameCalendarPlan(
         animation_id=manifest.animation_id,
         run_id=run_id,
+        calendar_name=calendar_name,
         frame_index=frame_index,
         timezone=profile.calendar_ui.timezone,
         week_start_date=week_start_date,

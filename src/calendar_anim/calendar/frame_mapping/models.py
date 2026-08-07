@@ -58,6 +58,7 @@ class SingleFrameCalendarPlan(BaseModel):
     schema_version: str = "1.0"
     animation_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    calendar_name: str = "Calendar Animation Lab"
     frame_index: int = Field(ge=0)
     timezone: str
     week_start_date: date

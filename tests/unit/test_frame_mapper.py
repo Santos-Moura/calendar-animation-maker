@@ -15,46 +15,9 @@ from calendar_anim.calendar.frame_mapping.mapper import (
 from calendar_anim.calendar.frame_mapping.models import LogicalCell
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.frame import Block
-from tests.factories import make_manifest
+from tests.factories import make_manifest, make_ready_calibration_profile
 
 pytestmark = pytest.mark.unit
-
-
-def ready_profile() -> CalibrationProfile:
-    return CalibrationProfile.model_validate(
-        {
-            "calendar_ui": {
-                "timezone": "America/Sao_Paulo",
-                "visible_start_hour": 6,
-                "visible_end_hour": 18,
-            },
-            "vertical_mapping": {
-                "minimum_visible_event_minutes": 5,
-                "minimum_distinguishable_height_minutes": 30,
-            },
-            "horizontal_mapping": {
-                "maximum_tested_overlap_columns": 6,
-                "usable_overlap_columns_per_day": 6,
-                "days_used": 7,
-            },
-            "color_mapping": {
-                "tested_color_ids": [str(value) for value in range(1, 12)],
-                "preferred_color_ids": [str(value) for value in range(1, 12)],
-                "recommended_color_count": 11,
-            },
-            "position_mapping": {
-                "week_alignment_ok": True,
-                "timezone_alignment_ok": True,
-                "day_alignment_ok": True,
-                "vertical_alignment_ok": True,
-                "week_starts_on": "sunday",
-            },
-            "horizontal_bar_mapping": {
-                "independent_cells_appear_contiguous": True,
-                "recommended_horizontal_strategy": "independent-cells",
-            },
-        }
-    )
 
 
 @pytest.mark.parametrize("width", [1, 4])
@@ -132,7 +95,7 @@ def test_horizontal_mapping_uses_six_subcolumns_per_day(
     )
     mapped, _ = map_cells_to_calendar(
         [cell],
-        ready_profile(),
+        make_ready_calibration_profile(),
         date(2026, 9, 6),
         "America/Sao_Paulo",
         "test-animation",
@@ -162,7 +125,7 @@ def test_vertical_mapping_uses_calibrated_row_duration(
     )
     mapped, _ = map_cells_to_calendar(
         [cell],
-        ready_profile(),
+        make_ready_calibration_profile(),
         date(2026, 9, 6),
         "America/Sao_Paulo",
         "test-animation",
@@ -190,7 +153,7 @@ def test_build_plan_expands_blocks_adds_metadata_and_statistics() -> None:
     manifest = make_manifest(Block(x=0, y=0, width=2, color_id="0", color_hex="#039BE5"))
     plan = build_single_frame_plan(
         manifest,
-        ready_profile(),
+        make_ready_calibration_profile(),
         frame_index=0,
         anchor_date=date(2026, 9, 7),
         run_id="frame-test",
@@ -218,7 +181,7 @@ def test_frame_selection_reports_exact_valid_range() -> None:
 
 
 def test_dry_plan_marks_incomplete_profile_without_blocking() -> None:
-    profile = ready_profile()
+    profile = make_ready_calibration_profile()
     profile.horizontal_bar_mapping.independent_cells_appear_contiguous = None
     profile.horizontal_bar_mapping.recommended_horizontal_strategy = None
     profile = CalibrationProfile.model_validate(profile.model_dump())

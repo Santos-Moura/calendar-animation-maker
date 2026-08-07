@@ -1,3 +1,4 @@
+from calendar_anim.calendar.calibration.models import CalibrationProfile
 from calendar_anim.models.animation import (
     AnimationManifest,
     AnimationStatistics,
@@ -29,4 +30,41 @@ def make_manifest(block: Block | None = None) -> AnimationManifest:
                 index=0, timestamp_seconds=0, image="frames/frame_000.png", blocks=blocks
             )
         ],
+    )
+
+
+def make_ready_calibration_profile() -> CalibrationProfile:
+    return CalibrationProfile.model_validate(
+        {
+            "calendar_ui": {
+                "timezone": "America/Sao_Paulo",
+                "visible_start_hour": 6,
+                "visible_end_hour": 18,
+            },
+            "vertical_mapping": {
+                "minimum_visible_event_minutes": 5,
+                "minimum_distinguishable_height_minutes": 30,
+            },
+            "horizontal_mapping": {
+                "maximum_tested_overlap_columns": 6,
+                "usable_overlap_columns_per_day": 6,
+                "days_used": 7,
+            },
+            "color_mapping": {
+                "tested_color_ids": [str(value) for value in range(1, 12)],
+                "preferred_color_ids": [str(value) for value in range(1, 12)],
+                "recommended_color_count": 11,
+            },
+            "position_mapping": {
+                "week_alignment_ok": True,
+                "timezone_alignment_ok": True,
+                "day_alignment_ok": True,
+                "vertical_alignment_ok": True,
+                "week_starts_on": "sunday",
+            },
+            "horizontal_bar_mapping": {
+                "independent_cells_appear_contiguous": True,
+                "recommended_horizontal_strategy": "independent-cells",
+            },
+        }
     )
