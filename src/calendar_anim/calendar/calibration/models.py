@@ -79,6 +79,22 @@ class CalibrationObservationValues(BaseModel):
     maximum_tested_overlap_columns: int | None = Field(default=None, ge=1)
     titles_visible: bool | None = None
     colors_distinguishable: bool | None = None
+    tested_color_ids: list[str] | None = None
+    preferred_color_ids: list[str] | None = None
+    recommended_color_count: int | None = Field(default=None, ge=1)
+    poor_contrast_color_ids: list[str] | None = None
+    similar_color_groups: list[list[str]] | None = None
+    week_alignment_ok: bool | None = None
+    timezone_alignment_ok: bool | None = None
+    day_alignment_ok: bool | None = None
+    vertical_alignment_ok: bool | None = None
+    week_starts_on: str | None = None
+    independent_cells_appear_contiguous: bool | None = None
+    visible_gaps_between_cells: bool | None = None
+    same_color_cells_merge_visually: bool | None = None
+    maximum_useful_bar_width: int | None = Field(default=None, ge=1)
+    partial_bar_positioning_predictable: bool | None = None
+    recommended_horizontal_strategy: str | None = None
     notes: str = ""
 
     # Compatibility with observation YAML written before the two vertical
@@ -133,16 +149,78 @@ class HorizontalMappingProfile(BaseModel):
         return self
 
 
+class ColorMappingProfile(BaseModel):
+    tested_color_ids: list[str] = Field(default_factory=list)
+    preferred_color_ids: list[str] = Field(default_factory=list)
+    recommended_color_count: int | None = Field(default=None, ge=1)
+    poor_contrast_color_ids: list[str] = Field(default_factory=list)
+    similar_color_groups: list[list[str]] = Field(default_factory=list)
+    notes: str = ""
+
+    @model_validator(mode="after")
+    def validate_recommended_count(self) -> "ColorMappingProfile":
+        if (
+            self.preferred_color_ids
+            and self.recommended_color_count is not None
+            and self.recommended_color_count > len(self.preferred_color_ids)
+        ):
+            raise ValueError("recommended color count cannot exceed preferred color IDs")
+        return self
+
+
+class PositionMappingProfile(BaseModel):
+    week_alignment_ok: bool | None = None
+    timezone_alignment_ok: bool | None = None
+    day_alignment_ok: bool | None = None
+    vertical_alignment_ok: bool | None = None
+    week_starts_on: str | None = None
+    visible_start_hour: int | None = Field(default=None, ge=0, le=23)
+    visible_end_hour: int | None = Field(default=None, ge=1, le=24)
+    notes: str = ""
+
+    @model_validator(mode="after")
+    def validate_visible_hours(self) -> "PositionMappingProfile":
+        if (
+            self.visible_start_hour is not None
+            and self.visible_end_hour is not None
+            and self.visible_start_hour >= self.visible_end_hour
+        ):
+            raise ValueError("position visible start must be before visible end")
+        return self
+
+
+class HorizontalBarMappingProfile(BaseModel):
+    independent_cells_appear_contiguous: bool | None = None
+    visible_gaps_between_cells: bool | None = None
+    same_color_cells_merge_visually: bool | None = None
+    maximum_useful_bar_width: int | None = Field(default=None, ge=1)
+    partial_bar_positioning_predictable: bool | None = None
+    recommended_horizontal_strategy: str | None = None
+    notes: str = ""
+
+
+class CandidateGridProfile(BaseModel):
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+
+
 class CalibrationProfile(BaseModel):
     """Consolidated, local mapping from Calendar UI space to logical pixels."""
 
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     calendar_ui: CalendarUIProfile = Field(default_factory=CalendarUIProfile)
     vertical_mapping: VerticalMappingProfile = Field(default_factory=VerticalMappingProfile)
     horizontal_mapping: HorizontalMappingProfile = Field(default_factory=HorizontalMappingProfile)
+    color_mapping: ColorMappingProfile = Field(default_factory=ColorMappingProfile)
+    position_mapping: PositionMappingProfile = Field(default_factory=PositionMappingProfile)
+    horizontal_bar_mapping: HorizontalBarMappingProfile = Field(
+        default_factory=HorizontalBarMappingProfile
+    )
+    candidate_grid: CandidateGridProfile = Field(default_factory=CandidateGridProfile)
 
     @model_validator(mode="after")
     def derive_logical_capacity(self) -> "CalibrationProfile":
+        self.schema_version = "1.1"
         row_minutes = self.vertical_mapping.minimum_distinguishable_height_minutes
         if row_minutes is None:
             self.vertical_mapping.logical_rows = None
@@ -159,7 +237,45 @@ class CalibrationProfile(BaseModel):
             self.horizontal_mapping.logical_columns = (
                 self.horizontal_mapping.days_used * usable_columns
             )
+        self.candidate_grid.width = self.horizontal_mapping.logical_columns
+        self.candidate_grid.height = self.vertical_mapping.logical_rows
         return self
+
+    @property
+    def mapper_ready(self) -> bool:
+        vertical_ready = (
+            self.vertical_mapping.minimum_visible_event_minutes is not None
+            and self.vertical_mapping.minimum_distinguishable_height_minutes is not None
+            and self.vertical_mapping.logical_rows is not None
+        )
+        horizontal_ready = (
+            self.horizontal_mapping.maximum_tested_overlap_columns is not None
+            and self.horizontal_mapping.usable_overlap_columns_per_day is not None
+            and self.horizontal_mapping.logical_columns is not None
+        )
+        colors_ready = (
+            bool(self.color_mapping.tested_color_ids)
+            and bool(self.color_mapping.preferred_color_ids)
+            and self.color_mapping.recommended_color_count is not None
+        )
+        position_values = (
+            self.position_mapping.week_alignment_ok,
+            self.position_mapping.timezone_alignment_ok,
+            self.position_mapping.day_alignment_ok,
+            self.position_mapping.vertical_alignment_ok,
+        )
+        position_ready = all(value is not None for value in position_values)
+        bars_ready = (
+            self.horizontal_bar_mapping.independent_cells_appear_contiguous is not None
+            and self.horizontal_bar_mapping.recommended_horizontal_strategy is not None
+        )
+        return all((vertical_ready, horizontal_ready, colors_ready, position_ready, bars_ready))
+
+    @property
+    def mapper_readiness(self) -> str:
+        if self.mapper_ready:
+            return "READY FOR SINGLE-FRAME EXPERIMENT"
+        return "NOT READY"
 
 
 class PatternDescription(BaseModel):

@@ -21,6 +21,7 @@ from calendar_anim.calendar.calibration.models import (
 from calendar_anim.calendar.calibration.patterns import (
     DEFAULT_CALENDAR_NAME,
     DEFAULT_MAX_EVENTS,
+    EVENT_COLORS,
     PATTERNS,
     build_calibration_plan,
 )
@@ -59,6 +60,36 @@ def _valid_identifier(value: str, label: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", value):
         raise CalendarAnimError(f"Invalid {label}: {value!r}")
     return value
+
+
+def _csv_values(value: str | None, label: str) -> list[str] | None:
+    if value is None:
+        return None
+    values = [item.strip() for item in value.split(",") if item.strip()]
+    if len(values) != len(set(values)):
+        raise CalendarAnimError(f"Duplicate values in {label}")
+    return values
+
+
+def _color_ids(value: str | None, label: str) -> list[str] | None:
+    values = _csv_values(value, label)
+    if values is None:
+        return None
+    supported = {color_id for color_id, _ in EVENT_COLORS}
+    unknown = [color_id for color_id in values if color_id not in supported]
+    if unknown:
+        raise CalendarAnimError(f"Unsupported color IDs in {label}: {', '.join(unknown)}")
+    return values
+
+
+def _similar_color_groups(value: str | None) -> list[list[str]] | None:
+    if value is None:
+        return None
+    groups = [group.strip() for group in value.split(";") if group.strip()]
+    parsed = [_color_ids(group, "--similar-color-groups") or [] for group in groups]
+    if any(len(group) < 2 for group in parsed):
+        raise CalendarAnimError("Each similar color group must contain at least two IDs")
+    return parsed
 
 
 def calibration_patterns_command() -> None:
@@ -298,6 +329,58 @@ def record_calibration_command(
         bool | None,
         typer.Option("--colors-distinguishable/--colors-not-distinguishable"),
     ] = None,
+    preferred_color_ids: Annotated[
+        str | None, typer.Option("--preferred-color-ids", help="Comma-separated color IDs.")
+    ] = None,
+    recommended_color_count: Annotated[
+        int | None, typer.Option("--recommended-color-count")
+    ] = None,
+    poor_contrast_color_ids: Annotated[
+        str | None, typer.Option("--poor-contrast-color-ids", help="Comma-separated color IDs.")
+    ] = None,
+    similar_color_groups: Annotated[
+        str | None,
+        typer.Option(
+            "--similar-color-groups",
+            help="Semicolon-separated groups of comma-separated IDs, e.g. 2,10;4,6.",
+        ),
+    ] = None,
+    week_alignment_ok: Annotated[
+        bool | None, typer.Option("--week-alignment-ok/--week-alignment-not-ok")
+    ] = None,
+    timezone_alignment_ok: Annotated[
+        bool | None, typer.Option("--timezone-alignment-ok/--timezone-alignment-not-ok")
+    ] = None,
+    day_alignment_ok: Annotated[
+        bool | None, typer.Option("--day-alignment-ok/--day-alignment-not-ok")
+    ] = None,
+    vertical_alignment_ok: Annotated[
+        bool | None, typer.Option("--vertical-alignment-ok/--vertical-alignment-not-ok")
+    ] = None,
+    week_starts_on: Annotated[str | None, typer.Option("--week-starts-on")] = None,
+    independent_cells_appear_contiguous: Annotated[
+        bool | None,
+        typer.Option("--independent-cells-contiguous/--independent-cells-not-contiguous"),
+    ] = None,
+    visible_gaps_between_cells: Annotated[
+        bool | None, typer.Option("--visible-cell-gaps/--no-visible-cell-gaps")
+    ] = None,
+    same_color_cells_merge_visually: Annotated[
+        bool | None,
+        typer.Option("--same-color-cells-merge/--same-color-cells-do-not-merge"),
+    ] = None,
+    maximum_useful_bar_width: Annotated[
+        int | None, typer.Option("--maximum-useful-bar-width")
+    ] = None,
+    partial_bar_positioning_predictable: Annotated[
+        bool | None,
+        typer.Option(
+            "--partial-bar-positioning-predictable/--partial-bar-positioning-unpredictable"
+        ),
+    ] = None,
+    recommended_horizontal_strategy: Annotated[
+        str | None, typer.Option("--recommended-horizontal-strategy")
+    ] = None,
     notes: Annotated[str, typer.Option("--notes")] = "",
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     profile_output: Annotated[Path | None, typer.Option("--profile-output")] = None,
@@ -305,6 +388,8 @@ def record_calibration_command(
     """Record manual observations from the Google Calendar UI."""
     try:
         run_id = _valid_identifier(run_id, "run-id")
+        if pattern is not None and pattern not in PATTERNS:
+            raise CalendarAnimError(f"Unknown calibration pattern: {pattern}")
         if (
             minimum_event_minutes is not None
             and minimum_visible_event_minutes is not None
@@ -318,6 +403,36 @@ def record_calibration_command(
             if minimum_visible_event_minutes is not None
             else minimum_event_minutes
         )
+        parsed_preferred_colors = _color_ids(preferred_color_ids, "--preferred-color-ids")
+        parsed_poor_contrast_colors = _color_ids(
+            poor_contrast_color_ids, "--poor-contrast-color-ids"
+        )
+        parsed_similar_groups = _similar_color_groups(similar_color_groups)
+        if recommended_color_count is not None and not 1 <= recommended_color_count <= len(
+            EVENT_COLORS
+        ):
+            raise CalendarAnimError(
+                f"--recommended-color-count must be between 1 and {len(EVENT_COLORS)}"
+            )
+        if week_starts_on is not None:
+            week_starts_on = week_starts_on.lower()
+            valid_days = {
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            }
+            if week_starts_on not in valid_days:
+                raise CalendarAnimError("--week-starts-on must be an English weekday name")
+        if maximum_useful_bar_width is not None and maximum_useful_bar_width > 6:
+            raise CalendarAnimError("--maximum-useful-bar-width cannot exceed the tested width 6")
+        if recommended_horizontal_strategy is not None:
+            recommended_horizontal_strategy = recommended_horizontal_strategy.strip()
+            if not recommended_horizontal_strategy:
+                raise CalendarAnimError("--recommended-horizontal-strategy cannot be empty")
         observations = CalibrationObservations(
             run_id=run_id,
             pattern=pattern,
@@ -340,6 +455,26 @@ def record_calibration_command(
                 "maximum_tested_overlap_columns": maximum_tested_overlap_columns,
                 "titles_visible": titles_visible,
                 "colors_distinguishable": colors_distinguishable,
+                "tested_color_ids": (
+                    [color_id for color_id, _ in EVENT_COLORS]
+                    if pattern == "color-palette"
+                    else None
+                ),
+                "preferred_color_ids": parsed_preferred_colors,
+                "recommended_color_count": recommended_color_count,
+                "poor_contrast_color_ids": parsed_poor_contrast_colors,
+                "similar_color_groups": parsed_similar_groups,
+                "week_alignment_ok": week_alignment_ok,
+                "timezone_alignment_ok": timezone_alignment_ok,
+                "day_alignment_ok": day_alignment_ok,
+                "vertical_alignment_ok": vertical_alignment_ok,
+                "week_starts_on": week_starts_on,
+                "independent_cells_appear_contiguous": (independent_cells_appear_contiguous),
+                "visible_gaps_between_cells": visible_gaps_between_cells,
+                "same_color_cells_merge_visually": same_color_cells_merge_visually,
+                "maximum_useful_bar_width": maximum_useful_bar_width,
+                "partial_bar_positioning_predictable": (partial_bar_positioning_predictable),
+                "recommended_horizontal_strategy": recommended_horizontal_strategy,
                 "notes": notes,
             },
         )

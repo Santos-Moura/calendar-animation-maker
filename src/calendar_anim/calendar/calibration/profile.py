@@ -67,6 +67,49 @@ def apply_observations(
         )
     if values.usable_overlap_columns is not None:
         profile.horizontal_mapping.usable_overlap_columns_per_day = values.usable_overlap_columns
+    if values.tested_color_ids is not None:
+        profile.color_mapping.tested_color_ids = values.tested_color_ids
+    if values.preferred_color_ids is not None:
+        profile.color_mapping.preferred_color_ids = values.preferred_color_ids
+    if values.recommended_color_count is not None:
+        profile.color_mapping.recommended_color_count = values.recommended_color_count
+    if values.poor_contrast_color_ids is not None:
+        profile.color_mapping.poor_contrast_color_ids = values.poor_contrast_color_ids
+    if values.similar_color_groups is not None:
+        profile.color_mapping.similar_color_groups = values.similar_color_groups
+
+    for field in (
+        "week_alignment_ok",
+        "timezone_alignment_ok",
+        "day_alignment_ok",
+        "vertical_alignment_ok",
+        "week_starts_on",
+    ):
+        value = getattr(values, field)
+        if value is not None:
+            setattr(profile.position_mapping, field, value)
+    if recorded.pattern == "position-grid":
+        profile.position_mapping.visible_start_hour = ui.visible_start_hour
+        profile.position_mapping.visible_end_hour = ui.visible_end_hour
+
+    for field in (
+        "independent_cells_appear_contiguous",
+        "visible_gaps_between_cells",
+        "same_color_cells_merge_visually",
+        "maximum_useful_bar_width",
+        "partial_bar_positioning_predictable",
+        "recommended_horizontal_strategy",
+    ):
+        value = getattr(values, field)
+        if value is not None:
+            setattr(profile.horizontal_bar_mapping, field, value)
+
+    if recorded.pattern == "color-palette" and values.notes:
+        profile.color_mapping.notes = values.notes
+    elif recorded.pattern == "position-grid" and values.notes:
+        profile.position_mapping.notes = values.notes
+    elif recorded.pattern == "horizontal-bars" and values.notes:
+        profile.horizontal_bar_mapping.notes = values.notes
 
     # Re-validate so the derived row/column counts are refreshed after mutation.
     return CalibrationProfile.model_validate(profile.model_dump())
@@ -76,17 +119,29 @@ def profile_summary(profile: CalibrationProfile) -> str:
     ui = profile.calendar_ui
     vertical = profile.vertical_mapping
     horizontal = profile.horizontal_mapping
+    colors = profile.color_mapping
+    position = profile.position_mapping
+    bars = profile.horizontal_bar_mapping
 
     viewport = "pending"
     if ui.viewport_width is not None and ui.viewport_height is not None:
         viewport = f"{ui.viewport_width}x{ui.viewport_height}"
     zoom = f"{ui.browser_zoom_percent}%" if ui.browser_zoom_percent is not None else "pending"
+    color_status = _color_status(profile)
+    position_status = _position_status(profile)
+    bar_status = _bar_status(profile)
 
     lines = [
-        "Calendar calibration summary",
-        f"UI: {ui.view} view, {ui.timezone}, zoom {zoom}, viewport {viewport}",
+        "Calendar Calibration Summary",
+        "============================",
+        "",
+        "UI",
+        f"  View: {ui.view}",
+        f"  Timezone: {ui.timezone}",
+        f"  Zoom: {zoom}",
+        f"  Viewport: {viewport}",
         (
-            "Visible window: "
+            "  Visible window: "
             f"{ui.visible_start_hour:02d}:00-{ui.visible_end_hour:02d}:00 "
             f"({(ui.visible_end_hour - ui.visible_start_hour) * 60} minutes)"
         ),
@@ -108,10 +163,39 @@ def profile_summary(profile: CalibrationProfile) -> str:
         f"  Days used: {horizontal.days_used}",
         f"  Logical columns: {_logical_columns(horizontal.logical_columns)}",
         "",
+        "Color mapping",
+        f"  Status: {color_status}",
+        f"  Tested color IDs: {_list_or_pending(colors.tested_color_ids)}",
+        f"  Preferred color IDs: {_list_or_pending(colors.preferred_color_ids)}",
+        f"  Recommended color count: {_value(colors.recommended_color_count)}",
+        f"  Poor contrast color IDs: {_list_or_none(colors.poor_contrast_color_ids)}",
+        f"  Similar color groups: {_groups_or_none(colors.similar_color_groups)}",
+        "",
+        "Position mapping",
+        f"  Status: {position_status}",
+        f"  Week alignment: {_alignment(position.week_alignment_ok)}",
+        f"  Timezone alignment: {_alignment(position.timezone_alignment_ok)}",
+        f"  Day alignment: {_alignment(position.day_alignment_ok)}",
+        f"  Vertical alignment: {_alignment(position.vertical_alignment_ok)}",
+        f"  Week starts on: {_value(position.week_starts_on)}",
+        "",
+        "Horizontal bar mapping",
+        f"  Status: {bar_status}",
+        (f"  Recommended strategy: {_value(bars.recommended_horizontal_strategy)}"),
+        (
+            "  Independent cells appear contiguous: "
+            f"{_yes_no(bars.independent_cells_appear_contiguous)}"
+        ),
+        f"  Visible gaps between cells: {_yes_no(bars.visible_gaps_between_cells)}",
+        (f"  Same-color cells merge visually: {_yes_no(bars.same_color_cells_merge_visually)}"),
+        f"  Maximum useful bar width: {_value(bars.maximum_useful_bar_width)}",
+        "",
         (
             "Candidate logical grid: "
-            f"{_candidate_grid(horizontal.logical_columns, vertical.logical_rows)}"
+            f"{_candidate_grid(profile.candidate_grid.width, profile.candidate_grid.height)}"
         ),
+        "",
+        f"Mapper readiness: {profile.mapper_readiness}",
     ]
     return "\n".join(lines)
 
@@ -136,3 +220,67 @@ def _candidate_grid(columns: int | None, rows: int | None) -> str:
     if columns is None or rows is None:
         return "pending"
     return f"{columns}x{rows}"
+
+
+def _list_or_pending(values: list[str]) -> str:
+    return ", ".join(values) if values else "pending calibration"
+
+
+def _list_or_none(values: list[str]) -> str:
+    return ", ".join(values) if values else "none recorded"
+
+
+def _groups_or_none(groups: list[list[str]]) -> str:
+    if not groups:
+        return "none recorded"
+    return "; ".join(",".join(group) for group in groups)
+
+
+def _alignment(value: bool | None) -> str:
+    if value is None:
+        return "pending calibration"
+    return "OK" if value else "NOT OK"
+
+
+def _yes_no(value: bool | None) -> str:
+    if value is None:
+        return "pending calibration"
+    return "yes" if value else "no"
+
+
+def _color_status(profile: CalibrationProfile) -> str:
+    mapping = profile.color_mapping
+    required = (
+        bool(mapping.tested_color_ids),
+        bool(mapping.preferred_color_ids),
+        mapping.recommended_color_count is not None,
+    )
+    return _completion_status(required, "color-palette")
+
+
+def _position_status(profile: CalibrationProfile) -> str:
+    mapping = profile.position_mapping
+    required = (
+        mapping.week_alignment_ok is not None,
+        mapping.timezone_alignment_ok is not None,
+        mapping.day_alignment_ok is not None,
+        mapping.vertical_alignment_ok is not None,
+    )
+    return _completion_status(required, "position-grid")
+
+
+def _bar_status(profile: CalibrationProfile) -> str:
+    mapping = profile.horizontal_bar_mapping
+    required = (
+        mapping.independent_cells_appear_contiguous is not None,
+        mapping.recommended_horizontal_strategy is not None,
+    )
+    return _completion_status(required, "horizontal-bars")
+
+
+def _completion_status(required: tuple[bool, ...], calibration: str) -> str:
+    if all(required):
+        return "recorded"
+    if any(required):
+        return f"incomplete {calibration} calibration"
+    return f"pending {calibration} calibration"
