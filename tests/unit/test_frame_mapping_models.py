@@ -64,4 +64,3 @@ def test_single_frame_plan_serializes_mapping_metadata() -> None:
     )
     assert plan.event_count == 1
     assert '"frame_index":0' in plan.model_dump_json()
-
