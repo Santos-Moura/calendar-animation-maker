@@ -10,6 +10,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
 dependencies = [
+  "google-api-python-client>=2.149",
+  "google-auth>=2.35",
+  "google-auth-httplib2>=0.2",
+  "google-auth-oauthlib>=1.2",
   "numpy>=2.0",
   "opencv-python-headless>=4.10",
   "pillow>=10.4",
@@ -51,5 +55,5 @@ plugins = ["pydantic.mypy"]
 warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
-module = ["cv2.*"]
+module = ["cv2.*", "google_auth_oauthlib.*", "googleapiclient.*"]
 ignore_missing_imports = true
