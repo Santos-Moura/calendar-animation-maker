@@ -80,6 +80,7 @@ class GoogleCalendarGateway:
         self, calendar_id: str, events: Sequence[CalendarEventDraft]
     ) -> CalendarWriteResult:
         created: list[str] = []
+        created_indexes: list[int] = []
         errors: list[str] = []
         for index, event in enumerate(events):
             body: dict[str, Any] = {
@@ -99,12 +100,14 @@ class GoogleCalendarGateway:
                 event_id = response.get("id")
                 if event_id:
                     created.append(str(event_id))
+                    created_indexes.append(index)
                 else:
                     errors.append(f"Event {index} was created without a returned ID")
             except HttpError as error:
                 errors.append(f"Event {index}: {error}")
         return CalendarWriteResult(
             created_event_ids=created,
+            created_event_indexes=created_indexes,
             failed_events=len(errors),
             errors=errors,
         )

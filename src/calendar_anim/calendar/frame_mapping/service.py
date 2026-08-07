@@ -8,7 +8,7 @@ from calendar_anim.calendar.gateway import CalendarGateway
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.exceptions import CalendarAnimError
 
-DEFAULT_SINGLE_FRAME_MAX_EVENTS: Final = 500
+DEFAULT_SINGLE_FRAME_MAX_EVENTS: Final = 1200
 ABSOLUTE_SINGLE_FRAME_MAX_EVENTS: Final = 2000
 
 
@@ -48,6 +48,17 @@ class SingleFrameMappingService:
         if existing:
             raise CalendarAnimError("Single frame run already exists.")
         result = self.gateway.create_events(calendar.id, plan.events)
+        created_indexes = result.created_event_indexes
+        if len(created_indexes) != result.created_events:
+            created_indexes = list(range(result.created_events))
+        foreground_created = sum(
+            plan.events[index].private_metadata.get("cell_role", "foreground") == "foreground"
+            for index in created_indexes
+        )
+        background_created = sum(
+            plan.events[index].private_metadata.get("cell_role") == "background"
+            for index in created_indexes
+        )
         return SingleFrameExecutionResult(
             executed=True,
             run_id=plan.run_id,
@@ -58,6 +69,8 @@ class SingleFrameMappingService:
             planned_events=plan.event_count,
             created_events=result.created_events,
             failed_events=result.failed_events,
+            foreground_created=foreground_created,
+            background_created=background_created,
             created_event_ids=result.created_event_ids,
             errors=result.errors,
         )

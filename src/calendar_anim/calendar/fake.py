@@ -57,7 +57,8 @@ class FakeCalendarGateway:
     ) -> CalendarWriteResult:
         self.create_event_calls += 1
         created: list[str] = []
-        for draft in events:
+        created_indexes: list[int] = []
+        for index, draft in enumerate(events):
             event_id = f"fake-event-{len(self.events[calendar_id]) + 1}"
             self.events[calendar_id].append(
                 CalendarEventInfo(
@@ -69,7 +70,11 @@ class FakeCalendarGateway:
                 )
             )
             created.append(event_id)
-        return CalendarWriteResult(created_event_ids=created)
+            created_indexes.append(index)
+        return CalendarWriteResult(
+            created_event_ids=created,
+            created_event_indexes=created_indexes,
+        )
 
     def find_events_by_private_metadata(
         self, calendar_id: str, metadata: Mapping[str, str]

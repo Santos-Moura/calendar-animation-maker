@@ -53,6 +53,7 @@ class CalendarEventInfo(BaseModel):
 
 class CalendarWriteResult(BaseModel):
     created_event_ids: list[str] = Field(default_factory=list)
+    created_event_indexes: list[int] = Field(default_factory=list)
     failed_events: int = Field(default=0, ge=0)
     errors: list[str] = Field(default_factory=list)
 
