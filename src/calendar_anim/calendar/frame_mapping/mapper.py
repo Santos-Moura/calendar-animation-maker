@@ -385,16 +385,19 @@ def build_single_frame_plan(
     )
 
     warnings: list[str] = []
+    normalized_source_background = (
+        manifest.render.background.upper() if manifest.render.background is not None else None
+    )
     ignored_background_cells = sum(
         block.width * block.height
         for block in frame.blocks
-        if manifest.render.background is not None
-        and block.color_hex.upper() == manifest.render.background.upper()
+        if normalized_source_background is not None
+        and block.color_hex.upper() == normalized_source_background
     )
     if ignored_background_cells:
         warnings.append(
             f"Ignored {ignored_background_cells} legacy manifest cell(s) whose color matches "
-            f"the configured source background {manifest.render.background.upper()}."
+            f"the configured source background {normalized_source_background}."
         )
     if mapping_mode is FrameMappingMode.FULL_GRID:
         warnings.append(
