@@ -116,7 +116,15 @@ calendar-anim calendar cleanup \
   --animation-id calibration-overlap-columns --run-id <run_id> --execute
 ```
 
-Record manual measurements with `calendar record-calibration`. See [Google setup](docs/google-calendar-setup.md), [calibration guide](docs/calendar-calibration.md), and [security](docs/calendar-security.md).
+The shortest overlap-calibration flow is:
+
+```powershell
+python -m calendar_anim calendar calibrate --pattern overlap-columns --start-date 2026-08-10 --run-id overlap-real-01 --execute
+python -m calendar_anim calendar record-calibration --run-id overlap-real-01 --pattern overlap-columns --maximum-tested-overlap-columns 6 --usable-overlap-columns 5 --browser-zoom 100 --viewport-width 1920 --viewport-height 1080
+python -m calendar_anim calendar calibration-summary
+```
+
+Replace `5` with the conservative number of columns that remain usable in your real Calendar UI. The local profile separates minimum visible duration from minimum distinguishable height, derives logical rows and columns, and leaves missing measurements as `pending`. The expected-layout PNG is only a logical reference—not a simulation of Google's layout. See [Google setup](docs/google-calendar-setup.md), [calibration guide](docs/calendar-calibration.md), and [security](docs/calendar-security.md).
 
 Every render produces:
 

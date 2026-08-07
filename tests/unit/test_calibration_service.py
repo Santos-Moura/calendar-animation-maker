@@ -38,6 +38,35 @@ def test_duplicate_run_is_rejected_before_second_write(tmp_path: Path) -> None:
     assert gateway.create_event_calls == 1
 
 
+def test_overlap_run_creates_21_events_and_rejects_duplicate(tmp_path: Path) -> None:
+    service, gateway = make_service(tmp_path)
+    plan = build_calibration_plan("overlap-columns", date(2026, 8, 10), run_id="overlap-run")
+    result = service.execute(plan)
+    assert result.created_events == 21
+    assert result.calendar_id is not None
+    assert len(gateway.events[result.calendar_id]) == 21
+
+    with pytest.raises(CalendarAnimError, match="already has 21 events"):
+        service.execute(plan)
+    assert gateway.create_event_calls == 1
+
+
+def test_overlap_cleanup_removes_only_requested_run(tmp_path: Path) -> None:
+    service, gateway = make_service(tmp_path)
+    target = build_calibration_plan("overlap-columns", date(2026, 8, 10), run_id="overlap-target")
+    other = build_calibration_plan("overlap-columns", date(2026, 8, 10), run_id="overlap-other")
+    target_result = service.execute(target)
+    service.execute(other)
+
+    match = service.find_cleanup_matches(target.calendar_name, target.animation_id, target.run_id)
+    result = service.cleanup(match)
+    assert result.deleted_events == 21
+    assert target_result.calendar_id is not None
+    remaining = gateway.events[target_result.calendar_id]
+    assert len(remaining) == 21
+    assert {event.private_metadata["run_id"] for event in remaining} == {"overlap-other"}
+
+
 def test_cleanup_filters_metadata_and_preserves_unrelated_events(tmp_path: Path) -> None:
     service, gateway = make_service(tmp_path)
     target = build_calibration_plan("duration-scale", date(2026, 8, 10), run_id="target-run")

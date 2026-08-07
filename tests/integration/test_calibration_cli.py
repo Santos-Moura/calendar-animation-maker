@@ -188,4 +188,109 @@ def test_record_calibration_writes_human_editable_yaml(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     content = path.read_text(encoding="utf-8")
     assert "minimum_event_minutes: 15" in content
+    assert "minimum_visible_event_minutes: 15" in content
     assert "usable_overlap_columns: 5" in content
+    assert (tmp_path / "calibration-profile.yaml").is_file()
+
+
+def test_record_and_summary_build_consolidated_logical_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observations = tmp_path / "overlap-observations.yaml"
+    profile = tmp_path / "profile.yaml"
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "overlap-observed",
+            "--pattern",
+            "overlap-columns",
+            "--minimum-visible-event-minutes",
+            "5",
+            "--minimum-distinguishable-height-minutes",
+            "30",
+            "--maximum-tested-overlap-columns",
+            "6",
+            "--usable-overlap-columns",
+            "5",
+            "--browser-zoom",
+            "100",
+            "--viewport-width",
+            "1920",
+            "--viewport-height",
+            "1080",
+            "--titles-visible",
+            "--colors-distinguishable",
+            "--notes",
+            "Five columns remained readable.",
+            "--output",
+            str(observations),
+            "--profile-output",
+            str(profile),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    profile_content = profile.read_text(encoding="utf-8")
+    assert "logical_rows: 24" in profile_content
+    assert "usable_overlap_columns_per_day: 5" in profile_content
+    assert "logical_columns: 35" in profile_content
+
+    monkeypatch.setattr(
+        calendar_commands,
+        "_google_gateway",
+        lambda: pytest.fail("summary must not create an API gateway"),
+    )
+    summary = runner.invoke(
+        app,
+        ["calendar", "calibration-summary", "--profile", str(profile)],
+    )
+    assert summary.exit_code == 0, summary.output
+    assert "Minimum visible event: 5 minutes" in summary.output
+    assert "Minimum distinguishable height: 30 minutes" in summary.output
+    assert "Logical rows: 24" in summary.output
+    assert "Usable overlaps per day: 5" in summary.output
+    assert "Logical columns: 35" in summary.output
+    assert "Candidate logical grid: 35x24" in summary.output
+    assert "no Calendar API call was made" in summary.output
+
+
+def test_summary_without_measurements_shows_pending(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["calendar", "calibration-summary", "--profile", str(tmp_path / "missing.yaml")],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Minimum visible event: pending" in result.output
+    assert "Usable overlaps per day: not measured yet" in result.output
+    assert "Logical columns: pending overlap-columns calibration" in result.output
+
+
+def test_summary_can_overlay_observations_by_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    recorded = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "summary-run",
+            "--pattern",
+            "overlap-columns",
+            "--maximum-tested-overlap-columns",
+            "6",
+            "--usable-overlap-columns",
+            "4",
+        ],
+    )
+    assert recorded.exit_code == 0, recorded.output
+    result = runner.invoke(
+        app,
+        ["calendar", "calibration-summary", "--run-id", "summary-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Usable overlaps per day: 4" in result.output
+    assert "Logical columns: 28" in result.output
