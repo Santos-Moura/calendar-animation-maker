@@ -21,6 +21,7 @@ from calendar_anim.calendar.calibration.models import (
 from calendar_anim.calendar.calibration.patterns import (
     DEFAULT_CALENDAR_NAME,
     DEFAULT_MAX_EVENTS,
+    EVENT_COLORS,
     PATTERNS,
     build_calibration_plan,
 )
@@ -33,12 +34,24 @@ from calendar_anim.calendar.calibration.profile import (
     save_profile,
 )
 from calendar_anim.calendar.calibration.service import CalibrationService, CleanupMatch
+from calendar_anim.calendar.frame_mapping.artifacts import (
+    write_frame_execution_result,
+    write_frame_mapping_artifacts,
+)
+from calendar_anim.calendar.frame_mapping.mapper import build_single_frame_plan, select_frame
+from calendar_anim.calendar.frame_mapping.models import FitMode, SingleFrameExecutionResult
+from calendar_anim.calendar.frame_mapping.service import (
+    ABSOLUTE_SINGLE_FRAME_MAX_EVENTS,
+    DEFAULT_SINGLE_FRAME_MAX_EVENTS,
+    SingleFrameMappingService,
+)
 from calendar_anim.calendar.gateway import CalendarGateway
 from calendar_anim.calendar.google_auth import GoogleOAuthClient, GoogleOAuthConfig
 from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
 from calendar_anim.calendar.lab import LAB_CALENDAR_DESCRIPTION, LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.exceptions import CalendarAnimError
+from calendar_anim.renderer.manifest import read_manifest, validate_manifest_files
 
 
 def _fail(error: Exception) -> Never:
@@ -59,6 +72,36 @@ def _valid_identifier(value: str, label: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", value):
         raise CalendarAnimError(f"Invalid {label}: {value!r}")
     return value
+
+
+def _csv_values(value: str | None, label: str) -> list[str] | None:
+    if value is None:
+        return None
+    values = [item.strip() for item in value.split(",") if item.strip()]
+    if len(values) != len(set(values)):
+        raise CalendarAnimError(f"Duplicate values in {label}")
+    return values
+
+
+def _color_ids(value: str | None, label: str) -> list[str] | None:
+    values = _csv_values(value, label)
+    if values is None:
+        return None
+    supported = {color_id for color_id, _ in EVENT_COLORS}
+    unknown = [color_id for color_id in values if color_id not in supported]
+    if unknown:
+        raise CalendarAnimError(f"Unsupported color IDs in {label}: {', '.join(unknown)}")
+    return values
+
+
+def _similar_color_groups(value: str | None) -> list[list[str]] | None:
+    if value is None:
+        return None
+    groups = [group.strip() for group in value.split(";") if group.strip()]
+    parsed = [_color_ids(group, "--similar-color-groups") or [] for group in groups]
+    if any(len(group) < 2 for group in parsed):
+        raise CalendarAnimError("Each similar color group must contain at least two IDs")
+    return parsed
 
 
 def calibration_patterns_command() -> None:
@@ -141,14 +184,29 @@ def calibrate_command(
         raise typer.Exit(code=1)
 
 
-def _local_cleanup_result(run_id: str) -> CalibrationExecutionResult | None:
-    path = Path("output/calibration") / run_id / "execution-result.json"
-    if not path.is_file():
-        return None
-    try:
-        return CalibrationExecutionResult.model_validate_json(path.read_text(encoding="utf-8"))
-    except ValueError:
-        return None
+def _local_cleanup_result(
+    run_id: str,
+) -> CalibrationExecutionResult | SingleFrameExecutionResult | None:
+    candidates: tuple[
+        tuple[Path, type[CalibrationExecutionResult | SingleFrameExecutionResult]], ...
+    ] = (
+        (
+            Path("output/calibration") / run_id / "execution-result.json",
+            CalibrationExecutionResult,
+        ),
+        (
+            Path("output/frame-mapping") / run_id / "execution-result.json",
+            SingleFrameExecutionResult,
+        ),
+    )
+    for path, result_model in candidates:
+        if not path.is_file():
+            continue
+        try:
+            return result_model.model_validate_json(path.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+    return None
 
 
 def _find_cleanup_match(
@@ -298,6 +356,58 @@ def record_calibration_command(
         bool | None,
         typer.Option("--colors-distinguishable/--colors-not-distinguishable"),
     ] = None,
+    preferred_color_ids: Annotated[
+        str | None, typer.Option("--preferred-color-ids", help="Comma-separated color IDs.")
+    ] = None,
+    recommended_color_count: Annotated[
+        int | None, typer.Option("--recommended-color-count")
+    ] = None,
+    poor_contrast_color_ids: Annotated[
+        str | None, typer.Option("--poor-contrast-color-ids", help="Comma-separated color IDs.")
+    ] = None,
+    similar_color_groups: Annotated[
+        str | None,
+        typer.Option(
+            "--similar-color-groups",
+            help="Semicolon-separated groups of comma-separated IDs, e.g. 2,10;4,6.",
+        ),
+    ] = None,
+    week_alignment_ok: Annotated[
+        bool | None, typer.Option("--week-alignment-ok/--week-alignment-not-ok")
+    ] = None,
+    timezone_alignment_ok: Annotated[
+        bool | None, typer.Option("--timezone-alignment-ok/--timezone-alignment-not-ok")
+    ] = None,
+    day_alignment_ok: Annotated[
+        bool | None, typer.Option("--day-alignment-ok/--day-alignment-not-ok")
+    ] = None,
+    vertical_alignment_ok: Annotated[
+        bool | None, typer.Option("--vertical-alignment-ok/--vertical-alignment-not-ok")
+    ] = None,
+    week_starts_on: Annotated[str | None, typer.Option("--week-starts-on")] = None,
+    independent_cells_appear_contiguous: Annotated[
+        bool | None,
+        typer.Option("--independent-cells-contiguous/--independent-cells-not-contiguous"),
+    ] = None,
+    visible_gaps_between_cells: Annotated[
+        bool | None, typer.Option("--visible-cell-gaps/--no-visible-cell-gaps")
+    ] = None,
+    same_color_cells_merge_visually: Annotated[
+        bool | None,
+        typer.Option("--same-color-cells-merge/--same-color-cells-do-not-merge"),
+    ] = None,
+    maximum_useful_bar_width: Annotated[
+        int | None, typer.Option("--maximum-useful-bar-width")
+    ] = None,
+    partial_bar_positioning_predictable: Annotated[
+        bool | None,
+        typer.Option(
+            "--partial-bar-positioning-predictable/--partial-bar-positioning-unpredictable"
+        ),
+    ] = None,
+    recommended_horizontal_strategy: Annotated[
+        str | None, typer.Option("--recommended-horizontal-strategy")
+    ] = None,
     notes: Annotated[str, typer.Option("--notes")] = "",
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     profile_output: Annotated[Path | None, typer.Option("--profile-output")] = None,
@@ -305,6 +415,8 @@ def record_calibration_command(
     """Record manual observations from the Google Calendar UI."""
     try:
         run_id = _valid_identifier(run_id, "run-id")
+        if pattern is not None and pattern not in PATTERNS:
+            raise CalendarAnimError(f"Unknown calibration pattern: {pattern}")
         if (
             minimum_event_minutes is not None
             and minimum_visible_event_minutes is not None
@@ -318,6 +430,36 @@ def record_calibration_command(
             if minimum_visible_event_minutes is not None
             else minimum_event_minutes
         )
+        parsed_preferred_colors = _color_ids(preferred_color_ids, "--preferred-color-ids")
+        parsed_poor_contrast_colors = _color_ids(
+            poor_contrast_color_ids, "--poor-contrast-color-ids"
+        )
+        parsed_similar_groups = _similar_color_groups(similar_color_groups)
+        if recommended_color_count is not None and not 1 <= recommended_color_count <= len(
+            EVENT_COLORS
+        ):
+            raise CalendarAnimError(
+                f"--recommended-color-count must be between 1 and {len(EVENT_COLORS)}"
+            )
+        if week_starts_on is not None:
+            week_starts_on = week_starts_on.lower()
+            valid_days = {
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            }
+            if week_starts_on not in valid_days:
+                raise CalendarAnimError("--week-starts-on must be an English weekday name")
+        if maximum_useful_bar_width is not None and maximum_useful_bar_width > 6:
+            raise CalendarAnimError("--maximum-useful-bar-width cannot exceed the tested width 6")
+        if recommended_horizontal_strategy is not None:
+            recommended_horizontal_strategy = recommended_horizontal_strategy.strip()
+            if not recommended_horizontal_strategy:
+                raise CalendarAnimError("--recommended-horizontal-strategy cannot be empty")
         observations = CalibrationObservations(
             run_id=run_id,
             pattern=pattern,
@@ -340,6 +482,26 @@ def record_calibration_command(
                 "maximum_tested_overlap_columns": maximum_tested_overlap_columns,
                 "titles_visible": titles_visible,
                 "colors_distinguishable": colors_distinguishable,
+                "tested_color_ids": (
+                    [color_id for color_id, _ in EVENT_COLORS]
+                    if pattern == "color-palette"
+                    else None
+                ),
+                "preferred_color_ids": parsed_preferred_colors,
+                "recommended_color_count": recommended_color_count,
+                "poor_contrast_color_ids": parsed_poor_contrast_colors,
+                "similar_color_groups": parsed_similar_groups,
+                "week_alignment_ok": week_alignment_ok,
+                "timezone_alignment_ok": timezone_alignment_ok,
+                "day_alignment_ok": day_alignment_ok,
+                "vertical_alignment_ok": vertical_alignment_ok,
+                "week_starts_on": week_starts_on,
+                "independent_cells_appear_contiguous": (independent_cells_appear_contiguous),
+                "visible_gaps_between_cells": visible_gaps_between_cells,
+                "same_color_cells_merge_visually": same_color_cells_merge_visually,
+                "maximum_useful_bar_width": maximum_useful_bar_width,
+                "partial_bar_positioning_predictable": (partial_bar_positioning_predictable),
+                "recommended_horizontal_strategy": recommended_horizontal_strategy,
                 "notes": notes,
             },
         )
@@ -378,6 +540,122 @@ def calibration_summary_command(
     typer.echo("This command used local files only; no Calendar API call was made.")
 
 
+def map_frame_command(
+    manifest_path: Annotated[Path, typer.Argument(help="animation.json path.")],
+    frame_index: Annotated[int, typer.Option("--frame", min=0)] = 0,
+    calibration_profile: Annotated[
+        Path, typer.Option("--calibration-profile", "--profile")
+    ] = DEFAULT_PROFILE_PATH,
+    start_date_value: Annotated[
+        str | None,
+        typer.Option("--start-date", help="Any date in the target frame week (YYYY-MM-DD)."),
+    ] = None,
+    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
+    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
+    fit: Annotated[str, typer.Option("--fit")] = "contain",
+    max_events: Annotated[int, typer.Option("--max-events", min=1)] = (
+        DEFAULT_SINGLE_FRAME_MAX_EVENTS
+    ),
+    calendar_name: Annotated[str, typer.Option("--calendar-name")] = DEFAULT_CALENDAR_NAME,
+    execute: Annotated[
+        bool, typer.Option("--execute", help="Upload only this frame to the lab calendar.")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Skip confirmation with --execute.")] = False,
+) -> None:
+    """Map exactly one manifest frame; dry-run is fully local by default."""
+    try:
+        if max_events > ABSOLUTE_SINGLE_FRAME_MAX_EVENTS:
+            raise CalendarAnimError(
+                f"--max-events cannot exceed the absolute safety limit of "
+                f"{ABSOLUTE_SINGLE_FRAME_MAX_EVENTS}"
+            )
+        if fit != "contain":
+            raise CalendarAnimError(f"Unsupported frame fit: {fit}")
+        fit_mode: FitMode = "contain"
+        manifest = read_manifest(manifest_path)
+        errors = validate_manifest_files(manifest, manifest_path.resolve())
+        if errors:
+            raise CalendarAnimError("Manifest validation failed: " + "; ".join(errors))
+        selected_frame = select_frame(manifest, frame_index)
+        profile = load_profile(calibration_profile)
+        if execute and start_date_value is None:
+            raise CalendarAnimError("--start-date is required with --execute")
+        anchor_date = date.fromisoformat(start_date_value) if start_date_value else date.today()
+        default_run_id = f"frame-{frame_index:03d}-{manifest.animation_id}"[:64]
+        resolved_run_id = _valid_identifier(run_id or default_run_id, "run-id")
+        plan = build_single_frame_plan(
+            manifest,
+            profile,
+            frame_index=frame_index,
+            anchor_date=anchor_date,
+            run_id=resolved_run_id,
+            max_execute_events=max_events,
+            fit=fit_mode,
+            calendar_name=calendar_name,
+        )
+        output_dir = output or Path("output/frame-mapping") / plan.run_id
+        source_image = manifest_path.resolve().parent / selected_frame.image
+        write_frame_mapping_artifacts(plan, source_image, output_dir)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+
+    stats = plan.statistics
+    typer.echo(f"Animation ID: {plan.animation_id}")
+    typer.echo(f"Run ID: {plan.run_id}")
+    typer.echo(f"Frame: {plan.frame_index}")
+    typer.echo(f"Week start: {plan.week_start_date}")
+    typer.echo(f"Source grid: {plan.source_grid_width}x{plan.source_grid_height}")
+    typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
+    typer.echo(f"Source blocks: {stats.source_blocks}")
+    typer.echo(f"Expanded logical cells: {stats.expanded_logical_cells}")
+    typer.echo(f"Mapped cells: {stats.mapped_cells}")
+    typer.echo(f"Calendar events: {stats.calendar_events} / {plan.max_execute_events}")
+    typer.echo(f"Unique Calendar colors: {stats.unique_calendar_colors}")
+    typer.echo(f"Mapper readiness: {'READY' if plan.profile_ready else 'NOT READY'}")
+    typer.echo(f"Execution: {'REAL' if execute else 'DRY RUN'}")
+    typer.echo(f"Artifacts: {output_dir}")
+    for warning in plan.warnings:
+        typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW)
+    if not execute:
+        if yes:
+            typer.echo("--yes has no effect without --execute; no API call was made.")
+        return
+    if not plan.profile_ready:
+        _fail(
+            CalendarAnimError(
+                "Calibration profile is NOT READY; record horizontal-bars before upload"
+            )
+        )
+    if plan.event_count > plan.max_execute_events:
+        _fail(
+            CalendarAnimError(
+                f"Frame requires {plan.event_count} events, above the configured execute "
+                f"limit of {plan.max_execute_events}"
+            )
+        )
+    if not yes:
+        typer.echo("\nThis will upload one frame to the dedicated laboratory calendar.")
+        typer.confirm("Continue?", default=False, abort=True)
+    try:
+        gateway = _google_gateway()
+        service = SingleFrameMappingService(
+            gateway,
+            LabCalendarService(gateway, CalendarConfigStore()),
+        )
+        result = service.execute(plan)
+        write_frame_execution_result(result, output_dir)
+    except (CalendarAnimError, HttpError, OSError) as error:
+        _fail(error)
+    typer.echo(f"Calendar ID: {result.calendar_id}")
+    typer.echo(f"Planned events: {result.planned_events}")
+    typer.echo(f"Created events: {result.created_events}")
+    typer.echo(f"Failed events: {result.failed_events}")
+    for result_error in result.errors:
+        typer.secho(f"Error: {result_error}", fg=typer.colors.RED, err=True)
+    if result.failed_events:
+        raise typer.Exit(code=1)
+
+
 def register_calendar_commands(app: typer.Typer) -> None:
     app.command("calibration-patterns")(calibration_patterns_command)
     app.command("calibrate")(calibrate_command)
@@ -385,3 +663,4 @@ def register_calendar_commands(app: typer.Typer) -> None:
     app.command("lab-info")(lab_info_command)
     app.command("record-calibration")(record_calibration_command)
     app.command("calibration-summary")(calibration_summary_command)
+    app.command("map-frame")(map_frame_command)

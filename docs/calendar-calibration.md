@@ -1,123 +1,193 @@
 # Calendar visual calibration
 
-Google Calendar controls event height, overlap columns, colors, and text visibility. The local grid cannot be mapped honestly until those behaviors are measured. Test one pattern at a time in week view with a stable zoom and viewport.
+Google Calendar controls event height, overlap, colors, borders, padding, and text visibility. The mapper must therefore use measurements from the real Calendar UI instead of assuming that a local pixel grid maps directly to events.
 
-## Patterns
+The current `42x24` grid is a candidate derived from completed vertical and overlap measurements. It is not final, and `block.width` must not be interpreted as a number of simultaneous events until the horizontal-bar experiment is reviewed.
 
-- `duration-scale` — 7 isolated events of 5, 10, 15, 20, 30, 45, and 60 minutes. It measures both the minimum visible event and the minimum height that is actually distinguishable.
-- `overlap-columns` — exactly 21 events in separate groups of 1 through 6 simultaneous events. Every group lasts 45 minutes and has deterministic titles, metadata, and colors.
-- `color-palette` — 11 separately timed event color IDs with approximate hex references. Browser rendering may differ.
-- `position-grid` — 6 events on Monday, Wednesday, and Friday, morning and afternoon.
-- `horizontal-bars` — 15 experimental events; proportional width is not assumed.
-- `combined` — a smoke overview, not a replacement for individual patterns.
+## Standard UI conditions
 
-## Dry-run first
+Keep the following conditions stable during every experiment:
 
-The following command does not authenticate and does not call Google:
+- view: Week;
+- timezone: `America/Sao_Paulo`;
+- browser zoom: 100%;
+- target viewport: 1920x1080;
+- sidebar: hidden;
+- weekends: visible;
+- visible range: approximately 06:00-18:00;
+- only `Calendar Animation Lab` visible when practical.
 
-```powershell
-python -m calendar_anim calendar calibrate --pattern overlap-columns --start-date 2026-08-10 --run-id overlap-preview
+Record the actual conditions if they differ. The program never observes browser geometry automatically.
+
+## Safety and artifacts
+
+`calendar calibrate` is always a dry-run unless `--execute` is supplied. Real execution asks for confirmation, uses the secondary lab calendar, enforces a default limit of 30 events and an absolute limit of 100, and rejects duplicate `run_id` values.
+
+Every dry-run writes:
+
+```text
+output/calibration/<run_id>/
+|-- calibration-plan.json
+|-- calibration-report.txt
+|-- expected-layout.png
+`-- execution-result.json
 ```
 
-Inspect these files in `output/calibration/overlap-preview/`:
+`expected-layout.png` is a deterministic logical reference. It is not a simulation of Google Calendar's rendering algorithm.
 
-- `calibration-plan.json` — exact event data that would be sent;
-- `calibration-report.txt` — groups, target UI conditions, and a manual worksheet;
-- `expected-layout.png` — a logical side-by-side expectation only;
-- `execution-result.json` — records that this was a dry-run.
+After manual inspection, `record-calibration` additionally writes `calibration-observations.yaml` and updates `output/calibration/calibration-profile.yaml`.
 
-The PNG is deliberately labelled as a logical expectation. It does not reproduce or promise Google Calendar's real overlap algorithm.
+## Completed measurements
 
-## Recommended UI conditions
+### `duration-scale`
 
-Use one stable setup for both calibration patterns:
+The measured minimum visible event is 5 minutes and the minimum clearly distinguishable height is 30 minutes. A 06:00-18:00 window therefore yields the current candidate of 24 logical rows.
 
-- week view;
-- `America/Sao_Paulo` timezone;
-- browser zoom at 100%;
-- target viewport of 1920×1080;
-- sidebar hidden;
-- weekends visible;
-- visible window from 06:00 to 18:00.
+### `overlap-columns`
 
-If the real viewport differs, record the actual width and height. Do not silently treat the target as a measured result.
+Groups of 1-6 simultaneous events remained visually separated. With seven visible days, six usable subcolumns per day yield the current candidate of 42 logical columns.
 
-## Real overlap calibration
+This proves only that six subcolumns are distinguishable in the controlled setup. It does not prove that a wider logical block can be encoded directly as simultaneous events.
 
-After OAuth setup, choose a future Monday and run:
+## `color-palette`
 
-```powershell
-python -m calendar_anim calendar calibrate --pattern overlap-columns --start-date 2026-08-10 --run-id overlap-real-01 --execute
-```
+### Purpose
 
-The CLI displays the plan and asks for confirmation before it authenticates and writes. It creates or reuses only the secondary `Calendar Animation Lab`, and rejects a duplicate `run_id`.
+Compare the 11 event color IDs supported by the current Calendar abstraction. Every event is isolated, has the same duration, and carries its `color_id`, an internal logical name, and an approximate hexadecimal reference.
 
-In Google Calendar, inspect the six non-overlapping time groups:
+The hexadecimal value is not claimed to be the exact browser-rendered color.
 
-- `overlap-1`: 1 event at 09:00–09:45;
-- `overlap-2`: 2 simultaneous events at 10:00–10:45;
-- `overlap-3`: 3 simultaneous events at 11:00–11:45;
-- `overlap-4`: 4 simultaneous events at 12:00–12:45;
-- `overlap-5`: 5 simultaneous events at 13:00–13:45;
-- `overlap-6`: 6 simultaneous events at 14:00–14:45.
-
-For every group, answer the same checklist:
-
-1. Are the events visually separated?
-2. Do they all have similar width?
-3. Does any event partially overlap another?
-4. Does the visual order appear predictable?
-5. Is the title shown?
-6. Is the color distinguishable?
-7. Is the block still usable as a visual “pixel”?
-
-Base `usable_overlap_columns` primarily on visual separation, not title readability. Text is useful for calibration but is not important to the final animation. “Maximum tested” is 6 for this pattern. “Usable” is your conservative measured limit and may be lower.
-
-This experiment measures how many visual subcolumns are useful. It does **not** prove that `block.width` equals a number of simultaneous events, that widths are uniform, or that creation order determines visual order. Wider logical blocks remain a separate `horizontal-bars` experiment.
-
-## Recording measurements
-
-The old `--minimum-event-minutes` option remains accepted, but new records should distinguish visibility from useful height.
-
-Record the vertical result from a `duration-scale` run:
+### Commands
 
 ```powershell
-python -m calendar_anim calendar record-calibration --run-id duration-real-01 --pattern duration-scale --minimum-visible-event-minutes 5 --minimum-distinguishable-height-minutes 30 --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --visible-start-hour 6 --visible-end-hour 18 --sidebar-hidden --weekends-visible
+python -m calendar_anim calendar calibrate --pattern color-palette --start-date 2026-08-17 --run-id color-real-20260807-01
+python -m calendar_anim calendar calibrate --pattern color-palette --start-date 2026-08-17 --run-id color-real-20260807-01 --execute
 ```
 
-After inspecting the overlap run, replace `5` below with the conservative number of columns you found usable:
+### Manual checklist
+
+- Are all colors distinguishable?
+- Which colors have the best contrast?
+- Which pairs appear too similar?
+- Which colors look muted or should be avoided?
+- How many colors should the mapper use?
+- Which `colorId` values form the candidate palette?
+
+### Recording
+
+The values below are examples of syntax only. Replace them with observed IDs:
 
 ```powershell
-python -m calendar_anim calendar record-calibration --run-id overlap-real-01 --pattern overlap-columns --maximum-tested-overlap-columns 6 --usable-overlap-columns 5 --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --titles-visible --colors-distinguishable --notes "Five columns remained reliably readable."
+python -m calendar_anim calendar record-calibration --run-id color-real-20260807-01 --pattern color-palette --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --preferred-color-ids "1,5,7,9" --recommended-color-count 4 --poor-contrast-color-ids "8" --similar-color-groups "1,9;2,10" --notes "Replace with real observations."
 ```
 
-Each invocation writes the run-specific `calibration-observations.yaml` and updates `output/calibration/calibration-profile.yaml` without erasing measurements from the other axis. Unknown values stay null or pending; they are never invented.
+Use an empty string for a measured empty list, for example `--poor-contrast-color-ids ""`. Omit an option when it has not been measured.
 
-## Consolidated summary
+## `position-grid`
+
+### Purpose
+
+Validate week, day, timezone, and vertical placement using nine known positions:
+
+```text
+Monday    06:00, 12:00, 17:30
+Wednesday 06:00, 12:00, 17:30
+Friday    06:00, 12:00, 17:30
+```
+
+The 17:30 events end at 18:00 and test the lower edge of the candidate visible range.
+
+### Commands
+
+```powershell
+python -m calendar_anim calendar calibrate --pattern position-grid --start-date 2026-08-24 --run-id position-real-20260807-01
+python -m calendar_anim calendar calibrate --pattern position-grid --start-date 2026-08-24 --run-id position-real-20260807-01 --execute
+```
+
+### Manual checklist
+
+- Does the week start on the expected day?
+- Are Monday, Wednesday, and Friday in the expected columns?
+- Is the timezone correct?
+- Is there an unexpected one-hour offset?
+- Do 06:00, 12:00, and 17:30 appear at the expected heights?
+- Is the 06:00-18:00 range still stable?
+
+### Recording
+
+Use the positive or negative form of every measured flag. The following example represents a fully aligned observation and must not be copied if the UI differs:
+
+```powershell
+python -m calendar_anim calendar record-calibration --run-id position-real-20260807-01 --pattern position-grid --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --visible-start-hour 6 --visible-end-hour 18 --week-alignment-ok --timezone-alignment-ok --day-alignment-ok --vertical-alignment-ok --week-starts-on sunday --notes "Observed Sunday-to-Saturday week with correct days, times, and timezone."
+```
+
+Negative forms include `--week-alignment-not-ok`, `--timezone-alignment-not-ok`, `--day-alignment-not-ok`, and `--vertical-alignment-not-ok`.
+
+## `horizontal-bars`
+
+### Purpose
+
+Test whether 1-6 simultaneous, same-color events look like one continuous horizontal bar. Each unit is an independent event with strategy metadata `independent-cells`.
+
+Unlike `overlap-columns`, cells in one bar share a color so borders, gaps, padding, and rounded corners remain visible during inspection.
+
+This pattern deliberately does not attempt partial internal positioning. Google chooses simultaneous-event placement, and the current code has no honest mechanism for selecting an internal subcolumn. That result remains unknown rather than being forced through complex logic.
+
+### Commands
+
+```powershell
+python -m calendar_anim calendar calibrate --pattern horizontal-bars --start-date 2026-08-31 --run-id bars-real-20260807-01
+python -m calendar_anim calendar calibrate --pattern horizontal-bars --start-date 2026-08-31 --run-id bars-real-20260807-01 --execute
+```
+
+### Manual checklist
+
+- Do same-color cells appear to form one continuous bar?
+- Are gaps visible?
+- Do rounded borders prevent visual merging?
+- Do widths 2-6 appear proportional?
+- Is placement predictable?
+- Should every logical block be decomposed into unit cells?
+
+### Recording
+
+The following example represents a positive `independent-cells` result. Use the negative flag when the real UI differs:
+
+```powershell
+python -m calendar_anim calendar record-calibration --run-id bars-real-20260807-01 --pattern horizontal-bars --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --independent-cells-contiguous --no-visible-cell-gaps --same-color-cells-merge --maximum-useful-bar-width 6 --recommended-horizontal-strategy independent-cells --notes "Replace with real observations."
+```
+
+Available opposite flags include `--independent-cells-not-contiguous`, `--visible-cell-gaps`, and `--same-color-cells-do-not-merge`.
+
+## Consolidated profile and readiness
 
 ```powershell
 python -m calendar_anim calendar calibration-summary
 ```
 
-This command reads local YAML only and never calls the Calendar API. With a 06:00–18:00 window and 30 distinguishable minutes, it derives 24 logical rows. With 7 visible days and 5 usable overlap columns, it derives 35 logical columns. If either measurement is absent, the corresponding value is shown as `pending`.
+The profile schema keeps old vertical and overlap YAML compatible while adding optional `color_mapping`, `position_mapping`, `horizontal_bar_mapping`, and derived `candidate_grid` sections.
 
-To overlay a particular run-specific observation on the consolidated profile:
+`Mapper readiness` is diagnostic only:
+
+- `NOT READY`: at least one required experiment has no recorded measurements;
+- `READY FOR SINGLE-FRAME EXPERIMENT`: vertical, overlap, colors, position, and horizontal bars all have recorded measurements.
+
+Readiness does not block local mapping and does not mark `42x24` as final. It does block a real single-frame upload. Position readiness includes `week_starts_on`; horizontal-bar readiness includes continuity, gaps, same-color merging, maximum useful width, and the recommended strategy.
+
+## Cleanup
+
+Preview each deletion before using `--execute`:
 
 ```powershell
-python -m calendar_anim calendar calibration-summary --run-id overlap-real-01
+python -m calendar_anim calendar cleanup --animation-id calibration-color-palette --run-id color-real-20260807-01
+python -m calendar_anim calendar cleanup --animation-id calibration-position-grid --run-id position-real-20260807-01
+python -m calendar_anim calendar cleanup --animation-id calibration-horizontal-bars --run-id bars-real-20260807-01
 ```
 
-## Safe cleanup
+Cleanup matches only `generated_by`, `animation_id`, and `run_id` in the recognized lab calendar.
 
-Preview the exact metadata match first, then explicitly execute deletion:
+## Next delivery
 
-```powershell
-python -m calendar_anim calendar cleanup --animation-id calibration-overlap-columns --run-id overlap-real-01
-python -m calendar_anim calendar cleanup --animation-id calibration-overlap-columns --run-id overlap-real-01 --execute
-```
+The **Single Frame Calendar Mapper** is now available as `calendar map-frame`. Dry-run can be used before horizontal observation; real upload waits for a complete profile. See [single-frame mapper](single-frame-mapper.md).
 
-Cleanup targets only events with matching `generated_by`, `animation_id`, and `run_id` in the recognized lab calendar.
-
-## Current boundary
-
-This phase validates only the static geometry assumptions. It does not implement the real video-to-calendar mapper, bulk upload, browser automation, recording, or final animation composition. The next implementation step is one real static video frame after the vertical and horizontal measurements are repeatable.
+Multiple frames, full animation, Playwright, browser capture, batching, retry, and resume remain outside this phase.

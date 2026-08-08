@@ -29,6 +29,12 @@ def write_execution_result(result: CalibrationExecutionResult, output_dir: Path)
 def build_report(plan: CalibrationPlan, executed: bool) -> str:
     if plan.pattern == "overlap-columns":
         return _build_overlap_report(plan, executed)
+    if plan.pattern == "color-palette":
+        return _build_color_report(plan, executed)
+    if plan.pattern == "position-grid":
+        return _build_position_report(plan, executed)
+    if plan.pattern == "horizontal-bars":
+        return _build_horizontal_bars_report(plan, executed)
 
     lines = [
         "Calendar Animation Calibration",
@@ -151,6 +157,136 @@ def _build_overlap_report(plan: CalibrationPlan, executed: bool) -> str:
     return "\n".join(lines)
 
 
+def _build_color_report(plan: CalibrationPlan, executed: bool) -> str:
+    lines = [
+        "Color Palette Calibration",
+        "=========================",
+        "",
+        f"Run ID: {plan.run_id}",
+        f"Start date: {plan.start_date.isoformat()}",
+        f"Timezone: {plan.timezone}",
+        f"Events: {plan.event_count}",
+        f"Execution: {'REAL' if executed else 'DRY RUN'}",
+        "",
+        "Tested colors",
+        "-------------",
+    ]
+    for event in plan.events:
+        lines.extend(
+            [
+                f"Color ID: {event.color_id}",
+                f"  Logical name: {event.private_metadata['logical_color_name']}",
+                f"  Approximate hex: {event.private_metadata['color_hex_approx']}",
+                f"  Time: {event.start:%Y-%m-%d %H:%M}-{event.end:%H:%M}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Observed results",
+            "----------------",
+            "- Preferred color IDs:",
+            "- Recommended color count:",
+            "- Poor contrast color IDs:",
+            "- Similar color groups:",
+            "- Notes:",
+            "",
+            "Approximate hex values are internal references, not exact browser-rendered colors.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _build_position_report(plan: CalibrationPlan, executed: bool) -> str:
+    lines = [
+        "Position Grid Calibration",
+        "=========================",
+        "",
+        f"Run ID: {plan.run_id}",
+        f"Start date: {plan.start_date.isoformat()}",
+        f"Timezone: {plan.timezone}",
+        f"Events: {plan.event_count}",
+        f"Execution: {'REAL' if executed else 'DRY RUN'}",
+        "",
+        "Known positions",
+        "---------------",
+    ]
+    for event in plan.events:
+        lines.append(
+            f"- {event.summary}: day={event.private_metadata['logical_day']}, "
+            f"row={event.private_metadata['logical_row']}, start={event.start.isoformat()}"
+        )
+    lines.extend(
+        [
+            "",
+            "Observed results",
+            "----------------",
+            "- Week alignment OK:",
+            "- Timezone alignment OK:",
+            "- Day alignment OK:",
+            "- Vertical alignment OK:",
+            "- Week starts on:",
+            "- Visible range:",
+            "- Notes:",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _build_horizontal_bars_report(plan: CalibrationPlan, executed: bool) -> str:
+    groups: dict[str, list[CalendarEventDraft]] = defaultdict(list)
+    for event in plan.events:
+        groups[event.private_metadata["group"]].append(event)
+    lines = [
+        "Horizontal Bars Calibration",
+        "===========================",
+        "",
+        f"Run ID: {plan.run_id}",
+        f"Start date: {plan.start_date.isoformat()}",
+        f"Timezone: {plan.timezone}",
+        f"Events: {plan.event_count}",
+        f"Execution: {'REAL' if executed else 'DRY RUN'}",
+        "Strategy: independent-cells",
+        "Partial internal positioning: not tested by this pattern",
+        "",
+        "Test bars",
+        "---------",
+    ]
+    for width in range(1, 7):
+        events = groups[f"bar-{width}"]
+        lines.extend(
+            [
+                f"bar-{width}",
+                f"  Time: {events[0].start:%H:%M}-{events[0].end:%H:%M}",
+                f"  Cells: {len(events)}",
+                f"  Shared color ID: {events[0].color_id}",
+                "  Visually contiguous:",
+                "  Visible gaps:",
+                f"  Expected logical width: {width}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Observed results",
+            "----------------",
+            "- Independent cells appear contiguous:",
+            "- Visible gaps between cells:",
+            "- Same-color cells merge visually:",
+            "- Maximum useful bar width:",
+            "- Partial bar positioning predictable: not tested / unknown",
+            "- Recommended horizontal strategy:",
+            "- Notes:",
+            "",
+            "This experiment does not assert that block.width equals simultaneous events.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def write_report(plan: CalibrationPlan, output_dir: Path, executed: bool = False) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "calibration-report.txt"
@@ -170,11 +306,17 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default()
-    if plan.pattern == "overlap-columns":
-        draw.text((15, 12), "Overlap Columns Calibration", fill="black", font=font)
+    preview_titles = {
+        "overlap-columns": "Overlap Columns Calibration",
+        "color-palette": "Color Palette Calibration",
+        "position-grid": "Position Grid Calibration",
+        "horizontal-bars": "Horizontal Bars Calibration",
+    }
+    if plan.pattern in preview_titles:
+        draw.text((15, 12), preview_titles[plan.pattern], fill="black", font=font)
         draw.text(
             (15, 30),
-            "LOGICAL EXPECTATION ONLY - not Google Calendar's real overlap algorithm",
+            "LOGICAL EXPECTATION ONLY - verify the real result manually in Google Calendar",
             fill="#B3261E",
             font=font,
         )
@@ -207,14 +349,17 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
         y1 = top + ((start_minutes / 60) - start_hour) * hour_height
         y2 = top + ((end_minutes / 60) - start_hour) * hour_height
         group_name = event.private_metadata.get("group", "ungrouped")
-        if plan.pattern == "overlap-columns" and group_name not in labeled_groups:
+        if (
+            plan.pattern in {"overlap-columns", "horizontal-bars"}
+            and group_name not in labeled_groups
+        ):
             draw.text((8, round(y1) + 2), group_name, fill="#424242", font=font)
             labeled_groups.add(group_name)
         fill = event.color_hex or "#4285F4"
         draw.rectangle((round(x1), round(y1), round(x2), round(y2)), fill=fill, outline="black")
         if x2 - x1 >= 18 and y2 - y1 >= 10:
             draw.text((round(x1) + 2, round(y1) + 1), event.summary, fill="white", font=font)
-    if plan.pattern == "overlap-columns":
+    if plan.pattern in preview_titles:
         draw.text(
             (15, height - 28),
             "Preview only: verify actual placement manually in Google Calendar week view.",

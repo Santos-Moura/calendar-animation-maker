@@ -28,6 +28,20 @@ EVENT_COLORS: Final[list[tuple[str, str]]] = [
     ("11", "#D50000"),
 ]
 
+EVENT_COLOR_NAMES: Final[dict[str, str]] = {
+    "1": "lavender",
+    "2": "sage",
+    "3": "grape",
+    "4": "flamingo",
+    "5": "banana",
+    "6": "tangerine",
+    "7": "peacock",
+    "8": "graphite",
+    "9": "blueberry",
+    "10": "basil",
+    "11": "tomato",
+}
+
 PATTERNS: Final[dict[CalibrationPattern, PatternDescription]] = {
     "duration-scale": PatternDescription(
         name="duration-scale",
@@ -47,12 +61,12 @@ PATTERNS: Final[dict[CalibrationPattern, PatternDescription]] = {
     "position-grid": PatternDescription(
         name="position-grid",
         description="Test logical positions across days and times",
-        approximate_events=6,
+        approximate_events=9,
     ),
     "horizontal-bars": PatternDescription(
         name="horizontal-bars",
         description="Test adjacent horizontal logical blocks (experimental)",
-        approximate_events=15,
+        approximate_events=21,
     ),
     "combined": PatternDescription(
         name="combined",
@@ -146,52 +160,78 @@ def _color_palette(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
                 f"color {color[0]}",
                 "color-palette",
                 color,
-                {"color_id": color[0], "color_hex_approx": color[1]},
+                {
+                    "color_id": color[0],
+                    "logical_color_name": EVENT_COLOR_NAMES[color[0]],
+                    "color_hex_approx": color[1],
+                },
             )
         )
     return events
 
 
 def _position_grid(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
-    labels = [
-        (0, 8, "Mon AM"),
-        (0, 15, "Mon PM"),
-        (2, 8, "Wed AM"),
-        (2, 15, "Wed PM"),
-        (4, 8, "Fri AM"),
-        (4, 15, "Fri PM"),
+    positions = [
+        (0, "monday", "M", 6, 0, "AM", 0),
+        (0, "monday", "M", 12, 0, "MID", 12),
+        (0, "monday", "M", 17, 30, "PM", 23),
+        (2, "wednesday", "W", 6, 0, "AM", 0),
+        (2, "wednesday", "W", 12, 0, "MID", 12),
+        (2, "wednesday", "W", 17, 30, "PM", 23),
+        (4, "friday", "F", 6, 0, "AM", 0),
+        (4, "friday", "F", 12, 0, "MID", 12),
+        (4, "friday", "F", 17, 30, "PM", 23),
     ]
-    return [
-        _event(
-            start + timedelta(days=day_offset),
-            hour,
-            0,
-            45,
-            zone,
-            label,
-            "position-grid",
-            EVENT_COLORS[index],
-            {"day_offset": str(day_offset), "hour": str(hour)},
+    events: list[CalendarEventDraft] = []
+    for index, (day_offset, logical_day, prefix, hour, minute, row_label, row) in enumerate(
+        positions
+    ):
+        event_day = start + timedelta(days=day_offset)
+        expected_start = datetime.combine(event_day, time(hour, minute), zone)
+        events.append(
+            _event(
+                event_day,
+                hour,
+                minute,
+                30,
+                zone,
+                f"{prefix}-{row_label}",
+                "position-grid",
+                EVENT_COLORS[index % len(EVENT_COLORS)],
+                {
+                    "day_offset": str(day_offset),
+                    "logical_day": logical_day,
+                    "logical_row": str(row),
+                    "expected_start": expected_start.isoformat(),
+                },
+            )
         )
-        for index, (day_offset, hour, label) in enumerate(labels)
-    ]
+    return events
 
 
 def _horizontal_bars(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
     events: list[CalendarEventDraft] = []
-    for units in range(1, 6):
+    for units in range(1, 7):
+        color = EVENT_COLORS[(units - 1) % len(EVENT_COLORS)]
         for position in range(1, units + 1):
             events.append(
                 _event(
                     start,
                     8 + units,
                     0,
-                    40,
+                    45,
                     zone,
-                    f"bar{units}/{position}",
+                    f"B{units}/{position}",
                     f"bar-{units}",
-                    EVENT_COLORS[(position - 1) % len(EVENT_COLORS)],
-                    {"logical_units": str(units), "group_position": str(position)},
+                    color,
+                    {
+                        "logical_units": str(units),
+                        "bar_width": str(units),
+                        "group_position": str(position),
+                        "cell_position": str(position),
+                        "logical_start_column": "0",
+                        "strategy": "independent-cells",
+                    },
                 )
             )
     return events

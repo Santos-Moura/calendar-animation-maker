@@ -1,6 +1,6 @@
 # destiny-calendar-animation
 
-> Development status: local MVP plus a guarded Google Calendar calibration suite. Full animation upload and browser capture remain deliberately disabled.
+> Development status: local MVP, guarded Calendar calibration, and a single-frame Calendar mapper. Multi-frame upload and browser capture remain deliberately disabled.
 
 `destiny-calendar-animation` turns a local video clip into a small, palette-limited pixel animation, a preview GIF, and a versioned JSON manifest. The manifest is suitable for safely planning a future experiment in which each frame is represented by one week of real Google Calendar events. The processor is generic; no Destiny assets are distributed here.
 
@@ -34,6 +34,8 @@ flowchart LR
 - deterministic Calendar calibration patterns with JSON/text/PNG artifacts;
 - opt-in OAuth upload of at most 30 calibration events by default to a dedicated lab calendar;
 - duplicate-run detection and cleanup filtered by private metadata.
+- structured color, position, and horizontal-bar observations with mapper-readiness summary.
+- one-frame `contain` fitting, Calendar color mapping, local comparison artifacts, and guarded upload.
 
 ## Install
 
@@ -120,11 +122,31 @@ The shortest overlap-calibration flow is:
 
 ```powershell
 python -m calendar_anim calendar calibrate --pattern overlap-columns --start-date 2026-08-10 --run-id overlap-real-01 --execute
-python -m calendar_anim calendar record-calibration --run-id overlap-real-01 --pattern overlap-columns --maximum-tested-overlap-columns 6 --usable-overlap-columns 5 --browser-zoom 100 --viewport-width 1920 --viewport-height 1080
+python -m calendar_anim calendar record-calibration --run-id overlap-real-01 --pattern overlap-columns --maximum-tested-overlap-columns 6 --usable-overlap-columns 6 --browser-zoom 100 --viewport-width 1920 --viewport-height 1080
 python -m calendar_anim calendar calibration-summary
 ```
 
-Replace `5` with the conservative number of columns that remain usable in your real Calendar UI. The local profile separates minimum visible duration from minimum distinguishable height, derives logical rows and columns, and leaves missing measurements as `pending`. The expected-layout PNG is only a logical reference—not a simulation of Google's layout. See [Google setup](docs/google-calendar-setup.md), [calibration guide](docs/calendar-calibration.md), and [security](docs/calendar-security.md).
+The current measured profile records six usable overlap columns per day and therefore derives a candidate `42x24` grid. The local profile separates minimum visible duration from minimum distinguishable height and leaves missing measurements as `pending`. The expected-layout PNG is only a logical reference—not a simulation of Google's layout. See [Google setup](docs/google-calendar-setup.md), [calibration guide](docs/calendar-calibration.md), and [security](docs/calendar-security.md).
+
+The calibration observations extend the local profile without inventing defaults. `calendar calibration-summary` reports each section as pending, incomplete, or recorded and only reports readiness for a single-frame experiment after all five calibration areas have complete measurements.
+
+## Single-frame Calendar mapper
+
+Map exactly one manifest frame without contacting Google:
+
+```powershell
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --start-date 2026-09-07 --run-id frame-test-001
+```
+
+The command reads `output/calibration/calibration-profile.yaml` by default and writes `frame-plan.json`, `mapping-report.txt`, `source-frame.png`, `mapped-preview.png`, and `execution-result.json` below `output/frame-mapping/<run_id>/`. A manifest grid such as `28x20` is fitted with aspect-preserving `contain` into the calibrated candidate grid. Horizontal blocks are expanded into unit cells before fitting, background cells remain absent, and colors are mapped to the nearest calibrated Calendar color with a contrast fallback.
+
+Dry-run remains available while `horizontal-bars` is pending, but real upload is blocked until the profile reports `READY FOR SINGLE-FRAME EXPERIMENT`. An upload additionally requires an explicit date, event-limit validation, confirmation, OAuth, the laboratory calendar, and a unique frame run:
+
+```powershell
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --start-date 2026-09-07 --run-id frame-test-001 --execute
+```
+
+See [single-frame mapper](docs/single-frame-mapper.md) for mapping rules, metrics, limits, cleanup, and current visual constraints.
 
 Every render produces:
 
@@ -142,7 +164,7 @@ The Pydantic-modeled manifest keeps source selection, render settings, statistic
 
 ## Architecture and safety
 
-Video processing, rendering, manifest IO, Calendar planning, and browser capture have separate boundaries. Calibration plans are API-independent. `GoogleCalendarGateway` is enabled only after `--execute`; `PlaywrightCaptureGateway` remains disabled.
+Video processing, rendering, manifest IO, Calendar planning, and browser capture have separate boundaries. Calibration and single-frame plans are API-independent. `GoogleCalendarGateway` is enabled only after `--execute`; `PlaywrightCaptureGateway` remains disabled.
 
 Calibration access uses local OAuth and a separate calendar. Calibration events carry private `generated_by`, `animation_id`, `run_id`, `pattern`, and `event_index` metadata. Cleanup requires `animation_id` plus `run_id`. The project never automates login or stores passwords. OAuth files, local calendar configuration, browser profiles, input videos, and generated output are ignored by Git.
 
@@ -150,12 +172,12 @@ Playwright will eventually use a separate persistent profile after manual authen
 
 ## Limitations and roadmap
 
-Calendar colors and layout still require manual measurement. Only small calibration uploads are supported; there is no animation upload, batching/resume, Playwright selector implementation, vertical block merge, or final screenshot composition.
+Calendar colors and layout still require manual measurement. Only calibration and one-frame uploads are supported; there is no multi-frame upload, batching/resume, Playwright selector implementation, vertical block merge, or final screenshot composition.
 
 1. **Phase 0 – calibration:** a few static events, useful resolution, event duration, zoom, and window size.
 2. **Phase 1 – local MVP:** video, frames, pixelization, GIF, manifest, and estimate (implemented).
-3. **Phase 2 – planning:** mapper, dry-run, separate calendar, metadata, and safe cleanup (local plan implemented).
-4. **Phase 3 – live upload:** OAuth, calendar creation, batches, backoff, quotas, and resume.
+3. **Phase 2 – planning:** mapper, dry-run, separate calendar, metadata, and safe cleanup (single-frame experiment implemented).
+4. **Phase 3 – live upload:** multi-frame planning, batches, backoff, quotas, and resume.
 5. **Phase 4 – capture:** persistent Playwright profile, weekly navigation, stable waits, screenshots, composition.
 6. **Phase 5 – longer clips:** around 10 seconds, configurable FPS, scenes, stronger compression and resume.
 
@@ -172,4 +194,4 @@ uv run pytest tests/unit
 uv run pytest tests/integration
 ```
 
-See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.
+See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [single-frame mapper](docs/single-frame-mapper.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.
