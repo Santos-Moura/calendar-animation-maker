@@ -205,10 +205,28 @@ python -m calendar_anim calendar calibrate --pattern subcolumn-order --start-dat
 Observe all four groups, refresh the browser, navigate away and back, and reopen Calendar if practical. Then record only what was actually observed:
 
 ```powershell
-python -m calendar_anim calendar record-calibration --run-id slot-order-real-01 --pattern subcolumn-order --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --visual-order-forward "0,1,2,3,4,5" --visual-order-reverse "5,4,3,2,1,0" --visual-order-shuffled "2,5,0,4,1,3" --stable-after-refresh --stable-after-navigation --stable-after-reopen --creation-order-controls-layout --recommended-slot-order-strategy creation-order --notes "Replace with real observations."
+python -m calendar_anim calendar record-calibration --run-id slot-order-real-01 --pattern subcolumn-order --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --visual-order-forward "0,1,2,3,4,5" --visual-order-reverse "0,1,2,3,4,5" --visual-order-shuffled "0,1,2,3,4,5" --stable-after-refresh --stable-after-navigation --stable-after-reopen --creation-order-does-not-control-layout --recommended-slot-order-strategy unusable --notes "Creation order did not control the real Calendar layout."
 ```
 
-Do not copy those observation flags unless the real Calendar result supports them. Negative paired flags are available, and omitted values remain `null`/pending.
+Those values record the observed run described above; other environments should record their own result. Negative paired flags are available, and omitted values remain `null`/pending.
+
+### Recorded ordering conclusion
+
+The real follow-up isolated creation order, `colorId`, and event summary. The observed result was:
+
+- creation order did not control the final left-to-right layout;
+- `colorId` did not provide reliable positional control;
+- distinct summaries were consistently ordered;
+- the title-versus-color conflict favored summary;
+- refresh and navigation did not produce a relevant position change in the tested run.
+
+The production mapper therefore treats `summary` as the technical slot-order key and `colorId` as independent visual data. This is an empirical project assumption, not a public Google Calendar layout contract. The conclusion can be recorded without retaining the experimental pattern:
+
+```powershell
+python -m calendar_anim calendar record-calibration --run-id summary-ordering-evidence --pattern subcolumn-order --ordering-factor-tested --ordering-controlling-property summary --ordering-factor-stable --recommended-slot-order-strategy summary-prefix --notes "Summary controlled ordering in the real Calendar factor test."
+```
+
+Readiness requires all three pieces of evidence: `controlling_property=summary`, stable factor results, and the mapper capability `summary-prefix`. Merely writing the strategy string does not unlock real execution.
 
 ## Consolidated profile and readiness
 
@@ -221,9 +239,9 @@ The profile schema keeps older YAML compatible while adding optional `color_mapp
 `Mapper readiness` is diagnostic only:
 
 - `NOT READY`: at least one required experiment has no recorded measurements;
-- `READY FOR SINGLE-FRAME EXPERIMENT`: vertical, overlap, colors, position, horizontal bars, and a stable creation-order subcolumn strategy all have recorded measurements.
+- `READY FOR SINGLE-FRAME EXPERIMENT`: vertical, overlap, colors, position, horizontal bars, and a stable subcolumn strategy supported by the mapper all have recorded measurements.
 
-Readiness does not block local mapping and does not mark `42x24` as final. It does block a real single-frame upload. Position readiness includes `week_starts_on`; horizontal-bar readiness includes continuity, gaps, same-color merging, maximum useful width, and the recommended strategy. Subcolumn-order readiness requires stable results after refresh, navigation, and reopen, plus evidence that creation order controls layout. A recorded negative result remains valuable evidence but does not unlock upload.
+Readiness does not block local mapping and does not mark `42x24` as final. It does block a real single-frame upload. Position readiness includes `week_starts_on`; horizontal-bar readiness includes continuity, gaps, same-color merging, maximum useful width, and the recommended strategy. Subcolumn readiness accepts the legacy creation-order path only when that behavior was positively observed, or `summary-prefix` when stable summary control was recorded and the mapper supports it. Unknown, color-dependent, unstable, or unsupported strategies remain blocked.
 
 ## Cleanup
 
@@ -242,4 +260,4 @@ Cleanup matches only `generated_by`, `animation_id`, and `run_id` in the recogni
 
 The **Single Frame Calendar Mapper** supports `sparse` and `full-grid`. Sparse is efficient but horizontally unstable; full-grid is the recommended first visual baseline because every calibrated slot exists. Dry-run can be used before readiness, while real upload waits for a complete profile. See [single-frame mapper](single-frame-mapper.md).
 
-The next manual experiment is `subcolumn-order`. Only after it is recorded as stable should a full-grid plan be reviewed for an explicitly confirmed single-frame upload. Multiple frames, hybrid optimization, Playwright, browser capture, batching, retry, and resume remain outside this phase.
+The next step is a local full-grid dry-run with `summary-prefix`, followed by review of `frame-plan.json`, `mapping-report.txt`, `source-frame.png`, and `mapped-preview.png`. Only after that review should one explicitly confirmed frame be uploaded. Multiple frames, hybrid optimization, Playwright, browser capture, batching, retry, and resume remain outside this phase.

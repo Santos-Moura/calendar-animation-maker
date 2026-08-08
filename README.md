@@ -128,7 +128,7 @@ python -m calendar_anim calendar calibration-summary
 
 The current measured profile records six usable overlap columns per day and therefore derives a candidate `42x24` grid. The local profile separates minimum visible duration from minimum distinguishable height and leaves missing measurements as `pending`. The expected-layout PNG is only a logical reference—not a simulation of Google's layout. See [Google setup](docs/google-calendar-setup.md), [calibration guide](docs/calendar-calibration.md), and [security](docs/calendar-security.md).
 
-The calibration observations extend the local profile without inventing defaults. `calendar calibration-summary` reports each section as pending, incomplete, or recorded. Readiness now also requires a real `subcolumn-order` observation proving that creation order remains stable after refresh, navigation, and reopening.
+The calibration observations extend the local profile without inventing defaults. `calendar calibration-summary` reports each section as pending, incomplete, or recorded. Real execution requires ordering evidence that matches a strategy actually supported by the mapper; a strategy name by itself never marks the profile ready.
 
 Before any full-grid upload, run the 24-event ordering experiment locally and inspect its logical artifacts:
 
@@ -137,6 +137,12 @@ python -m calendar_anim calendar calibrate --pattern subcolumn-order --start-dat
 ```
 
 The pattern contains two forward groups, one reverse group, and one shuffled group. Its logical preview documents creation order only; Google Calendar still decides the actual left-to-right layout.
+
+### Summary-based subcolumn ordering
+
+The real ordering investigation found that creation order did not control the final layout and `colorId` was not a reliable positioning key. Distinct event summaries remained ordered, and the title-versus-color case favored the summary. For the MVP, full-grid therefore assigns the deterministic summaries `00..05` from the logical subcolumn while `colorId` remains exclusively visual data.
+
+This behavior is empirically validated for this project, not part of a documented Google Calendar layout API. The strategy is isolated behind `summary-prefix` so it can be replaced later. Technical titles may be visible in Calendar; invisible Unicode and UI hacks are intentionally outside this phase.
 
 ## Single-frame Calendar mapper
 
@@ -149,7 +155,7 @@ python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.jso
 
 The command reads `output/calibration/calibration-profile.yaml` by default and writes `frame-plan.json`, `mapping-report.txt`, `source-frame.png`, `mapped-preview.png`, `mapped-debug.png`, and `execution-result.json` below `output/frame-mapping/<run_id>/`. A manifest grid such as `28x20` is fitted with aspect-preserving `contain` into the calibrated candidate grid.
 
-`sparse` is the backward-compatible default and creates only foreground events. It is efficient, but Calendar may redistribute isolated simultaneous events. `full-grid` is recommended for the first real visual experiment: every target cell becomes an event, and structural background events keep all calibrated subcolumns occupied. The background is a configurable Calendar `colorId`, not an attempt to match the browser theme.
+`sparse` is the backward-compatible default and creates only foreground events. It keeps blank summaries and remains horizontally non-absolute. `full-grid` is recommended for the first real visual experiment: every target cell becomes an event, structural background events keep all calibrated subcolumns occupied, and `summary-prefix` supplies the keys `00..05`. The background is a configurable Calendar `colorId`, not an attempt to match the browser theme.
 
 For the current candidate grid, full-grid costs `42x24 = 1008` events for one frame. Twelve frames would require 12,096 events and 60 frames would require 60,480 events before any future optimization. These volumes are estimates, not guaranteed safe Calendar workloads.
 
@@ -185,7 +191,7 @@ Playwright will eventually use a separate persistent profile after manual authen
 
 ## Limitations and roadmap
 
-Calendar colors and final event ordering still require manual validation. The `subcolumn-order` calibration exists to perform that validation before the first full-grid upload. Only calibration and one-frame uploads are supported; there is no hybrid mapping, multi-frame upload, batching/resume, Playwright selector implementation, vertical block merge, or final screenshot composition.
+The summary-based ordering strategy still requires validation on the first real full-grid frame because Google does not document overlap layout as an API contract. Only calibration and one-frame uploads are supported; there is no hybrid mapping, multi-frame upload, batching/resume, Playwright selector implementation, vertical block merge, or final screenshot composition.
 
 1. **Phase 0 – calibration:** a few static events, useful resolution, event duration, zoom, and window size.
 2. **Phase 1 – local MVP:** video, frames, pixelization, GIF, manifest, and estimate (implemented).
