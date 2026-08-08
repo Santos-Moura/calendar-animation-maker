@@ -4,6 +4,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from calendar_anim.calendar.frame_mapping.models import (
+    CalendarMappedCell,
     SingleFrameCalendarPlan,
     SingleFrameExecutionResult,
 )
@@ -30,6 +31,8 @@ def build_mapping_report(plan: SingleFrameCalendarPlan) -> str:
         f"Rows: {plan.target_grid_height}",
         f"Fit: {plan.fit}",
         f"Horizontal strategy: {plan.horizontal_strategy}",
+        f"Subcolumn order strategy: {plan.subcolumn_order_strategy or 'pending calibration'}",
+        "Submission order key: day_offset, logical_y, subcolumn_index",
         f"Background colorId: {background_color}",
         f"Calibration profile ready: {'yes' if plan.profile_ready else 'no'}",
         "",
@@ -54,6 +57,10 @@ def build_mapping_report(plan: SingleFrameCalendarPlan) -> str:
         f"Full-grid estimate: {stats.full_grid_event_estimate} events",
         f"Difference: +{difference} events",
         "",
+        "Row ordering sample",
+        "-------------------",
+        *_row_ordering_sample(plan),
+        "",
         "Warnings",
         "--------",
     ]
@@ -70,6 +77,28 @@ def build_mapping_report(plan: SingleFrameCalendarPlan) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _row_ordering_sample(plan: SingleFrameCalendarPlan) -> list[str]:
+    grouped: dict[tuple[int, int], list[CalendarMappedCell]] = {}
+    for cell in plan.mapped_cells:
+        grouped.setdefault((cell.day_offset, cell.logical_y), []).append(cell)
+    if not grouped:
+        return ["- no mapped cells"]
+    selected_key = next(
+        (
+            key
+            for key, cells in grouped.items()
+            if any(cell.cell_role.value == "foreground" for cell in cells)
+        ),
+        next(iter(grouped)),
+    )
+    cells = grouped[selected_key]
+    day_offset, row = selected_key
+    lines = [f"day_offset={day_offset} row={row}"]
+    for cell in cells:
+        lines.append(f"{cell.subcolumn} -> colorId {cell.color_id} {cell.cell_role.value}")
+    return lines
 
 
 def write_frame_mapping_artifacts(

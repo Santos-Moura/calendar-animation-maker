@@ -229,6 +229,9 @@ def profile_summary(profile: CalibrationProfile) -> str:
         "",
         f"Mapper readiness: {profile.mapper_readiness}",
     ]
+    if profile.missing_mapper_calibrations:
+        lines.extend(["", "Missing:"])
+        lines.extend(f"- {calibration}" for calibration in profile.missing_mapper_calibrations)
     return "\n".join(lines)
 
 

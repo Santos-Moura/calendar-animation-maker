@@ -719,11 +719,8 @@ def map_frame_command(
             typer.echo("--yes has no effect without --execute; no API call was made.")
         return
     if not plan.profile_ready:
-        _fail(
-            CalendarAnimError(
-                "Calibration profile is NOT READY; record horizontal-bars before upload"
-            )
-        )
+        missing = ", ".join(profile.missing_mapper_calibrations)
+        _fail(CalendarAnimError(f"Calibration profile is NOT READY; missing: {missing}"))
     if plan.event_count > plan.max_execute_events:
         _fail(
             CalendarAnimError(

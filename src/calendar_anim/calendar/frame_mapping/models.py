@@ -76,7 +76,7 @@ class FrameMappingStatistics(BaseModel):
 
 
 class SingleFrameCalendarPlan(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     animation_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     calendar_name: str = "Calendar Animation Lab"
@@ -94,6 +94,7 @@ class SingleFrameCalendarPlan(BaseModel):
     background_color_id: str | None = None
     profile_ready: bool
     horizontal_strategy: str
+    subcolumn_order_strategy: str | None = None
     max_execute_events: int = Field(gt=0)
     warnings: list[str] = Field(default_factory=list)
     statistics: FrameMappingStatistics

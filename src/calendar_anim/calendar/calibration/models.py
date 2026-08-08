@@ -304,22 +304,29 @@ class CalibrationProfile(BaseModel):
         return self
 
     @property
-    def mapper_ready(self) -> bool:
+    def missing_mapper_calibrations(self) -> list[str]:
+        missing: list[str] = []
         vertical_ready = (
             self.vertical_mapping.minimum_visible_event_minutes is not None
             and self.vertical_mapping.minimum_distinguishable_height_minutes is not None
             and self.vertical_mapping.logical_rows is not None
         )
+        if not vertical_ready:
+            missing.append("vertical calibration")
         horizontal_ready = (
             self.horizontal_mapping.maximum_tested_overlap_columns is not None
             and self.horizontal_mapping.usable_overlap_columns_per_day is not None
             and self.horizontal_mapping.logical_columns is not None
         )
+        if not horizontal_ready:
+            missing.append("overlap-columns calibration")
         colors_ready = (
             bool(self.color_mapping.tested_color_ids)
             and bool(self.color_mapping.preferred_color_ids)
             and self.color_mapping.recommended_color_count is not None
         )
+        if not colors_ready:
+            missing.append("color-palette calibration")
         position_values = (
             self.position_mapping.week_alignment_ok,
             self.position_mapping.timezone_alignment_ok,
@@ -328,6 +335,8 @@ class CalibrationProfile(BaseModel):
             self.position_mapping.week_starts_on,
         )
         position_ready = all(value is not None for value in position_values)
+        if not position_ready:
+            missing.append("position-grid calibration")
         bar_values = (
             self.horizontal_bar_mapping.independent_cells_appear_contiguous,
             self.horizontal_bar_mapping.visible_gaps_between_cells,
@@ -336,7 +345,24 @@ class CalibrationProfile(BaseModel):
             self.horizontal_bar_mapping.recommended_horizontal_strategy,
         )
         bars_ready = all(value is not None for value in bar_values)
-        return all((vertical_ready, horizontal_ready, colors_ready, position_ready, bars_ready))
+        if not bars_ready:
+            missing.append("horizontal-bars calibration")
+        slot_order = self.subcolumn_order_mapping
+        slot_order_ready = (
+            slot_order.status == "recorded"
+            and slot_order.stable_after_refresh is True
+            and slot_order.stable_after_navigation is True
+            and slot_order.stable_after_reopen is True
+            and slot_order.creation_order_controls_layout is True
+            and slot_order.recommended_slot_order_strategy == "creation-order"
+        )
+        if not slot_order_ready:
+            missing.append("subcolumn-order calibration")
+        return missing
+
+    @property
+    def mapper_ready(self) -> bool:
+        return not self.missing_mapper_calibrations
 
     @property
     def mapper_readiness(self) -> str:

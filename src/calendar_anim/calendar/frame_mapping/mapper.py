@@ -33,6 +33,14 @@ WEEKDAY_INDEX = {
 }
 
 
+def logical_cell_calendar_order_key(
+    cell: LogicalCell, columns_per_day: int
+) -> tuple[int, int, int]:
+    """Return the explicit gateway submission order: day, row, then subcolumn."""
+
+    return (cell.x // columns_per_day, cell.y, cell.x % columns_per_day)
+
+
 def select_frame(manifest: AnimationManifest, frame_index: int) -> AnimationFrame:
     if frame_index < 0 or frame_index >= len(manifest.frames):
         last = len(manifest.frames) - 1
@@ -231,12 +239,7 @@ def map_cells_to_calendar(
     mapped: list[CalendarMappedCell] = []
     events: list[CalendarEventDraft] = []
     ordered_cells = sorted(
-        cells,
-        key=lambda cell: (
-            cell.x // columns_per_day,
-            cell.y,
-            cell.x % columns_per_day,
-        ),
+        cells, key=lambda cell: logical_cell_calendar_order_key(cell, columns_per_day)
     )
     for cell in ordered_cells:
         if cell.x >= target_width or cell.y >= target_height:
@@ -412,8 +415,10 @@ def build_single_frame_plan(
         if calendar_background_color_id is not None:
             warnings.append("Calendar background color is ignored in sparse mode.")
     if not profile.mapper_ready:
+        missing = ", ".join(profile.missing_mapper_calibrations)
         warnings.append(
-            "Calibration profile is NOT READY; dry-run is allowed but real upload is blocked."
+            "Calibration profile is NOT READY; dry-run is allowed but real upload is blocked. "
+            f"Missing: {missing}."
         )
     if recorded_strategy is None:
         warnings.append("Horizontal strategy is uncalibrated; this dry-run uses unit-cells-only.")
@@ -446,6 +451,7 @@ def build_single_frame_plan(
         ),
         profile_ready=profile.mapper_ready,
         horizontal_strategy=horizontal_strategy,
+        subcolumn_order_strategy=(profile.subcolumn_order_mapping.recommended_slot_order_strategy),
         max_execute_events=max_execute_events,
         warnings=warnings,
         statistics=FrameMappingStatistics(
