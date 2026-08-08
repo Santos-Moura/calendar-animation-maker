@@ -167,6 +167,31 @@ python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.jso
 
 See [single-frame mapper](docs/single-frame-mapper.md) for mapping rules, metrics, limits, cleanup, and current visual constraints.
 
+## Resumable multi-frame Calendar upload
+
+The validated single-frame mapper is reused unchanged by a planner that assigns selected frames to consecutive calibrated weeks. Planning is fully local and writes an immutable plan, a mutable frame-level checkpoint, a global report, and the normal single-frame artifacts:
+
+```powershell
+python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --start-date 2026-10-04 --run-id animation-test-01
+python -m calendar_anim calendar upload-animation --run-id animation-test-01
+```
+
+The second command is also a local dry-run unless `--execute` is supplied. Real uploads are serial and checkpoint every frame. Completed frames are skipped; a partial frame requires explicit `--recover-partial`, which deletes and recreates only that frame before continuing:
+
+```powershell
+python -m calendar_anim calendar upload-animation --run-id animation-test-01 --execute
+python -m calendar_anim calendar upload-animation --run-id animation-test-01 --resume --recover-partial --execute
+```
+
+Cleanup is local by default and can target one frame or the whole run:
+
+```powershell
+python -m calendar_anim calendar cleanup-animation --run-id animation-test-01 --frame 2
+python -m calendar_anim calendar cleanup-animation --run-id animation-test-01
+```
+
+For the current full-grid baseline, six frames plan `6 x 1008 = 6048` events. The 1200-event normal guard remains a per-frame limit, not an animation-wide limit. See [multi-frame upload](docs/multi-frame-upload.md) for state transitions, recovery, artifacts, and the complete command workflow.
+
 Every render produces:
 
 ```text
@@ -183,7 +208,7 @@ The Pydantic-modeled manifest keeps source selection, render settings, statistic
 
 ## Architecture and safety
 
-Video processing, rendering, manifest IO, Calendar planning, and browser capture have separate boundaries. Calibration and single-frame plans are API-independent. `GoogleCalendarGateway` is enabled only after `--execute`; `PlaywrightCaptureGateway` remains disabled.
+Video processing, rendering, manifest IO, Calendar planning, and browser capture have separate boundaries. Calibration, single-frame plans, and multi-frame plans are API-independent. `GoogleCalendarGateway` is enabled only after `--execute`; `PlaywrightCaptureGateway` remains disabled.
 
 Calibration access uses local OAuth and a separate calendar. Calibration events carry private `generated_by`, `animation_id`, `run_id`, `pattern`, and `event_index` metadata. Cleanup requires `animation_id` plus `run_id`. The project never automates login or stores passwords. OAuth files, local calendar configuration, browser profiles, input videos, and generated output are ignored by Git.
 
@@ -191,13 +216,13 @@ Playwright will eventually use a separate persistent profile after manual authen
 
 ## Limitations and roadmap
 
-The summary-based ordering strategy still requires validation on the first real full-grid frame because Google does not document overlap layout as an API contract. Only calibration and one-frame uploads are supported; there is no hybrid mapping, multi-frame upload, batching/resume, Playwright selector implementation, vertical block merge, or final screenshot composition.
+The summary-based ordering strategy was validated on the first real full-grid frame, but Google still does not document overlap layout as an API contract. Multi-frame planning and frame-level checkpoint/resume are implemented. There is no event-level resume, batch API, hybrid mapping, Playwright selector implementation, vertical block merge, or final screenshot composition.
 
 1. **Phase 0 – calibration:** a few static events, useful resolution, event duration, zoom, and window size.
 2. **Phase 1 – local MVP:** video, frames, pixelization, GIF, manifest, and estimate (implemented).
-3. **Phase 2 – planning:** sparse/full-grid mapper, dry-run, separate calendar, metadata, and safe cleanup (single-frame baseline implemented).
-4. **Phase 3 – fidelity:** compare full-grid with Calendar, validate ordering and test 2–3 frames; remove fillers only when proven safe.
-5. **Phase 4 – live upload:** multi-frame planning, batches, backoff, quotas, and resume.
+3. **Phase 2 – planning:** sparse/full-grid mapper, dry-run, separate calendar, metadata, and safe cleanup (implemented).
+4. **Phase 3 – fidelity:** real full-grid frame and summary ordering validation (implemented).
+5. **Phase 4 – live upload:** multi-frame planning and frame-level checkpoint/resume (implemented); batch, backoff, and event-level resume remain future work.
 6. **Phase 5 – capture:** persistent Playwright profile, weekly navigation, stable waits, screenshots, composition.
 7. **Phase 6 – longer clips:** around 10 seconds, configurable FPS, scenes, stronger compression and resume.
 
@@ -214,4 +239,4 @@ uv run pytest tests/unit
 uv run pytest tests/integration
 ```
 
-See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [single-frame mapper](docs/single-frame-mapper.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.
+See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [single-frame mapper](docs/single-frame-mapper.md), [multi-frame upload](docs/multi-frame-upload.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.
