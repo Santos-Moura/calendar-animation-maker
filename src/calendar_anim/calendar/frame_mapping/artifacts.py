@@ -31,10 +31,21 @@ def build_mapping_report(plan: SingleFrameCalendarPlan) -> str:
         f"Rows: {plan.target_grid_height}",
         f"Fit: {plan.fit}",
         f"Horizontal strategy: {plan.horizontal_strategy}",
-        f"Subcolumn order strategy: {plan.subcolumn_order_strategy or 'pending calibration'}",
         "Submission order key: day_offset, logical_y, subcolumn_index",
         f"Background colorId: {background_color}",
         f"Calibration profile ready: {'yes' if plan.profile_ready else 'no'}",
+        "",
+        "Subcolumn ordering",
+        "------------------",
+        f"Strategy: {plan.subcolumn_order_strategy.value}",
+        f"Columns per day: {plan.columns_per_day}",
+        "Slot keys:",
+        *_slot_key_lines(plan),
+        "Ordering source: Empirical Google Calendar calibration",
+        (
+            "Warning: Google Calendar overlap ordering is not part of a documented API "
+            "contract; this strategy is based on observed behavior."
+        ),
         "",
         "Metrics",
         "-------",
@@ -57,8 +68,8 @@ def build_mapping_report(plan: SingleFrameCalendarPlan) -> str:
         f"Full-grid estimate: {stats.full_grid_event_estimate} events",
         f"Difference: +{difference} events",
         "",
-        "Row ordering sample",
-        "-------------------",
+        "Ordering sample",
+        "---------------",
         *_row_ordering_sample(plan),
         "",
         "Warnings",
@@ -96,9 +107,29 @@ def _row_ordering_sample(plan: SingleFrameCalendarPlan) -> list[str]:
     cells = grouped[selected_key]
     day_offset, row = selected_key
     lines = [f"day_offset={day_offset} row={row}"]
+    events_by_position = {
+        (
+            int(event.private_metadata["day_offset"]),
+            int(event.private_metadata["logical_y"]),
+            int(event.private_metadata["subcolumn_index"]),
+        ): event
+        for event in plan.events
+    }
     for cell in cells:
-        lines.append(f"{cell.subcolumn} -> colorId {cell.color_id} {cell.cell_role.value}")
+        event = events_by_position[(cell.day_offset, cell.logical_y, cell.subcolumn)]
+        lines.append(
+            f'subcolumn={cell.subcolumn} summary="{event.summary}" '
+            f"colorId={cell.color_id} role={cell.cell_role.value}"
+        )
     return lines
+
+
+def _slot_key_lines(plan: SingleFrameCalendarPlan) -> list[str]:
+    if not plan.subcolumn_order_keys:
+        return ["- not used"]
+    return [
+        f"{subcolumn} -> {key}" for subcolumn, key in enumerate(plan.subcolumn_order_keys)
+    ]
 
 
 def write_frame_mapping_artifacts(

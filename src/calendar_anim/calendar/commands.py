@@ -737,6 +737,11 @@ def map_frame_command(
     typer.echo(f"Background events: {stats.background_events}")
     typer.echo(f"Foreground Calendar colors: {stats.foreground_calendar_colors}")
     typer.echo(f"Background colorId: {plan.background_color_id or 'not used'}")
+    typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
+    typer.echo(
+        "Subcolumn slot keys: "
+        + (", ".join(plan.subcolumn_order_keys) if plan.subcolumn_order_keys else "not used")
+    )
     typer.echo(f"Mapper readiness: {'READY' if plan.profile_ready else 'NOT READY'}")
     typer.echo(f"Execution: {'REAL' if execute else 'DRY RUN'}")
     typer.echo(f"Artifacts: {output_dir}")
@@ -768,6 +773,7 @@ def map_frame_command(
         )
     if not yes:
         typer.echo(f"\nMapping mode: {plan.mapping_mode.value.upper()}")
+        typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
         typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
         typer.echo(f"Foreground events: {stats.foreground_events}")
         typer.echo(f"Background events: {stats.background_events}")
