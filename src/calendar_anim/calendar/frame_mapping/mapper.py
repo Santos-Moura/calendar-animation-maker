@@ -436,9 +436,7 @@ def build_single_frame_plan(
             "order, but final visual ordering still depends on Google Calendar."
         )
         if not strategy_matches_profile:
-            recommended = (
-                profile.subcolumn_order_mapping.recommended_slot_order_strategy or "none"
-            )
+            recommended = profile.subcolumn_order_mapping.recommended_slot_order_strategy or "none"
             warnings.append(
                 f"Full-grid uses {ordering_strategy.value}, but the calibration profile does "
                 f"not confirm that strategy (recommended: {recommended})."

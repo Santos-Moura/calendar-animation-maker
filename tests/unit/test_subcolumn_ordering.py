@@ -16,9 +16,7 @@ pytestmark = pytest.mark.unit
     ("subcolumn", "expected"),
     [(0, "00"), (1, "01"), (5, "05")],
 )
-def test_summary_prefix_is_deterministic_and_zero_padded(
-    subcolumn: int, expected: str
-) -> None:
+def test_summary_prefix_is_deterministic_and_zero_padded(subcolumn: int, expected: str) -> None:
     first = summary_for_subcolumn(subcolumn, 6, SubcolumnOrderStrategy.SUMMARY_PREFIX)
     second = summary_for_subcolumn(subcolumn, 6, "summary-prefix")
 

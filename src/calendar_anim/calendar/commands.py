@@ -755,13 +755,9 @@ def map_frame_command(
         blockers = list(profile.missing_mapper_calibrations)
         if (
             plan.mapping_mode is FrameMappingMode.FULL_GRID
-            and not profile.subcolumn_order_mapping.strategy_ready(
-                plan.subcolumn_order_strategy
-            )
+            and not profile.subcolumn_order_mapping.strategy_ready(plan.subcolumn_order_strategy)
         ):
-            blockers.append(
-                f"confirmed {plan.subcolumn_order_strategy.value} mapper strategy"
-            )
+            blockers.append(f"confirmed {plan.subcolumn_order_strategy.value} mapper strategy")
         missing = ", ".join(blockers)
         _fail(CalendarAnimError(f"Calibration profile is NOT READY; missing: {missing}"))
     if plan.event_count > plan.max_execute_events:

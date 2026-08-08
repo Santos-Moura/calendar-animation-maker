@@ -127,9 +127,7 @@ def _row_ordering_sample(plan: SingleFrameCalendarPlan) -> list[str]:
 def _slot_key_lines(plan: SingleFrameCalendarPlan) -> list[str]:
     if not plan.subcolumn_order_keys:
         return ["- not used"]
-    return [
-        f"{subcolumn} -> {key}" for subcolumn, key in enumerate(plan.subcolumn_order_keys)
-    ]
+    return [f"{subcolumn} -> {key}" for subcolumn, key in enumerate(plan.subcolumn_order_keys)]
 
 
 def write_frame_mapping_artifacts(
