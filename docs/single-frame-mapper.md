@@ -205,9 +205,15 @@ python -m calendar_anim calendar cleanup --animation-id primeiro-teste --run-id 
 python -m calendar_anim calendar cleanup --animation-id primeiro-teste --run-id primeiro-frame-full-grid-01 --execute
 ```
 
+## Multi-frame orchestration
+
+The single-frame mapper remains the only source of truth for fit, full-grid background, color mapping, `summary-prefix`, metadata, and event generation. The multi-frame layer calls it once per selected manifest frame, assigns consecutive weeks, and persists an immutable animation plan plus mutable frame checkpoints.
+
+It does not copy or replace the mapper. See [multi-frame upload](multi-frame-upload.md) for `plan-animation`, resumable serial upload, partial-frame recovery, and animation cleanup.
+
 ## Why there is no Playwright yet
 
-Calendar API writes are not visually atomic. The future animation will pre-upload frames into separate weeks, wait for stabilization, capture each week, and compose the screenshots. This branch does not implement multi-frame upload, batching, retry/resume, Playwright, or MP4/GIF composition.
+Calendar API writes are not visually atomic. Multi-frame upload now pre-creates frames in separate weeks with frame-level checkpoints. Browser navigation, stabilization detection, screenshots, and MP4/GIF composition remain intentionally separate future work.
 
 ## Roadmap
 
@@ -217,13 +223,12 @@ full-grid single frame
     -> generate summary-prefix keys 00..05
     -> compare one full-grid frame with real Calendar
     -> validate shape fidelity
-    -> test 2-3 frames
-    -> identify fillers that can be removed safely
-    -> future hybrid mapping
-    -> multi-frame planner
-    -> upload/retry/resume
+    -> multi-frame planner and frame-level resume
+    -> real 6-frame test
+    -> manual week navigation
     -> Playwright capture
     -> final MP4/GIF
+    -> future performance optimization
 ```
 
 Sparse remains a valid future optimization. A hybrid strategy may eventually retain fillers only where they are structurally required, but it is deliberately outside this baseline.

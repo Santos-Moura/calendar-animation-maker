@@ -1,0 +1,229 @@
+import json
+from pathlib import Path
+
+import pytest
+from PIL import Image
+from typer.testing import CliRunner
+
+import calendar_anim.calendar.multi_frame.commands as multi_commands
+from calendar_anim.calendar.calibration.profile import save_profile
+from calendar_anim.calendar.fake import FakeCalendarGateway
+from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
+from calendar_anim.calendar.multi_frame.models import FrameUploadStatus
+from calendar_anim.cli import app
+from calendar_anim.models.frame import AnimationFrame, Block
+from calendar_anim.renderer.manifest import write_manifest
+from tests.factories import make_manifest, make_ready_calibration_profile
+
+pytestmark = pytest.mark.integration
+runner = CliRunner()
+
+
+def _inputs(tmp_path: Path, frame_count: int = 3) -> tuple[Path, Path]:
+    manifest = make_manifest(Block(x=0, y=0, width=1, color_id="1", color_hex="#33B679"))
+    manifest.render.frame_count = frame_count
+    manifest.frames = [
+        AnimationFrame(
+            index=index,
+            timestamp_seconds=float(index),
+            image=f"frames/frame_{index:03d}.png",
+            blocks=[Block(x=index % 4, y=0, width=1, color_id="1", color_hex="#33B679")],
+        )
+        for index in range(frame_count)
+    ]
+    manifest.statistics.blocks = frame_count
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    for index in range(frame_count):
+        Image.new("RGB", (4, 4), "#808080").save(frames / f"frame_{index:03d}.png")
+    manifest_path = tmp_path / "animation.json"
+    write_manifest(manifest, manifest_path)
+    profile_path = tmp_path / "profile.yaml"
+    save_profile(make_ready_calibration_profile(), profile_path)
+    return manifest_path, profile_path
+
+
+def _plan_command(
+    manifest: Path, profile: Path, output_root: Path, frame_count: int = 3
+) -> list[str]:
+    return [
+        "calendar",
+        "plan-animation",
+        str(manifest),
+        "--profile",
+        str(profile),
+        "--start-date",
+        "2026-10-07",
+        "--run-id",
+        "cli-animation",
+        "--frame-count",
+        str(frame_count),
+        "--mapping-mode",
+        "full-grid",
+        "--output-root",
+        str(output_root),
+    ]
+
+
+def test_plan_animation_is_local_and_writes_global_and_frame_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _inputs(tmp_path)
+    output_root = tmp_path / "runs"
+    monkeypatch.setattr(
+        multi_commands,
+        "_google_gateway",
+        lambda: pytest.fail("planning must not construct an API gateway"),
+    )
+
+    result = runner.invoke(app, _plan_command(manifest, profile, output_root))
+
+    assert result.exit_code == 0, result.output
+    assert "Frames: 3" in result.output
+    assert "Weeks: 3 (2026-10-04 onward)" in result.output
+    assert "Events/frame: 1008, 1008, 1008" in result.output
+    assert "Total events: 3024" in result.output
+    assert "Execution: DRY RUN" in result.output
+    run_dir = output_root / "cli-animation"
+    assert (run_dir / "animation-plan.json").is_file()
+    assert (run_dir / "animation-state.json").is_file()
+    assert (run_dir / "animation-report.txt").is_file()
+    assert (run_dir / "frames/frame-0002/frame-plan.json").is_file()
+    serialized = json.loads((run_dir / "animation-plan.json").read_text(encoding="utf-8"))
+    assert serialized["frames"][1]["week_start"] == "2026-10-11"
+
+
+def test_upload_animation_dry_run_skips_api_and_lists_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    output_root = tmp_path / "runs"
+    assert runner.invoke(app, _plan_command(manifest, profile, output_root, 1)).exit_code == 0
+    monkeypatch.setattr(
+        multi_commands,
+        "_google_gateway",
+        lambda: pytest.fail("upload dry-run must not construct an API gateway"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "upload-animation",
+            "--run-id",
+            "cli-animation",
+            "--output-root",
+            str(output_root),
+            "--resume",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Execution: DRY RUN" in result.output
+    assert "Frame 0: UPLOAD" in result.output
+    assert "No authentication or Calendar API call was made" in result.output
+
+
+def test_upload_execute_requires_confirmation_before_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    output_root = tmp_path / "runs"
+    assert runner.invoke(app, _plan_command(manifest, profile, output_root, 1)).exit_code == 0
+    monkeypatch.setattr(
+        multi_commands,
+        "_google_gateway",
+        lambda: pytest.fail("declined upload must not construct an API gateway"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "upload-animation",
+            "--run-id",
+            "cli-animation",
+            "--output-root",
+            str(output_root),
+            "--execute",
+        ],
+        input="n\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Total planned events: 1008" in result.output
+    assert "Continue?" in result.output
+
+
+def test_upload_execute_uses_fake_gateway_and_persists_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    output_root = tmp_path / "runs"
+    assert runner.invoke(app, _plan_command(manifest, profile, output_root, 1)).exit_code == 0
+    gateway = FakeCalendarGateway()
+    monkeypatch.setattr(multi_commands, "_google_gateway", lambda: gateway)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "upload-animation",
+            "--run-id",
+            "cli-animation",
+            "--output-root",
+            str(output_root),
+            "--execute",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Animation progress: 1/1 completed" in result.output
+    state = AnimationRunStore(output_root).load_state("cli-animation")
+    assert state.frames[0].status is FrameUploadStatus.COMPLETED
+    assert state.frames[0].created_events == 1008
+
+
+def test_cleanup_dry_run_is_local_and_invalid_run_is_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    output_root = tmp_path / "runs"
+    assert runner.invoke(app, _plan_command(manifest, profile, output_root, 1)).exit_code == 0
+    monkeypatch.setattr(
+        multi_commands,
+        "_google_gateway",
+        lambda: pytest.fail("cleanup dry-run must not construct an API gateway"),
+    )
+
+    cleanup = runner.invoke(
+        app,
+        [
+            "calendar",
+            "cleanup-animation",
+            "--run-id",
+            "cli-animation",
+            "--frame",
+            "0",
+            "--output-root",
+            str(output_root),
+        ],
+    )
+    invalid = runner.invoke(
+        app,
+        [
+            "calendar",
+            "upload-animation",
+            "--run-id",
+            "../bad",
+            "--output-root",
+            str(output_root),
+        ],
+    )
+
+    assert cleanup.exit_code == 0, cleanup.output
+    assert "No authentication, Calendar lookup, or deletion was performed" in cleanup.output
+    assert invalid.exit_code == 1
+    assert "Invalid run-id" in invalid.output
