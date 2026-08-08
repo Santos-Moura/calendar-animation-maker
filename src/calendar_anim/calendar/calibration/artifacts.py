@@ -35,6 +35,8 @@ def build_report(plan: CalibrationPlan, executed: bool) -> str:
         return _build_position_report(plan, executed)
     if plan.pattern == "horizontal-bars":
         return _build_horizontal_bars_report(plan, executed)
+    if plan.pattern == "subcolumn-order":
+        return _build_subcolumn_order_report(plan, executed)
 
     lines = [
         "Calendar Animation Calibration",
@@ -287,6 +289,77 @@ def _build_horizontal_bars_report(plan: CalibrationPlan, executed: bool) -> str:
     return "\n".join(lines)
 
 
+def _build_subcolumn_order_report(plan: CalibrationPlan, executed: bool) -> str:
+    groups: dict[str, list[CalendarEventDraft]] = defaultdict(list)
+    for event in plan.events:
+        groups[event.private_metadata["group"]].append(event)
+    lines = [
+        "Subcolumn Order Calibration",
+        "===========================",
+        "",
+        f"Run ID: {plan.run_id}",
+        f"Calendar: {plan.calendar_name}",
+        f"Start date: {plan.start_date.isoformat()}",
+        f"Timezone: {plan.timezone}",
+        f"Events: {plan.event_count}",
+        f"Execution: {'REAL' if executed else 'DRY RUN'}",
+        "",
+        "Creation-order groups",
+        "---------------------",
+    ]
+    for group_name, events in groups.items():
+        lines.extend(
+            [
+                group_name,
+                f"  Variant: {events[0].private_metadata['variant']}",
+                f"  Time: {events[0].start:%H:%M}-{events[0].end:%H:%M}",
+                "  Creation order: " + " ".join(event.summary for event in events),
+                "  Slot indexes: "
+                + " ".join(event.private_metadata["subcolumn_index"] for event in events),
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "This is the expected logical creation order, not a guarantee of Google Calendar "
+            "visual ordering.",
+            "",
+            "Observed visual order",
+            "---------------------",
+            "",
+            "Forward group 1:",
+            "Visual order:",
+            "",
+            "Forward group 2:",
+            "Visual order:",
+            "",
+            "Reverse group:",
+            "Visual order:",
+            "",
+            "Shuffled group:",
+            "Visual order:",
+            "",
+            "After browser refresh:",
+            "Visual order stable: yes/no",
+            "",
+            "After navigating away and back:",
+            "Visual order stable: yes/no",
+            "",
+            "After reopening Calendar:",
+            "Visual order stable: yes/no",
+            "",
+            "Does creation order influence visual order:",
+            "yes/no/uncertain",
+            "",
+            "Recommended ordering strategy:",
+            "",
+            "Notes:",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def write_report(plan: CalibrationPlan, output_dir: Path, executed: bool = False) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "calibration-report.txt"
@@ -311,6 +384,7 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
         "color-palette": "Color Palette Calibration",
         "position-grid": "Position Grid Calibration",
         "horizontal-bars": "Horizontal Bars Calibration",
+        "subcolumn-order": "Subcolumn Order Calibration",
     }
     if plan.pattern in preview_titles:
         draw.text((15, 12), preview_titles[plan.pattern], fill="black", font=font)
@@ -350,7 +424,7 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
         y2 = top + ((end_minutes / 60) - start_hour) * hour_height
         group_name = event.private_metadata.get("group", "ungrouped")
         if (
-            plan.pattern in {"overlap-columns", "horizontal-bars"}
+            plan.pattern in {"overlap-columns", "horizontal-bars", "subcolumn-order"}
             and group_name not in labeled_groups
         ):
             draw.text((8, round(y1) + 2), group_name, fill="#424242", font=font)

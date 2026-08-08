@@ -42,6 +42,16 @@ EVENT_COLOR_NAMES: Final[dict[str, str]] = {
     "11": "tomato",
 }
 
+SUBCOLUMN_ORDER_COLORS: Final[list[tuple[str, str]]] = [
+    EVENT_COLORS[index] for index in (0, 1, 2, 4, 6, 10)
+]
+SUBCOLUMN_ORDER_VARIANTS: Final[list[tuple[str, list[int]]]] = [
+    ("forward-1", [0, 1, 2, 3, 4, 5]),
+    ("forward-2", [0, 1, 2, 3, 4, 5]),
+    ("reverse", [5, 4, 3, 2, 1, 0]),
+    ("shuffled", [2, 5, 0, 4, 1, 3]),
+]
+
 PATTERNS: Final[dict[CalibrationPattern, PatternDescription]] = {
     "duration-scale": PatternDescription(
         name="duration-scale",
@@ -67,6 +77,11 @@ PATTERNS: Final[dict[CalibrationPattern, PatternDescription]] = {
         name="horizontal-bars",
         description="Test adjacent horizontal logical blocks (experimental)",
         approximate_events=21,
+    ),
+    "subcolumn-order": PatternDescription(
+        name="subcolumn-order",
+        description="Test stable left-to-right ordering of six simultaneous events",
+        approximate_events=24,
     ),
     "combined": PatternDescription(
         name="combined",
@@ -237,6 +252,31 @@ def _horizontal_bars(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
     return events
 
 
+def _subcolumn_order(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
+    events: list[CalendarEventDraft] = []
+    for row_index, (variant, slot_order) in enumerate(SUBCOLUMN_ORDER_VARIANTS):
+        for creation_sequence, slot_index in enumerate(slot_order):
+            events.append(
+                _event(
+                    start,
+                    9 + row_index,
+                    0,
+                    45,
+                    zone,
+                    f"S{slot_index}",
+                    f"slot-order-{variant}",
+                    SUBCOLUMN_ORDER_COLORS[slot_index],
+                    {
+                        "row_index": str(row_index),
+                        "subcolumn_index": str(slot_index),
+                        "creation_sequence": str(creation_sequence),
+                        "variant": variant,
+                    },
+                )
+            )
+    return events
+
+
 def _combined(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
     events = [
         _event(
@@ -308,6 +348,7 @@ def build_calibration_plan(
         "color-palette": _color_palette,
         "position-grid": _position_grid,
         "horizontal-bars": _horizontal_bars,
+        "subcolumn-order": _subcolumn_order,
         "combined": _combined,
     }
     events = builders[pattern](start_date, zone)

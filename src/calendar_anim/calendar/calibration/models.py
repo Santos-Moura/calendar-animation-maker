@@ -11,6 +11,7 @@ CalibrationPattern = Literal[
     "color-palette",
     "position-grid",
     "horizontal-bars",
+    "subcolumn-order",
     "combined",
 ]
 
