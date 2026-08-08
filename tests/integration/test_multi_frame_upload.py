@@ -58,6 +58,13 @@ class RaisingGateway(FakeCalendarGateway):
         return super().create_events(calendar_id, events)
 
 
+class InterruptingGateway(FakeCalendarGateway):
+    def create_events(
+        self, calendar_id: str, events: Sequence[CalendarEventDraft]
+    ) -> CalendarWriteResult:
+        raise KeyboardInterrupt
+
+
 def _initialized_run(tmp_path: Path, frame_count: int = 3):
     manifest = make_manifest(Block(x=0, y=0, width=1, color_id="1", color_hex="#33B679"))
     manifest.render.frame_count = frame_count
@@ -175,3 +182,46 @@ def test_pending_state_with_remote_events_is_an_inconsistency(tmp_path: Path) ->
         service.upload(plan, state)
 
     assert store.load_state(plan.run_id).frames[0].status is FrameUploadStatus.PARTIAL
+
+
+def test_failed_frame_with_no_remote_events_can_be_retried(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    gateway = RaisingGateway(fail_after_calls=0)
+    service = _service(gateway, store, tmp_path, chunk_size=100)
+    with pytest.raises(RuntimeError, match="connection lost"):
+        service.upload(plan, state)
+    assert store.load_state(plan.run_id).frames[0].status is FrameUploadStatus.FAILED
+
+    gateway.fail_after_calls = 100
+    resumed = service.upload(plan, store.load_state(plan.run_id))
+
+    assert resumed.frames[0].status is FrameUploadStatus.COMPLETED
+    assert resumed.frames[0].created_events == 1008
+
+
+def test_keyboard_interrupt_never_marks_frame_completed(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    gateway = InterruptingGateway()
+    service = _service(gateway, store, tmp_path)
+
+    with pytest.raises(KeyboardInterrupt):
+        service.upload(plan, state)
+
+    saved = store.load_state(plan.run_id)
+    assert saved.frames[0].status is FrameUploadStatus.PARTIAL
+    assert saved.frames[0].created_events == 0
+    assert "interrupted" in saved.frames[0].errors[0].lower()
+
+
+def test_tampered_frame_week_is_rejected_before_event_creation(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    frame_path = store.frame_directory(plan, 0) / "frame-plan.json"
+    serialized = frame_path.read_text(encoding="utf-8").replace("2026-10-04", "2026-10-11")
+    frame_path.write_text(serialized, encoding="utf-8")
+    gateway = FakeCalendarGateway()
+    service = _service(gateway, store, tmp_path)
+
+    with pytest.raises(CalendarAnimError, match="Frame week does not match"):
+        service.upload(plan, state)
+
+    assert gateway.create_event_calls == 0
