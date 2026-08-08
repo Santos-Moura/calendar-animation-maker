@@ -108,6 +108,19 @@ def _similar_color_groups(value: str | None) -> list[list[str]] | None:
     return parsed
 
 
+def _slot_order(value: str | None, label: str) -> list[int] | None:
+    values = _csv_values(value, label)
+    if values is None:
+        return None
+    try:
+        order = [int(item) for item in values]
+    except ValueError as error:
+        raise CalendarAnimError(f"{label} must contain integer slot indexes") from error
+    if sorted(order) != list(range(6)):
+        raise CalendarAnimError(f"{label} must contain each slot index from 0 to 5 exactly once")
+    return order
+
+
 def calibration_patterns_command() -> None:
     """List deterministic visual calibration experiments."""
     for pattern in PATTERNS.values():
@@ -412,6 +425,41 @@ def record_calibration_command(
     recommended_horizontal_strategy: Annotated[
         str | None, typer.Option("--recommended-horizontal-strategy")
     ] = None,
+    visual_order_forward: Annotated[
+        str | None,
+        typer.Option("--visual-order-forward", help="Observed S0..S5 order, comma-separated."),
+    ] = None,
+    visual_order_reverse: Annotated[
+        str | None,
+        typer.Option("--visual-order-reverse", help="Observed S0..S5 order, comma-separated."),
+    ] = None,
+    visual_order_shuffled: Annotated[
+        str | None,
+        typer.Option("--visual-order-shuffled", help="Observed S0..S5 order, comma-separated."),
+    ] = None,
+    stable_after_refresh: Annotated[
+        bool | None,
+        typer.Option("--stable-after-refresh/--not-stable-after-refresh"),
+    ] = None,
+    stable_after_navigation: Annotated[
+        bool | None,
+        typer.Option("--stable-after-navigation/--not-stable-after-navigation"),
+    ] = None,
+    stable_after_reopen: Annotated[
+        bool | None,
+        typer.Option("--stable-after-reopen/--not-stable-after-reopen"),
+    ] = None,
+    creation_order_controls_layout: Annotated[
+        bool | None,
+        typer.Option("--creation-order-controls-layout/--creation-order-does-not-control-layout"),
+    ] = None,
+    recommended_slot_order_strategy: Annotated[
+        str | None,
+        typer.Option(
+            "--recommended-slot-order-strategy",
+            help="One of: creation-order, stable-alternative, unusable.",
+        ),
+    ] = None,
     notes: Annotated[str, typer.Option("--notes")] = "",
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     profile_output: Annotated[Path | None, typer.Option("--profile-output")] = None,
@@ -464,6 +512,21 @@ def record_calibration_command(
             recommended_horizontal_strategy = recommended_horizontal_strategy.strip()
             if not recommended_horizontal_strategy:
                 raise CalendarAnimError("--recommended-horizontal-strategy cannot be empty")
+        parsed_forward_order = _slot_order(visual_order_forward, "--visual-order-forward")
+        parsed_reverse_order = _slot_order(visual_order_reverse, "--visual-order-reverse")
+        parsed_shuffled_order = _slot_order(visual_order_shuffled, "--visual-order-shuffled")
+        if recommended_slot_order_strategy is not None:
+            recommended_slot_order_strategy = recommended_slot_order_strategy.strip().lower()
+            supported_slot_strategies = {
+                "creation-order",
+                "stable-alternative",
+                "unusable",
+            }
+            if recommended_slot_order_strategy not in supported_slot_strategies:
+                raise CalendarAnimError(
+                    "--recommended-slot-order-strategy must be one of: "
+                    + ", ".join(sorted(supported_slot_strategies))
+                )
         observations = CalibrationObservations(
             run_id=run_id,
             pattern=pattern,
@@ -506,6 +569,14 @@ def record_calibration_command(
                 "maximum_useful_bar_width": maximum_useful_bar_width,
                 "partial_bar_positioning_predictable": (partial_bar_positioning_predictable),
                 "recommended_horizontal_strategy": recommended_horizontal_strategy,
+                "visual_order_forward": parsed_forward_order,
+                "visual_order_reverse": parsed_reverse_order,
+                "visual_order_shuffled": parsed_shuffled_order,
+                "stable_after_refresh": stable_after_refresh,
+                "stable_after_navigation": stable_after_navigation,
+                "stable_after_reopen": stable_after_reopen,
+                "creation_order_controls_layout": creation_order_controls_layout,
+                "recommended_slot_order_strategy": recommended_slot_order_strategy,
                 "notes": notes,
             },
         )

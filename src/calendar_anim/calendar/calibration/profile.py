@@ -104,12 +104,29 @@ def apply_observations(
         if value is not None:
             setattr(profile.horizontal_bar_mapping, field, value)
 
+    slot_order_fields = {
+        "visual_order_forward": "forward_visual_order",
+        "visual_order_reverse": "reverse_visual_order",
+        "visual_order_shuffled": "shuffled_visual_order",
+        "stable_after_refresh": "stable_after_refresh",
+        "stable_after_navigation": "stable_after_navigation",
+        "stable_after_reopen": "stable_after_reopen",
+        "creation_order_controls_layout": "creation_order_controls_layout",
+        "recommended_slot_order_strategy": "recommended_slot_order_strategy",
+    }
+    for observation_field, profile_field in slot_order_fields.items():
+        value = getattr(values, observation_field)
+        if value is not None:
+            setattr(profile.subcolumn_order_mapping, profile_field, value)
+
     if recorded.pattern == "color-palette" and values.notes:
         profile.color_mapping.notes = values.notes
     elif recorded.pattern == "position-grid" and values.notes:
         profile.position_mapping.notes = values.notes
     elif recorded.pattern == "horizontal-bars" and values.notes:
         profile.horizontal_bar_mapping.notes = values.notes
+    elif recorded.pattern == "subcolumn-order" and values.notes:
+        profile.subcolumn_order_mapping.notes = values.notes
 
     # Re-validate so the derived row/column counts are refreshed after mutation.
     return CalibrationProfile.model_validate(profile.model_dump())
@@ -122,6 +139,7 @@ def profile_summary(profile: CalibrationProfile) -> str:
     colors = profile.color_mapping
     position = profile.position_mapping
     bars = profile.horizontal_bar_mapping
+    slot_order = profile.subcolumn_order_mapping
 
     viewport = "pending"
     if ui.viewport_width is not None and ui.viewport_height is not None:
@@ -191,6 +209,19 @@ def profile_summary(profile: CalibrationProfile) -> str:
         f"  Maximum useful bar width: {_value(bars.maximum_useful_bar_width)}",
         (f"  Partial positioning predictable: {_yes_no(bars.partial_bar_positioning_predictable)}"),
         "",
+        "Subcolumn order mapping",
+        f"  Status: {slot_order.status}",
+        f"  Forward creation order: {_slot_order(slot_order.forward_creation_order)}",
+        f"  Forward visual order: {_slot_order(slot_order.forward_visual_order)}",
+        f"  Reverse creation order: {_slot_order(slot_order.reverse_creation_order)}",
+        f"  Reverse visual order: {_slot_order(slot_order.reverse_visual_order)}",
+        f"  Shuffled visual order: {_slot_order(slot_order.shuffled_visual_order)}",
+        f"  Stable after refresh: {_yes_no(slot_order.stable_after_refresh)}",
+        f"  Stable after navigation: {_yes_no(slot_order.stable_after_navigation)}",
+        f"  Stable after reopen: {_yes_no(slot_order.stable_after_reopen)}",
+        (f"  Creation order controls layout: {_yes_no(slot_order.creation_order_controls_layout)}"),
+        (f"  Recommended slot strategy: {_value(slot_order.recommended_slot_order_strategy)}"),
+        "",
         (
             "Candidate logical grid: "
             f"{_candidate_grid(profile.candidate_grid.width, profile.candidate_grid.height)}"
@@ -247,6 +278,12 @@ def _yes_no(value: bool | None) -> str:
     if value is None:
         return "pending calibration"
     return "yes" if value else "no"
+
+
+def _slot_order(value: list[int] | None) -> str:
+    if value is None:
+        return "pending calibration"
+    return ",".join(str(slot) for slot in value)
 
 
 def _color_status(profile: CalibrationProfile) -> str:

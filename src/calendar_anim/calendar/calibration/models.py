@@ -14,6 +14,7 @@ CalibrationPattern = Literal[
     "subcolumn-order",
     "combined",
 ]
+SlotOrderStrategy = Literal["creation-order", "stable-alternative", "unusable"]
 
 
 class CalibrationPlan(BaseModel):
@@ -96,6 +97,14 @@ class CalibrationObservationValues(BaseModel):
     maximum_useful_bar_width: int | None = Field(default=None, ge=1)
     partial_bar_positioning_predictable: bool | None = None
     recommended_horizontal_strategy: str | None = None
+    visual_order_forward: list[int] | None = None
+    visual_order_reverse: list[int] | None = None
+    visual_order_shuffled: list[int] | None = None
+    stable_after_refresh: bool | None = None
+    stable_after_navigation: bool | None = None
+    stable_after_reopen: bool | None = None
+    creation_order_controls_layout: bool | None = None
+    recommended_slot_order_strategy: SlotOrderStrategy | None = None
     notes: str = ""
 
     # Compatibility with observation YAML written before the two vertical
@@ -112,6 +121,14 @@ class CalibrationObservationValues(BaseModel):
             and self.usable_overlap_columns > self.maximum_tested_overlap_columns
         ):
             raise ValueError("usable overlap columns cannot exceed the maximum tested")
+        for field in (
+            "visual_order_forward",
+            "visual_order_reverse",
+            "visual_order_shuffled",
+        ):
+            order = getattr(self, field)
+            if order is not None and sorted(order) != list(range(6)):
+                raise ValueError(f"{field} must contain each slot index from 0 to 5 exactly once")
         return self
 
 
@@ -200,6 +217,47 @@ class HorizontalBarMappingProfile(BaseModel):
     notes: str = ""
 
 
+class SubcolumnOrderMappingProfile(BaseModel):
+    status: Literal["pending", "recorded"] = "pending"
+    forward_creation_order: list[int] = Field(default_factory=lambda: list(range(6)))
+    forward_visual_order: list[int] | None = None
+    reverse_creation_order: list[int] = Field(default_factory=lambda: list(reversed(range(6))))
+    reverse_visual_order: list[int] | None = None
+    shuffled_creation_order: list[int] = Field(default_factory=lambda: [2, 5, 0, 4, 1, 3])
+    shuffled_visual_order: list[int] | None = None
+    stable_after_refresh: bool | None = None
+    stable_after_navigation: bool | None = None
+    stable_after_reopen: bool | None = None
+    creation_order_controls_layout: bool | None = None
+    recommended_slot_order_strategy: SlotOrderStrategy | None = None
+    notes: str = ""
+
+    @model_validator(mode="after")
+    def validate_orders_and_status(self) -> "SubcolumnOrderMappingProfile":
+        for field in (
+            "forward_creation_order",
+            "forward_visual_order",
+            "reverse_creation_order",
+            "reverse_visual_order",
+            "shuffled_creation_order",
+            "shuffled_visual_order",
+        ):
+            order = getattr(self, field)
+            if order is not None and sorted(order) != list(range(6)):
+                raise ValueError(f"{field} must contain each slot index from 0 to 5 exactly once")
+        required = (
+            self.forward_visual_order,
+            self.reverse_visual_order,
+            self.stable_after_refresh,
+            self.stable_after_navigation,
+            self.stable_after_reopen,
+            self.creation_order_controls_layout,
+            self.recommended_slot_order_strategy,
+        )
+        self.status = "recorded" if all(value is not None for value in required) else "pending"
+        return self
+
+
 class CandidateGridProfile(BaseModel):
     width: int | None = Field(default=None, ge=1)
     height: int | None = Field(default=None, ge=1)
@@ -208,7 +266,7 @@ class CandidateGridProfile(BaseModel):
 class CalibrationProfile(BaseModel):
     """Consolidated, local mapping from Calendar UI space to logical pixels."""
 
-    schema_version: str = "1.1"
+    schema_version: str = "1.2"
     calendar_ui: CalendarUIProfile = Field(default_factory=CalendarUIProfile)
     vertical_mapping: VerticalMappingProfile = Field(default_factory=VerticalMappingProfile)
     horizontal_mapping: HorizontalMappingProfile = Field(default_factory=HorizontalMappingProfile)
@@ -217,11 +275,14 @@ class CalibrationProfile(BaseModel):
     horizontal_bar_mapping: HorizontalBarMappingProfile = Field(
         default_factory=HorizontalBarMappingProfile
     )
+    subcolumn_order_mapping: SubcolumnOrderMappingProfile = Field(
+        default_factory=SubcolumnOrderMappingProfile
+    )
     candidate_grid: CandidateGridProfile = Field(default_factory=CandidateGridProfile)
 
     @model_validator(mode="after")
     def derive_logical_capacity(self) -> "CalibrationProfile":
-        self.schema_version = "1.1"
+        self.schema_version = "1.2"
         row_minutes = self.vertical_mapping.minimum_distinguishable_height_minutes
         if row_minutes is None:
             self.vertical_mapping.logical_rows = None
