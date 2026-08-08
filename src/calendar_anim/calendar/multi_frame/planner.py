@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from hashlib import sha256
 
 from calendar_anim.calendar.calibration.models import CalibrationProfile
 from calendar_anim.calendar.frame_mapping.mapper import (
@@ -17,7 +18,11 @@ from calendar_anim.models.animation import AnimationManifest
 
 def frame_run_id(run_id: str, frame_index: int) -> str:
     suffix = f"-frame-{frame_index:04d}"
-    return f"{run_id[: 64 - len(suffix)]}{suffix}"
+    if len(run_id) + len(suffix) <= 64:
+        return f"{run_id}{suffix}"
+    digest = sha256(run_id.encode("utf-8")).hexdigest()[:8]
+    collision_safe_suffix = f"-{digest}{suffix}"
+    return f"{run_id[: 64 - len(collision_safe_suffix)]}{collision_safe_suffix}"
 
 
 def build_multi_frame_plan(

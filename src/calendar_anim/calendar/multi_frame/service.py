@@ -14,6 +14,7 @@ from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
 from calendar_anim.calendar.multi_frame.models import (
     AnimationUploadState,
     FrameUploadExecutionResult,
+    FrameUploadPlan,
     FrameUploadState,
     FrameUploadStatus,
     MultiFramePlan,
@@ -80,7 +81,7 @@ class MultiFrameUploadService:
             if frame_state.status is FrameUploadStatus.COMPLETED:
                 continue
             frame_plan = self.store.load_frame_plan(plan, frame_summary.frame_index)
-            self._validate_frame_plan(plan, frame_summary.planned_events, frame_plan)
+            self._validate_frame_plan(plan, frame_summary, frame_plan)
             if frame_state.status is FrameUploadStatus.PARTIAL:
                 self._recover_partial(plan, state, frame_plan, frame_state, calendar.id)
             existing = self.gateway.find_events_by_private_metadata(
@@ -249,12 +250,22 @@ class MultiFrameUploadService:
     @staticmethod
     def _validate_frame_plan(
         animation_plan: MultiFramePlan,
-        planned_events: int,
+        frame_summary: FrameUploadPlan,
         frame_plan: SingleFrameCalendarPlan,
     ) -> None:
         if frame_plan.animation_id != animation_plan.animation_id:
             raise CalendarAnimError("Frame plan animation ID does not match animation plan")
-        if frame_plan.event_count != planned_events:
+        if frame_plan.frame_index != frame_summary.frame_index:
+            raise CalendarAnimError("Frame index does not match animation plan")
+        if frame_plan.run_id != frame_summary.frame_run_id:
+            raise CalendarAnimError("Frame run ID does not match animation plan")
+        if frame_plan.week_start_date != frame_summary.week_start:
+            raise CalendarAnimError("Frame week does not match animation plan")
+        if frame_plan.mapping_mode is not animation_plan.mapping_mode:
+            raise CalendarAnimError("Frame mapping mode does not match animation plan")
+        if frame_plan.subcolumn_order_strategy is not animation_plan.subcolumn_order_strategy:
+            raise CalendarAnimError("Frame ordering strategy does not match animation plan")
+        if frame_plan.event_count != frame_summary.planned_events:
             raise CalendarAnimError("Frame plan event count does not match animation plan")
         if frame_plan.event_count > animation_plan.max_events_per_frame:
             raise CalendarAnimError(

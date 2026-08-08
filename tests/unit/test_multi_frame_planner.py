@@ -72,8 +72,7 @@ def test_plans_six_full_grid_frames_in_consecutive_weeks() -> None:
     assert plan.total_events == 6048
     assert all(frame.event_count == 1008 for frame in frames)
     assert all(
-        frame.subcolumn_order_keys == ["00", "01", "02", "03", "04", "05"]
-        for frame in frames
+        frame.subcolumn_order_keys == ["00", "01", "02", "03", "04", "05"] for frame in frames
     )
 
 
@@ -101,9 +100,7 @@ def test_selected_frame_start_maps_to_first_requested_week() -> None:
         (2, 2, "exceeds manifest"),
     ],
 )
-def test_rejects_invalid_frame_ranges(
-    frame_start: int, frame_count: int, message: str
-) -> None:
+def test_rejects_invalid_frame_ranges(frame_start: int, frame_count: int, message: str) -> None:
     with pytest.raises(CalendarAnimError, match=message):
         build_multi_frame_plan(
             _manifest_with_frames(3),
@@ -121,3 +118,4 @@ def test_frame_run_id_stays_inside_calendar_identifier_limit() -> None:
 
     assert value.endswith("-frame-0123")
     assert len(value) == 64
+    assert value != frame_run_id("a" * 63 + "b", 123)

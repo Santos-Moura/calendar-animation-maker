@@ -20,7 +20,7 @@ class FrameUploadPlan(BaseModel):
     week_start: date
     frame_run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     planned_events: int = Field(ge=0)
-    artifact_directory: str
+    artifact_directory: str = Field(pattern=r"^frames/frame-[0-9]{4,}$")
 
 
 class MultiFramePlan(BaseModel):
