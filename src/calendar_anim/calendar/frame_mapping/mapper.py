@@ -410,6 +410,11 @@ def build_single_frame_plan(
         ordering_strategy,
     )
 
+    profile_ready = profile.mapper_ready
+    strategy_matches_profile = profile.subcolumn_order_mapping.strategy_ready(ordering_strategy)
+    if mapping_mode is FrameMappingMode.FULL_GRID:
+        profile_ready = profile_ready and strategy_matches_profile
+
     warnings: list[str] = []
     normalized_source_background = (
         manifest.render.background.upper() if manifest.render.background is not None else None
@@ -430,6 +435,14 @@ def build_single_frame_plan(
             "Full-grid creates every calibrated cell in deterministic day/row/subcolumn "
             "order, but final visual ordering still depends on Google Calendar."
         )
+        if not strategy_matches_profile:
+            recommended = (
+                profile.subcolumn_order_mapping.recommended_slot_order_strategy or "none"
+            )
+            warnings.append(
+                f"Full-grid uses {ordering_strategy.value}, but the calibration profile does "
+                f"not confirm that strategy (recommended: {recommended})."
+            )
     else:
         warnings.append(
             "Sparse mapping cannot guarantee absolute subcolumn positions because Calendar "
@@ -437,8 +450,11 @@ def build_single_frame_plan(
         )
         if calendar_background_color_id is not None:
             warnings.append("Calendar background color is ignored in sparse mode.")
-    if not profile.mapper_ready:
-        missing = ", ".join(profile.missing_mapper_calibrations)
+    if not profile_ready:
+        blockers = list(profile.missing_mapper_calibrations)
+        if mapping_mode is FrameMappingMode.FULL_GRID and not strategy_matches_profile:
+            blockers.append(f"confirmed {ordering_strategy.value} mapper strategy")
+        missing = ", ".join(blockers)
         warnings.append(
             "Calibration profile is NOT READY; dry-run is allowed but real upload is blocked. "
             f"Missing: {missing}."
@@ -472,7 +488,7 @@ def build_single_frame_plan(
         background_color_id=(
             background_color.id if mapping_mode is FrameMappingMode.FULL_GRID else None
         ),
-        profile_ready=profile.mapper_ready,
+        profile_ready=profile_ready,
         horizontal_strategy=horizontal_strategy,
         subcolumn_order_strategy=ordering_strategy,
         subcolumn_order_keys=summary_order_keys(

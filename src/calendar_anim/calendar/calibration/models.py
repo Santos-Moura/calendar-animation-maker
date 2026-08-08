@@ -4,6 +4,10 @@ from typing import Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from calendar_anim.calendar.models import CalendarEventDraft
+from calendar_anim.calendar.subcolumn_ordering import (
+    SUPPORTED_SUBCOLUMN_ORDER_STRATEGIES,
+    SubcolumnOrderStrategy,
+)
 
 CalibrationPattern = Literal[
     "duration-scale",
@@ -14,7 +18,14 @@ CalibrationPattern = Literal[
     "subcolumn-order",
     "combined",
 ]
-SlotOrderStrategy = Literal["creation-order", "stable-alternative", "unusable"]
+SlotOrderStrategy = Literal[
+    "creation-order",
+    "summary-prefix",
+    "stable-alternative",
+    "unusable",
+    "none",
+]
+OrderingControllingProperty = Literal["summary", "color_id", "unknown"]
 
 
 class CalibrationPlan(BaseModel):
@@ -105,6 +116,9 @@ class CalibrationObservationValues(BaseModel):
     stable_after_reopen: bool | None = None
     creation_order_controls_layout: bool | None = None
     recommended_slot_order_strategy: SlotOrderStrategy | None = None
+    ordering_factor_tested: bool | None = None
+    ordering_controlling_property: OrderingControllingProperty | None = None
+    ordering_factor_stable: bool | None = None
     notes: str = ""
 
     # Compatibility with observation YAML written before the two vertical
@@ -230,6 +244,9 @@ class SubcolumnOrderMappingProfile(BaseModel):
     stable_after_reopen: bool | None = None
     creation_order_controls_layout: bool | None = None
     recommended_slot_order_strategy: SlotOrderStrategy | None = None
+    factor_tested: bool = False
+    controlling_property: OrderingControllingProperty | None = None
+    factor_stable: bool | None = None
     notes: str = ""
 
     @model_validator(mode="after")
@@ -245,7 +262,7 @@ class SubcolumnOrderMappingProfile(BaseModel):
             order = getattr(self, field)
             if order is not None and sorted(order) != list(range(6)):
                 raise ValueError(f"{field} must contain each slot index from 0 to 5 exactly once")
-        required = (
+        legacy_required = (
             self.forward_visual_order,
             self.reverse_visual_order,
             self.stable_after_refresh,
@@ -254,8 +271,55 @@ class SubcolumnOrderMappingProfile(BaseModel):
             self.creation_order_controls_layout,
             self.recommended_slot_order_strategy,
         )
-        self.status = "recorded" if all(value is not None for value in required) else "pending"
+        factor_required = (
+            self.controlling_property,
+            self.factor_stable,
+            self.recommended_slot_order_strategy,
+        )
+        self.status = (
+            "recorded"
+            if all(value is not None for value in legacy_required)
+            or (self.factor_tested and all(value is not None for value in factor_required))
+            else "pending"
+        )
         return self
+
+    @property
+    def recommended_strategy_supported(self) -> bool:
+        if self.recommended_slot_order_strategy is None:
+            return False
+        return any(
+            strategy.value == self.recommended_slot_order_strategy
+            for strategy in SUPPORTED_SUBCOLUMN_ORDER_STRATEGIES
+        )
+
+    def strategy_ready(self, strategy: SubcolumnOrderStrategy) -> bool:
+        if self.recommended_slot_order_strategy != strategy.value:
+            return False
+        if strategy is SubcolumnOrderStrategy.CREATION_ORDER:
+            return (
+                self.status == "recorded"
+                and self.stable_after_refresh is True
+                and self.stable_after_navigation is True
+                and self.stable_after_reopen is True
+                and self.creation_order_controls_layout is True
+            )
+        if strategy is SubcolumnOrderStrategy.SUMMARY_PREFIX:
+            return (
+                self.status == "recorded"
+                and self.factor_tested
+                and self.controlling_property == "summary"
+                and self.factor_stable is True
+            )
+        return False
+
+    @property
+    def recommended_strategy_ready(self) -> bool:
+        value = self.recommended_slot_order_strategy
+        if value is None or not self.recommended_strategy_supported:
+            return False
+        strategy = SubcolumnOrderStrategy(value)
+        return self.strategy_ready(strategy)
 
 
 class CandidateGridProfile(BaseModel):
@@ -348,15 +412,7 @@ class CalibrationProfile(BaseModel):
         if not bars_ready:
             missing.append("horizontal-bars calibration")
         slot_order = self.subcolumn_order_mapping
-        slot_order_ready = (
-            slot_order.status == "recorded"
-            and slot_order.stable_after_refresh is True
-            and slot_order.stable_after_navigation is True
-            and slot_order.stable_after_reopen is True
-            and slot_order.creation_order_controls_layout is True
-            and slot_order.recommended_slot_order_strategy == "creation-order"
-        )
-        if not slot_order_ready:
+        if not slot_order.recommended_strategy_ready:
             missing.append("subcolumn-order calibration")
         return missing
 

@@ -14,6 +14,7 @@ from calendar_anim.calendar.calibration.profile import (
     profile_summary,
     save_profile,
 )
+from tests.factories import make_ready_calibration_profile
 
 pytestmark = pytest.mark.unit
 
@@ -279,6 +280,42 @@ def test_recorded_but_unstable_subcolumn_order_keeps_mapper_blocked() -> None:
     )
 
     assert profile.subcolumn_order_mapping.status == "recorded"
+    assert "subcolumn-order calibration" in profile.missing_mapper_calibrations
+
+
+def test_stable_summary_ordering_and_mapper_capability_make_profile_ready() -> None:
+    profile = make_ready_calibration_profile()
+
+    assert profile.subcolumn_order_mapping.controlling_property == "summary"
+    assert profile.subcolumn_order_mapping.recommended_strategy_supported is True
+    assert profile.subcolumn_order_mapping.recommended_strategy_ready is True
+    assert profile.mapper_ready is True
+
+
+def test_summary_strategy_string_without_evidence_does_not_make_profile_ready() -> None:
+    data = make_ready_calibration_profile().model_dump()
+    data["subcolumn_order_mapping"]["factor_tested"] = False
+    data["subcolumn_order_mapping"]["controlling_property"] = None
+    data["subcolumn_order_mapping"]["factor_stable"] = None
+    profile = CalibrationProfile.model_validate(data)
+
+    assert profile.subcolumn_order_mapping.status == "recorded"
+    assert profile.mapper_ready is False
+
+
+@pytest.mark.parametrize(
+    ("controlling_property", "strategy"),
+    [("unknown", "summary-prefix"), ("summary", "stable-alternative")],
+)
+def test_unknown_or_unsupported_summary_ordering_keeps_profile_blocked(
+    controlling_property: str, strategy: str
+) -> None:
+    data = make_ready_calibration_profile().model_dump()
+    data["subcolumn_order_mapping"]["controlling_property"] = controlling_property
+    data["subcolumn_order_mapping"]["recommended_slot_order_strategy"] = strategy
+    profile = CalibrationProfile.model_validate(data)
+
+    assert profile.mapper_ready is False
     assert "subcolumn-order calibration" in profile.missing_mapper_calibrations
 
 

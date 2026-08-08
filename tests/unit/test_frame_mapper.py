@@ -395,6 +395,8 @@ def test_explicit_none_strategy_preserves_blank_full_grid_summaries() -> None:
     assert plan.subcolumn_order_strategy is SubcolumnOrderStrategy.NONE
     assert plan.subcolumn_order_keys == []
     assert {event.summary for event in plan.events} == {" "}
+    assert plan.profile_ready is False
+    assert any("does not confirm that strategy" in warning for warning in plan.warnings)
 
 
 def test_background_color_is_not_remapped_by_foreground_contrast() -> None:

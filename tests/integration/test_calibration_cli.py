@@ -519,3 +519,40 @@ def test_record_subcolumn_order_rejects_invalid_or_incomplete_permutations(
     assert result.exit_code == 1
     assert "must contain each slot index from 0 to 5 exactly once" in result.output
     assert not (tmp_path / "invalid.yaml").exists()
+
+
+def test_cli_records_summary_ordering_evidence_without_experimental_pattern(
+    tmp_path: Path,
+) -> None:
+    observations = tmp_path / "summary-ordering.yaml"
+    profile = tmp_path / "profile.yaml"
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "summary-ordering-evidence",
+            "--pattern",
+            "subcolumn-order",
+            "--ordering-factor-tested",
+            "--ordering-controlling-property",
+            "summary",
+            "--ordering-factor-stable",
+            "--recommended-slot-order-strategy",
+            "summary-prefix",
+            "--output",
+            str(observations),
+            "--profile-output",
+            str(profile),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    recorded = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    mapping = recorded["subcolumn_order_mapping"]
+    assert mapping["status"] == "recorded"
+    assert mapping["factor_tested"] is True
+    assert mapping["controlling_property"] == "summary"
+    assert mapping["factor_stable"] is True
+    assert mapping["recommended_slot_order_strategy"] == "summary-prefix"

@@ -113,6 +113,9 @@ def apply_observations(
         "stable_after_reopen": "stable_after_reopen",
         "creation_order_controls_layout": "creation_order_controls_layout",
         "recommended_slot_order_strategy": "recommended_slot_order_strategy",
+        "ordering_factor_tested": "factor_tested",
+        "ordering_controlling_property": "controlling_property",
+        "ordering_factor_stable": "factor_stable",
     }
     for observation_field, profile_field in slot_order_fields.items():
         value = getattr(values, observation_field)
@@ -221,6 +224,13 @@ def profile_summary(profile: CalibrationProfile) -> str:
         f"  Stable after reopen: {_yes_no(slot_order.stable_after_reopen)}",
         (f"  Creation order controls layout: {_yes_no(slot_order.creation_order_controls_layout)}"),
         (f"  Recommended slot strategy: {_value(slot_order.recommended_slot_order_strategy)}"),
+        f"  Ordering factor tested: {_yes_no(slot_order.factor_tested)}",
+        f"  Controlling property: {_value(slot_order.controlling_property)}",
+        f"  Ordering factor stable: {_yes_no(slot_order.factor_stable)}",
+        (
+            "  Mapper supports recommended strategy: "
+            f"{_yes_no(slot_order.recommended_strategy_supported)}"
+        ),
         "",
         (
             "Candidate logical grid: "

@@ -76,8 +76,11 @@ def make_ready_calibration_profile() -> CalibrationProfile:
                 "stable_after_refresh": True,
                 "stable_after_navigation": True,
                 "stable_after_reopen": True,
-                "creation_order_controls_layout": True,
-                "recommended_slot_order_strategy": "creation-order",
+                "creation_order_controls_layout": False,
+                "recommended_slot_order_strategy": "summary-prefix",
+                "factor_tested": True,
+                "controlling_property": "summary",
+                "factor_stable": True,
             },
         }
     )
