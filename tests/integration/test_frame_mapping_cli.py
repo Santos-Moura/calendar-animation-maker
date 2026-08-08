@@ -222,7 +222,62 @@ def test_incomplete_horizontal_calibration_allows_dry_run_but_blocks_execute(
         ],
     )
     assert real.exit_code == 1
-    assert "record horizontal-bars before upload" in real.output
+    assert "missing: horizontal-bars calibration" in real.output
+
+
+def test_pending_subcolumn_order_allows_dry_run_but_blocks_execute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_data = make_ready_calibration_profile().model_dump()
+    profile_data["subcolumn_order_mapping"] = {}
+    incomplete = CalibrationProfile.model_validate(profile_data)
+    manifest, profile = _mapping_inputs(tmp_path, incomplete)
+    monkeypatch.setattr(
+        calendar_commands,
+        "_google_gateway",
+        lambda: pytest.fail("slot readiness must block before API gateway construction"),
+    )
+
+    dry = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--mapping-mode",
+            "full-grid",
+            "--output",
+            str(tmp_path / "slot-dry"),
+        ],
+    )
+    assert dry.exit_code == 0, dry.output
+    assert "Mapper readiness: NOT READY" in dry.output
+    assert "subcolumn-order calibration" in dry.output
+
+    real = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--mapping-mode",
+            "full-grid",
+            "--start-date",
+            "2026-09-07",
+            "--run-id",
+            "slot-blocked",
+            "--output",
+            str(tmp_path / "slot-blocked"),
+            "--execute",
+            "--yes",
+        ],
+    )
+    assert real.exit_code == 1
+    assert "missing: subcolumn-order calibration" in real.output
 
 
 def test_execute_requires_explicit_date_and_confirmation(tmp_path: Path) -> None:

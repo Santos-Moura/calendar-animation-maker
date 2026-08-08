@@ -318,6 +318,16 @@ def test_full_grid_order_and_six_columns_are_deterministic_for_every_day_row() -
     ]
     assert order == sorted(order)
     assert order[-1] == (6, 23, 5)
+    event_order = [
+        (
+            int(event.private_metadata["logical_x"]) // plan.columns_per_day,
+            int(event.private_metadata["logical_y"]),
+            int(event.private_metadata["subcolumn_index"]),
+        )
+        for event in plan.events
+    ]
+    assert event_order == order
+    assert plan.subcolumn_order_strategy == "creation-order"
     groups: dict[tuple[int, int], list[int]] = {}
     for cell in plan.mapped_cells:
         groups.setdefault((cell.day_offset, cell.logical_y), []).append(cell.subcolumn)
@@ -417,5 +427,6 @@ def test_dry_plan_marks_incomplete_profile_without_blocking() -> None:
     )
     assert plan.profile_ready is False
     assert plan.horizontal_strategy == "unit-cells-only"
+    assert "horizontal-bars calibration" in profile.missing_mapper_calibrations
     assert any("NOT READY" in warning for warning in plan.warnings)
     assert any("execute limit" in warning for warning in plan.warnings)

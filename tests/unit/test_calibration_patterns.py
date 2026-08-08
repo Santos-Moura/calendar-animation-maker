@@ -6,6 +6,8 @@ from calendar_anim.calendar.calibration.patterns import (
     EVENT_COLOR_NAMES,
     EVENT_COLORS,
     PATTERNS,
+    SUBCOLUMN_ORDER_COLORS,
+    SUBCOLUMN_ORDER_VARIANTS,
     build_calibration_plan,
     generate_run_id,
 )
@@ -20,6 +22,7 @@ EXPECTED_COUNTS = {
     "color-palette": 11,
     "position-grid": 9,
     "horizontal-bars": 21,
+    "subcolumn-order": 24,
     "combined": 27,
 }
 
@@ -162,6 +165,34 @@ def test_horizontal_bars_are_explicitly_grouped() -> None:
     assert all(
         left[0].end <= right[0].start for left, right in zip(ordered, ordered[1:], strict=False)
     )
+
+
+def test_subcolumn_order_has_forward_reverse_and_shuffled_groups() -> None:
+    plan = build_calibration_plan("subcolumn-order", START, run_id="slot-order-run")
+    groups = [plan.events[index : index + 6] for index in range(0, 24, 6)]
+
+    assert len(groups) == len(SUBCOLUMN_ORDER_VARIANTS) == 4
+    for row_index, ((variant, expected_order), events) in enumerate(
+        zip(SUBCOLUMN_ORDER_VARIANTS, groups, strict=True)
+    ):
+        assert len({event.start for event in events}) == 1
+        assert len({event.end for event in events}) == 1
+        assert [event.summary for event in events] == [f"S{slot}" for slot in expected_order]
+        assert [event.private_metadata["subcolumn_index"] for event in events] == [
+            str(slot) for slot in expected_order
+        ]
+        assert [event.private_metadata["creation_sequence"] for event in events] == [
+            str(sequence) for sequence in range(6)
+        ]
+        assert {event.private_metadata["variant"] for event in events} == {variant}
+        assert {event.private_metadata["row_index"] for event in events} == {str(row_index)}
+        assert [(event.color_id, event.color_hex) for event in events] == [
+            SUBCOLUMN_ORDER_COLORS[slot] for slot in expected_order
+        ]
+
+    assert [event.private_metadata["event_index"] for event in plan.events] == [
+        str(index) for index in range(24)
+    ]
 
 
 def test_limit_is_enforced_and_can_be_explicitly_increased() -> None:

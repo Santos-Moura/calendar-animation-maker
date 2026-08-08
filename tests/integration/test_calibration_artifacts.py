@@ -65,6 +65,11 @@ def test_human_report_records_duration_values() -> None:
             "Horizontal Bars Calibration",
             "bar-6\n  Time: 14:00-14:45\n  Cells: 6",
         ),
+        (
+            "subcolumn-order",
+            "Subcolumn Order Calibration",
+            "Creation order: S5 S4 S3 S2 S1 S0",
+        ),
     ],
 )
 def test_remaining_patterns_have_specific_reports_and_previews(
@@ -86,3 +91,38 @@ def test_horizontal_bar_report_has_a_manual_checklist_for_each_width(tmp_path: P
     assert report.count("Visually contiguous:") == 6
     assert report.count("Visible gaps:") == 6
     assert "Expected logical width: 6" in report
+
+
+def test_subcolumn_order_report_has_manual_stability_checklist(tmp_path: Path) -> None:
+    plan = build_calibration_plan(
+        "subcolumn-order", date(2026, 9, 7), run_id="slot-order-checklist"
+    )
+    write_dry_run_artifacts(plan, tmp_path)
+    report = (tmp_path / "calibration-report.txt").read_text(encoding="utf-8")
+
+    assert "Creation order: S0 S1 S2 S3 S4 S5" in report
+    assert "Creation order: S5 S4 S3 S2 S1 S0" in report
+    assert "Creation order: S2 S5 S0 S4 S1 S3" in report
+    assert "After browser refresh:" in report
+    assert "After navigating away and back:" in report
+    assert "After reopening Calendar:" in report
+    assert "not a guarantee of Google Calendar visual ordering" in report
+
+
+def test_subcolumn_order_serialization_preserves_creation_sequence(tmp_path: Path) -> None:
+    plan = build_calibration_plan(
+        "subcolumn-order", date(2026, 9, 7), run_id="slot-order-serialized"
+    )
+    write_dry_run_artifacts(plan, tmp_path)
+
+    loaded = CalibrationPlan.model_validate_json(
+        (tmp_path / "calibration-plan.json").read_text(encoding="utf-8")
+    )
+
+    assert [event.summary for event in loaded.events] == [event.summary for event in plan.events]
+    assert [event.private_metadata["creation_sequence"] for event in loaded.events] == [
+        event.private_metadata["creation_sequence"] for event in plan.events
+    ]
+    assert [event.private_metadata["subcolumn_index"] for event in loaded.events] == [
+        event.private_metadata["subcolumn_index"] for event in plan.events
+    ]

@@ -96,7 +96,12 @@ def test_cleanup_with_no_matches_changes_nothing(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("pattern", "count"),
-    [("color-palette", 11), ("position-grid", 9), ("horizontal-bars", 21)],
+    [
+        ("color-palette", 11),
+        ("position-grid", 9),
+        ("horizontal-bars", 21),
+        ("subcolumn-order", 24),
+    ],
 )
 def test_remaining_calibrations_execute_and_cleanup_only_the_requested_run(
     tmp_path: Path, pattern: str, count: int
@@ -115,3 +120,20 @@ def test_remaining_calibrations_execute_and_cleanup_only_the_requested_run(
     remaining = gateway.events[target_result.calendar_id]
     assert len(remaining) == count
     assert {event.private_metadata["run_id"] for event in remaining} == {f"{pattern}-other"}
+
+
+def test_subcolumn_order_reaches_fake_gateway_in_exact_plan_order(tmp_path: Path) -> None:
+    service, gateway = make_service(tmp_path)
+    plan = build_calibration_plan("subcolumn-order", date(2026, 9, 7), run_id="slot-order-gateway")
+
+    result = service.execute(plan)
+
+    assert result.calendar_id is not None
+    received = gateway.events[result.calendar_id]
+    assert [event.summary for event in received] == [event.summary for event in plan.events]
+    assert [event.private_metadata["creation_sequence"] for event in received] == [
+        event.private_metadata["creation_sequence"] for event in plan.events
+    ]
+    assert [event.private_metadata["subcolumn_index"] for event in received] == [
+        event.private_metadata["subcolumn_index"] for event in plan.events
+    ]

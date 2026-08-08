@@ -94,10 +94,12 @@ def test_old_profile_loads_with_new_sections_and_preserves_grid(tmp_path: Path) 
         encoding="utf-8",
     )
     profile = load_profile(path)
-    assert profile.schema_version == "1.1"
+    assert profile.schema_version == "1.2"
     assert profile.candidate_grid.width == 42
     assert profile.candidate_grid.height == 24
     assert profile.color_mapping.preferred_color_ids == []
+    assert profile.subcolumn_order_mapping.status == "pending"
+    assert "subcolumn-order calibration" in profile.missing_mapper_calibrations
     assert profile.mapper_readiness == "NOT READY"
 
 
@@ -163,11 +165,34 @@ def test_new_observations_consolidate_without_erasing_existing_axes() -> None:
     )
     profile = apply_observations(profile, bars_observation)
     assert profile.horizontal_bar_mapping.maximum_useful_bar_width == 6
+    assert profile.mapper_readiness == "NOT READY"
+    assert "subcolumn-order calibration" in profile.missing_mapper_calibrations
+
+    slot_observation = CalibrationObservations(
+        run_id="slots",
+        pattern="subcolumn-order",
+        observations={
+            "visual_order_forward": [0, 1, 2, 3, 4, 5],
+            "visual_order_reverse": [5, 4, 3, 2, 1, 0],
+            "visual_order_shuffled": [2, 5, 0, 4, 1, 3],
+            "stable_after_refresh": True,
+            "stable_after_navigation": True,
+            "stable_after_reopen": True,
+            "creation_order_controls_layout": True,
+            "recommended_slot_order_strategy": "creation-order",
+            "notes": "Creation order stayed stable.",
+        },
+    )
+    profile = apply_observations(profile, slot_observation)
+    assert profile.subcolumn_order_mapping.status == "recorded"
+    assert profile.subcolumn_order_mapping.notes == "Creation order stayed stable."
     assert profile.mapper_readiness == "READY FOR SINGLE-FRAME EXPERIMENT"
     summary = profile_summary(profile)
     assert "Preferred color IDs: 1, 3" in summary
     assert "Vertical alignment: NOT OK" in summary
     assert "Recommended strategy: independent-cells" in summary
+    assert "Forward visual order: 0,1,2,3,4,5" in summary
+    assert "Recommended slot strategy: creation-order" in summary
     assert "Mapper readiness: READY FOR SINGLE-FRAME EXPERIMENT" in summary
 
 
@@ -197,6 +222,7 @@ def test_mapper_readiness_stays_not_ready_while_any_calibration_is_missing() -> 
     )
     assert profile.mapper_readiness == "NOT READY"
     assert "Horizontal bar mapping" in profile_summary(profile)
+    assert "- subcolumn-order calibration" in profile_summary(profile)
 
 
 def test_mapper_readiness_requires_week_start_and_complete_bar_observation() -> None:
@@ -235,3 +261,31 @@ def test_mapper_readiness_requires_week_start_and_complete_bar_observation() -> 
     profile.horizontal_bar_mapping.visible_gaps_between_cells = None
     profile = CalibrationProfile.model_validate(profile.model_dump())
     assert profile.mapper_ready is False
+
+
+def test_recorded_but_unstable_subcolumn_order_keeps_mapper_blocked() -> None:
+    profile = CalibrationProfile.model_validate(
+        {
+            "subcolumn_order_mapping": {
+                "forward_visual_order": [0, 1, 2, 3, 4, 5],
+                "reverse_visual_order": [5, 4, 3, 2, 1, 0],
+                "stable_after_refresh": False,
+                "stable_after_navigation": True,
+                "stable_after_reopen": True,
+                "creation_order_controls_layout": True,
+                "recommended_slot_order_strategy": "creation-order",
+            }
+        }
+    )
+
+    assert profile.subcolumn_order_mapping.status == "recorded"
+    assert "subcolumn-order calibration" in profile.missing_mapper_calibrations
+
+
+def test_slot_order_observations_require_each_index_exactly_once() -> None:
+    with pytest.raises(ValueError, match="each slot index from 0 to 5 exactly once"):
+        CalibrationObservations(
+            run_id="invalid-slots",
+            pattern="subcolumn-order",
+            observations={"visual_order_forward": [0, 1, 2, 3, 4, 4]},
+        )

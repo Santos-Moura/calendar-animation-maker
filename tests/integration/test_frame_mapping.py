@@ -56,6 +56,8 @@ def test_mapping_artifacts_include_plan_report_and_previews(tmp_path: Path) -> N
     assert "Calendar events:" in report
     assert "Sparse estimate:" in report
     assert "Full-grid estimate: 1008 events" in report
+    assert "Submission order key: day_offset, logical_y, subcolumn_index" in report
+    assert "Row ordering sample" in report
     assert "Cells per event: 1.00" in report
     assert Image.open(output / "mapped-preview.png").size == (840, 480)
     assert Image.open(output / "mapped-debug.png").size == (920, 570)
