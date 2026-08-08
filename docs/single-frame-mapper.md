@@ -58,27 +58,40 @@ Every target cell becomes exactly one event. For every day and row, all calibrat
 
 This does not create an API-level subcolumn property. Events are emitted deterministically in `day -> row -> subcolumn` order, while final visual ordering still belongs to Google Calendar and must be inspected in the real UI.
 
-## Subcolumn ordering risk
+## Summary-based subcolumn ordering
 
-The mapper uses the explicit submission key:
+The mapper still emits events deterministically with the submission key:
 
 ```text
 (day_offset, logical_y, subcolumn_index)
 ```
 
-`frame-plan.json` preserves that order, `SingleFrameMappingService` passes the list unchanged, and both gateways iterate it sequentially. `mapping-report.txt` records the strategy and prints one row-ordering sample such as:
+Creation order was not reliable in the real Calendar UI, and `colorId` must remain free to represent the video. The full-grid mapper therefore derives a second key from the logical subcolumn:
+
+```text
+subcolumn 0 -> summary "00"
+subcolumn 1 -> summary "01"
+subcolumn 2 -> summary "02"
+subcolumn 3 -> summary "03"
+subcolumn 4 -> summary "04"
+subcolumn 5 -> summary "05"
+```
+
+Foreground and structural background cells use exactly the same key for a given subcolumn. The key does not depend on color, row, role, source block, or frame content. `frame-plan.json` records `summary-prefix` and all six keys; `mapping-report.txt` prints an auditable row sample such as:
 
 ```text
 day_offset=1 row=4
-0 -> colorId 8 background
-1 -> colorId 8 background
-2 -> colorId 5 foreground
-3 -> colorId 8 background
-4 -> colorId 3 foreground
-5 -> colorId 8 background
+subcolumn=0 summary="00" colorId=8 role=background
+subcolumn=1 summary="01" colorId=8 role=background
+subcolumn=2 summary="02" colorId=5 role=foreground
+subcolumn=3 summary="03" colorId=8 role=background
+subcolumn=4 summary="04" colorId=3 role=foreground
+subcolumn=5 summary="05" colorId=8 role=background
 ```
 
-That proves internal determinism only. Google Calendar has no `subcolumn` API field, so the separate `subcolumn-order` calibration must verify actual left-to-right behavior using forward, reverse, and shuffled creation sequences. Full-grid guarantees six occupied cells, but not visual fidelity until that real observation is stable.
+Google Calendar has no `subcolumn` API field and does not document summary-based overlap ordering as a layout contract. The strategy is based on stable behavior observed in this project and is isolated so it can be replaced. Short technical titles may appear over the event blocks; invisible Unicode, CSS, and DOM workarounds are not used in this baseline.
+
+Sparse mode deliberately keeps the legacy blank summary. Without structural fillers it still cannot promise absolute positions, even if a summary key were added.
 
 ## Source background versus structural background
 
@@ -87,9 +100,9 @@ These are different concepts:
 - source background is content removed from the video before the manifest is written;
 - Calendar structural background is an intentional event that occupies a full-grid cell.
 
-Structural events carry `cell_role=background`; visible pixels carry `cell_role=foreground`. Both carry private `generated_by`, `animation_id`, `run_id`, `frame_index`, `logical_x`, `logical_y`, `subcolumn`, and `subcolumn_index` metadata. Foreground events additionally retain `source_block_index`.
+Structural events carry `cell_role=background`; visible pixels carry `cell_role=foreground`. Both carry private `generated_by`, `animation_id`, `run_id`, `frame_index`, `logical_x`, `logical_y`, `day_offset`, `subcolumn`, `subcolumn_index`, and `subcolumn_order_strategy` metadata. Summary ordering additionally records `subcolumn_order_key`. Foreground events retain `source_block_index`.
 
-Event summaries contain only one blank space so coordinates do not appear over the pixel art.
+Full-grid event summaries contain `00..05`; sparse summaries retain one blank space.
 
 ## Aspect ratio and background color
 
@@ -134,8 +147,8 @@ output/frame-mapping/<run_id>/
 - `source-frame.png` is the processed manifest image;
 - `mapped-preview.png` is a solid logical pixel canvas, not Calendar CSS;
 - `mapped-debug.png` adds rows, subcolumns, and day boundaries;
-- `mapping-report.txt` includes both mode estimates, the submission-order strategy, and a row sample;
-- `frame-plan.json` records mode, background, roles, metrics, events, and metadata.
+- `mapping-report.txt` includes both mode estimates, ordering strategy, slot keys, the empirical-behavior warning, and a row sample;
+- `frame-plan.json` records mode, background, roles, metrics, ordering strategy, keys, events, and metadata.
 
 The report distinguishes expanded source cells, fitted foreground, structural background, total cells, foreground/background events, foreground colors, and execution limits.
 
@@ -172,12 +185,12 @@ Real execution additionally requires:
 
 - explicit `--execute`;
 - explicit `--start-date`;
-- a complete calibration profile, including stable `subcolumn-order` evidence;
+- a complete calibration profile, including stable summary-order evidence matching the mapper capability;
 - confirmation defaulting to `N`, unless `--yes` is supplied;
 - the recognized secondary `Calendar Animation Lab`;
 - no existing frame with the same run metadata.
 
-The confirmation discloses mapping mode, target grid, foreground events, background events, total events, calendar, frame, and run ID.
+The confirmation discloses mapping mode, subcolumn strategy, target grid, foreground events, background events, total events, calendar, frame, and run ID.
 
 ```powershell
 python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --calendar-background-color-id 8 --start-date 2026-09-07 --run-id primeiro-frame-full-grid-01 --execute
@@ -200,8 +213,8 @@ Calendar API writes are not visually atomic. The future animation will pre-uploa
 
 ```text
 full-grid single frame
-    -> subcolumn-order calibration
-    -> record stable ordering evidence
+    -> record stable summary ordering evidence
+    -> generate summary-prefix keys 00..05
     -> compare one full-grid frame with real Calendar
     -> validate shape fidelity
     -> test 2-3 frames

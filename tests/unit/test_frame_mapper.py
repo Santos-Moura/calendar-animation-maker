@@ -17,6 +17,7 @@ from calendar_anim.calendar.frame_mapping.mapper import (
     select_frame,
 )
 from calendar_anim.calendar.frame_mapping.models import CellRole, FrameMappingMode, LogicalCell
+from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.frame import Block
 from tests.factories import make_manifest, make_ready_calibration_profile
@@ -236,7 +237,11 @@ def test_full_grid_plan_has_fillers_metadata_and_exact_canvas_size() -> None:
     assert plan.events[0].private_metadata["cell_role"] == "background"
     assert plan.events[3].private_metadata["cell_role"] == "foreground"
     assert plan.events[0].color_id == "8"
-    assert plan.events[3].summary == " "
+    assert [event.summary for event in plan.events] == ["00", "01", "02", "03", "04", "05"]
+    assert plan.events[3].summary == "03"
+    assert plan.events[3].private_metadata["day_offset"] == "0"
+    assert plan.events[3].private_metadata["subcolumn_order_strategy"] == "summary-prefix"
+    assert plan.events[3].private_metadata["subcolumn_order_key"] == "03"
 
 
 def test_full_grid_contain_centers_foreground_and_fills_borders() -> None:
@@ -296,6 +301,8 @@ def test_sparse_mode_preserves_foreground_only_count() -> None:
     assert plan.statistics.background_events == 0
     assert plan.event_count == plan.statistics.foreground_events
     assert all(event.private_metadata["cell_role"] == "foreground" for event in plan.events)
+    assert plan.subcolumn_order_strategy is SubcolumnOrderStrategy.NONE
+    assert {event.summary for event in plan.events} == {" "}
 
 
 def test_full_grid_order_and_six_columns_are_deterministic_for_every_day_row() -> None:
@@ -327,7 +334,8 @@ def test_full_grid_order_and_six_columns_are_deterministic_for_every_day_row() -
         for event in plan.events
     ]
     assert event_order == order
-    assert plan.subcolumn_order_strategy == "creation-order"
+    assert plan.subcolumn_order_strategy is SubcolumnOrderStrategy.SUMMARY_PREFIX
+    assert plan.subcolumn_order_keys == ["00", "01", "02", "03", "04", "05"]
     groups: dict[tuple[int, int], list[int]] = {}
     for cell in plan.mapped_cells:
         groups.setdefault((cell.day_offset, cell.logical_y), []).append(cell.subcolumn)
@@ -337,6 +345,58 @@ def test_full_grid_order_and_six_columns_are_deterministic_for_every_day_row() -
         cells = [cell for cell in plan.mapped_cells if (cell.day_offset, cell.logical_y) == day_row]
         assert len(subcolumns) == 6
         assert len({(cell.start, cell.end) for cell in cells}) == 1
+    event_groups: dict[tuple[int, int], list[str]] = {}
+    for event in plan.events:
+        key = (
+            int(event.private_metadata["day_offset"]),
+            int(event.private_metadata["logical_y"]),
+        )
+        event_groups.setdefault(key, []).append(event.summary)
+    expected_summaries = ["00", "01", "02", "03", "04", "05"]
+    assert all(summaries == expected_summaries for summaries in event_groups.values())
+
+
+def test_full_grid_summary_depends_only_on_subcolumn() -> None:
+    manifest = make_manifest(Block(x=2, y=0, width=1, color_id="0", color_hex="#039BE5"))
+    manifest.render.grid_width = 6
+    manifest.render.grid_height = 1
+    plan = build_single_frame_plan(
+        manifest,
+        _small_profile(height=2),
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="summary-independent",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+    )
+
+    first_row = plan.events[:6]
+    second_row = plan.events[6:12]
+    assert [event.summary for event in first_row] == ["00", "01", "02", "03", "04", "05"]
+    assert [event.summary for event in second_row] == ["00", "01", "02", "03", "04", "05"]
+    assert first_row[2].private_metadata["cell_role"] == "foreground"
+    assert second_row[2].private_metadata["cell_role"] == "background"
+    assert first_row[2].color_id != second_row[2].color_id
+    assert first_row[2].summary == second_row[2].summary == "02"
+
+
+def test_explicit_none_strategy_preserves_blank_full_grid_summaries() -> None:
+    plan = build_single_frame_plan(
+        make_manifest(),
+        make_ready_calibration_profile(),
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="full-grid-none",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+        subcolumn_order_strategy=SubcolumnOrderStrategy.NONE,
+    )
+
+    assert plan.subcolumn_order_strategy is SubcolumnOrderStrategy.NONE
+    assert plan.subcolumn_order_keys == []
+    assert {event.summary for event in plan.events} == {" "}
+    assert plan.profile_ready is False
+    assert any("does not confirm that strategy" in warning for warning in plan.warnings)
 
 
 def test_background_color_is_not_remapped_by_foreground_contrast() -> None:

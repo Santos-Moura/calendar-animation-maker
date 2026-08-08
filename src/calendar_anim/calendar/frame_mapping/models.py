@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, computed_field, model_validator
 
 from calendar_anim.calendar.models import CalendarEventDraft
+from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 
 FitMode = Literal["contain"]
 
@@ -94,7 +95,8 @@ class SingleFrameCalendarPlan(BaseModel):
     background_color_id: str | None = None
     profile_ready: bool
     horizontal_strategy: str
-    subcolumn_order_strategy: str | None = None
+    subcolumn_order_strategy: SubcolumnOrderStrategy = SubcolumnOrderStrategy.NONE
+    subcolumn_order_keys: list[str] = Field(default_factory=list)
     max_execute_events: int = Field(gt=0)
     warnings: list[str] = Field(default_factory=list)
     statistics: FrameMappingStatistics

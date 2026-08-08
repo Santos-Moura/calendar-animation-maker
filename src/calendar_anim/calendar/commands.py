@@ -457,8 +457,23 @@ def record_calibration_command(
         str | None,
         typer.Option(
             "--recommended-slot-order-strategy",
-            help="One of: creation-order, stable-alternative, unusable.",
+            help="One of: creation-order, summary-prefix, stable-alternative, unusable, none.",
         ),
+    ] = None,
+    ordering_factor_tested: Annotated[
+        bool | None,
+        typer.Option("--ordering-factor-tested/--ordering-factor-not-tested"),
+    ] = None,
+    ordering_controlling_property: Annotated[
+        str | None,
+        typer.Option(
+            "--ordering-controlling-property",
+            help="Observed ordering property: summary, color_id, or unknown.",
+        ),
+    ] = None,
+    ordering_factor_stable: Annotated[
+        bool | None,
+        typer.Option("--ordering-factor-stable/--ordering-factor-unstable"),
     ] = None,
     notes: Annotated[str, typer.Option("--notes")] = "",
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
@@ -519,13 +534,23 @@ def record_calibration_command(
             recommended_slot_order_strategy = recommended_slot_order_strategy.strip().lower()
             supported_slot_strategies = {
                 "creation-order",
+                "summary-prefix",
                 "stable-alternative",
                 "unusable",
+                "none",
             }
             if recommended_slot_order_strategy not in supported_slot_strategies:
                 raise CalendarAnimError(
                     "--recommended-slot-order-strategy must be one of: "
                     + ", ".join(sorted(supported_slot_strategies))
+                )
+        if ordering_controlling_property is not None:
+            ordering_controlling_property = ordering_controlling_property.strip().lower()
+            supported_controlling_properties = {"summary", "color_id", "unknown"}
+            if ordering_controlling_property not in supported_controlling_properties:
+                raise CalendarAnimError(
+                    "--ordering-controlling-property must be one of: "
+                    + ", ".join(sorted(supported_controlling_properties))
                 )
         observations = CalibrationObservations(
             run_id=run_id,
@@ -577,6 +602,9 @@ def record_calibration_command(
                 "stable_after_reopen": stable_after_reopen,
                 "creation_order_controls_layout": creation_order_controls_layout,
                 "recommended_slot_order_strategy": recommended_slot_order_strategy,
+                "ordering_factor_tested": ordering_factor_tested,
+                "ordering_controlling_property": ordering_controlling_property,
+                "ordering_factor_stable": ordering_factor_stable,
                 "notes": notes,
             },
         )
@@ -709,6 +737,11 @@ def map_frame_command(
     typer.echo(f"Background events: {stats.background_events}")
     typer.echo(f"Foreground Calendar colors: {stats.foreground_calendar_colors}")
     typer.echo(f"Background colorId: {plan.background_color_id or 'not used'}")
+    typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
+    typer.echo(
+        "Subcolumn slot keys: "
+        + (", ".join(plan.subcolumn_order_keys) if plan.subcolumn_order_keys else "not used")
+    )
     typer.echo(f"Mapper readiness: {'READY' if plan.profile_ready else 'NOT READY'}")
     typer.echo(f"Execution: {'REAL' if execute else 'DRY RUN'}")
     typer.echo(f"Artifacts: {output_dir}")
@@ -719,7 +752,13 @@ def map_frame_command(
             typer.echo("--yes has no effect without --execute; no API call was made.")
         return
     if not plan.profile_ready:
-        missing = ", ".join(profile.missing_mapper_calibrations)
+        blockers = list(profile.missing_mapper_calibrations)
+        if (
+            plan.mapping_mode is FrameMappingMode.FULL_GRID
+            and not profile.subcolumn_order_mapping.strategy_ready(plan.subcolumn_order_strategy)
+        ):
+            blockers.append(f"confirmed {plan.subcolumn_order_strategy.value} mapper strategy")
+        missing = ", ".join(blockers)
         _fail(CalendarAnimError(f"Calibration profile is NOT READY; missing: {missing}"))
     if plan.event_count > plan.max_execute_events:
         _fail(
@@ -730,6 +769,7 @@ def map_frame_command(
         )
     if not yes:
         typer.echo(f"\nMapping mode: {plan.mapping_mode.value.upper()}")
+        typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
         typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
         typer.echo(f"Foreground events: {stats.foreground_events}")
         typer.echo(f"Background events: {stats.background_events}")

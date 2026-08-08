@@ -57,7 +57,7 @@ def test_mapping_artifacts_include_plan_report_and_previews(tmp_path: Path) -> N
     assert "Sparse estimate:" in report
     assert "Full-grid estimate: 1008 events" in report
     assert "Submission order key: day_offset, logical_y, subcolumn_index" in report
-    assert "Row ordering sample" in report
+    assert "Ordering sample" in report
     assert "Cells per event: 1.00" in report
     assert Image.open(output / "mapped-preview.png").size == (840, 480)
     assert Image.open(output / "mapped-debug.png").size == (920, 570)
@@ -75,8 +75,15 @@ def test_full_grid_artifacts_serialize_background_and_solid_canvas(tmp_path: Pat
     assert "Background colorId: 8" in report
     assert "Total logical cells: 1008" in report
     assert "Calendar events: 1008" in report
+    assert "Subcolumn ordering\n------------------\nStrategy: summary-prefix" in report
+    assert "0 -> 00" in report
+    assert "5 -> 05" in report
+    assert 'subcolumn=0 summary="00"' in report
+    assert "not part of a documented API contract" in report
     assert '"mapping_mode": "full-grid"' in serialized
     assert '"background_color_id": "8"' in serialized
+    assert '"subcolumn_order_strategy": "summary-prefix"' in serialized
+    assert '"subcolumn_order_keys": [' in serialized
     assert Image.open(output / "mapped-preview.png").getpixel((0, 0)) == (97, 97, 97)
 
 
@@ -173,6 +180,9 @@ def test_full_grid_execute_reports_foreground_and_background_created(tmp_path: P
         },
     )
     assert len(matches) == 42 * 24
+    first_row = gateway.events[result.calendar_id or ""][:6]
+    assert [event.summary for event in first_row] == ["00", "01", "02", "03", "04", "05"]
+    assert len({event.color_id for event in plan.events}) > 1
     deleted = gateway.delete_events(result.calendar_id or "", [event.id for event in matches])
     assert deleted.deleted_events == 42 * 24
 

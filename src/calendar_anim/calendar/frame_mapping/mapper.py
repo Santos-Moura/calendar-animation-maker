@@ -17,6 +17,12 @@ from calendar_anim.calendar.frame_mapping.models import (
     SingleFrameCalendarPlan,
 )
 from calendar_anim.calendar.models import CalendarEventDraft
+from calendar_anim.calendar.subcolumn_ordering import (
+    SubcolumnOrderStrategy,
+    parse_subcolumn_order_strategy,
+    summary_for_subcolumn,
+    summary_order_keys,
+)
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.animation import AnimationManifest
 from calendar_anim.models.frame import AnimationFrame
@@ -218,6 +224,7 @@ def map_cells_to_calendar(
     frame_index: int,
     background_hex: str,
     background_color_id: str | None = None,
+    subcolumn_order_strategy: str | SubcolumnOrderStrategy = SubcolumnOrderStrategy.NONE,
 ) -> tuple[list[CalendarMappedCell], list[CalendarEventDraft]]:
     columns_per_day = profile.horizontal_mapping.usable_overlap_columns_per_day
     row_minutes = profile.vertical_mapping.minimum_distinguishable_height_minutes
@@ -227,6 +234,7 @@ def map_cells_to_calendar(
         raise CalendarAnimError("Calibration profile is missing row or overlap measurements")
     if target_width is None or target_height is None:
         raise CalendarAnimError("Calibration profile has no candidate grid")
+    ordering_strategy = parse_subcolumn_order_strategy(subcolumn_order_strategy)
     try:
         zone = ZoneInfo(timezone)
     except ZoneInfoNotFoundError as error:
@@ -292,10 +300,15 @@ def map_cells_to_calendar(
             "frame_index": str(frame_index),
             "logical_x": str(cell.x),
             "logical_y": str(cell.y),
+            "day_offset": str(day_offset),
             "subcolumn": str(subcolumn),
             "subcolumn_index": str(subcolumn),
+            "subcolumn_order_strategy": ordering_strategy.value,
             "cell_role": cell.cell_role.value,
         }
+        summary = summary_for_subcolumn(subcolumn, columns_per_day, ordering_strategy)
+        if ordering_strategy is SubcolumnOrderStrategy.SUMMARY_PREFIX:
+            metadata["subcolumn_order_key"] = summary
         if cell.source_block_index is not None:
             metadata["source_block_index"] = str(cell.source_block_index)
         mapped.append(mapped_cell)
@@ -307,7 +320,7 @@ def map_cells_to_calendar(
                 end=end,
                 color_id=calendar_color.id,
                 color_hex=calendar_color.hex,
-                summary=" ",
+                summary=summary,
                 private_metadata=metadata,
             )
         )
@@ -325,6 +338,7 @@ def build_single_frame_plan(
     calendar_name: str = "Calendar Animation Lab",
     mapping_mode: FrameMappingMode = FrameMappingMode.SPARSE,
     calendar_background_color_id: str | None = None,
+    subcolumn_order_strategy: str | SubcolumnOrderStrategy | None = None,
 ) -> SingleFrameCalendarPlan:
     if fit != "contain":
         raise CalendarAnimError(f"Unsupported frame fit: {fit}")
@@ -363,6 +377,14 @@ def build_single_frame_plan(
         )
 
     background_color = calendar_palette_color(calendar_background_color_id)
+    ordering_strategy = parse_subcolumn_order_strategy(
+        subcolumn_order_strategy
+        or (
+            SubcolumnOrderStrategy.SUMMARY_PREFIX
+            if mapping_mode is FrameMappingMode.FULL_GRID
+            else SubcolumnOrderStrategy.NONE
+        )
+    )
     mapping_cells = generate_mapping_cells(
         mapping_mode,
         fitted,
@@ -385,7 +407,13 @@ def build_single_frame_plan(
         frame_index,
         contrast_background,
         background_color.id if mapping_mode is FrameMappingMode.FULL_GRID else None,
+        ordering_strategy,
     )
+
+    profile_ready = profile.mapper_ready
+    strategy_matches_profile = profile.subcolumn_order_mapping.strategy_ready(ordering_strategy)
+    if mapping_mode is FrameMappingMode.FULL_GRID:
+        profile_ready = profile_ready and strategy_matches_profile
 
     warnings: list[str] = []
     normalized_source_background = (
@@ -407,6 +435,12 @@ def build_single_frame_plan(
             "Full-grid creates every calibrated cell in deterministic day/row/subcolumn "
             "order, but final visual ordering still depends on Google Calendar."
         )
+        if not strategy_matches_profile:
+            recommended = profile.subcolumn_order_mapping.recommended_slot_order_strategy or "none"
+            warnings.append(
+                f"Full-grid uses {ordering_strategy.value}, but the calibration profile does "
+                f"not confirm that strategy (recommended: {recommended})."
+            )
     else:
         warnings.append(
             "Sparse mapping cannot guarantee absolute subcolumn positions because Calendar "
@@ -414,8 +448,11 @@ def build_single_frame_plan(
         )
         if calendar_background_color_id is not None:
             warnings.append("Calendar background color is ignored in sparse mode.")
-    if not profile.mapper_ready:
-        missing = ", ".join(profile.missing_mapper_calibrations)
+    if not profile_ready:
+        blockers = list(profile.missing_mapper_calibrations)
+        if mapping_mode is FrameMappingMode.FULL_GRID and not strategy_matches_profile:
+            blockers.append(f"confirmed {ordering_strategy.value} mapper strategy")
+        missing = ", ".join(blockers)
         warnings.append(
             "Calibration profile is NOT READY; dry-run is allowed but real upload is blocked. "
             f"Missing: {missing}."
@@ -449,9 +486,13 @@ def build_single_frame_plan(
         background_color_id=(
             background_color.id if mapping_mode is FrameMappingMode.FULL_GRID else None
         ),
-        profile_ready=profile.mapper_ready,
+        profile_ready=profile_ready,
         horizontal_strategy=horizontal_strategy,
-        subcolumn_order_strategy=(profile.subcolumn_order_mapping.recommended_slot_order_strategy),
+        subcolumn_order_strategy=ordering_strategy,
+        subcolumn_order_keys=summary_order_keys(
+            profile.horizontal_mapping.usable_overlap_columns_per_day or 1,
+            ordering_strategy,
+        ),
         max_execute_events=max_execute_events,
         warnings=warnings,
         statistics=FrameMappingStatistics(

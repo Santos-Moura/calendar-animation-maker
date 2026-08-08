@@ -108,6 +108,8 @@ def test_map_frame_full_grid_and_background_flag_are_fully_local(
     assert "Background structural cells:" in result.output
     assert "Calendar events: 1008 / 1200" in result.output
     assert "Background colorId: 5" in result.output
+    assert "Subcolumn ordering: summary-prefix" in result.output
+    assert "Subcolumn slot keys: 00, 01, 02, 03, 04, 05" in result.output
     plan = json.loads((output / "frame-plan.json").read_text(encoding="utf-8"))
     assert plan["mapping_mode"] == "full-grid"
     assert plan["background_color_id"] == "5"
@@ -347,6 +349,7 @@ def test_full_grid_confirmation_discloses_cost_and_limit_blocks_before_api(
     assert "Foreground events:" in aborted.output
     assert "Background events:" in aborted.output
     assert "This will create 1008 real Google Calendar events" in aborted.output
+    assert "Subcolumn ordering: summary-prefix" in aborted.output
 
     blocked = runner.invoke(
         app,
