@@ -21,6 +21,7 @@ def test_cli_lists_patterns() -> None:
     result = runner.invoke(app, ["calendar", "calibration-patterns"])
     assert result.exit_code == 0, result.output
     assert "overlap-columns" in result.output
+    assert "subcolumn-order" in result.output
     assert "combined" in result.output
 
 
@@ -301,7 +302,9 @@ def test_summary_can_overlay_observations_by_run_id(
     assert "Logical columns: 28" in result.output
 
 
-@pytest.mark.parametrize("pattern", ["color-palette", "position-grid", "horizontal-bars"])
+@pytest.mark.parametrize(
+    "pattern", ["color-palette", "position-grid", "horizontal-bars", "subcolumn-order"]
+)
 def test_remaining_calibration_dry_runs_never_create_an_api_gateway(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -438,6 +441,48 @@ def test_cli_records_all_remaining_calibrations_and_becomes_mapper_ready(
     )
     assert bars.exit_code == 0, bars.output
 
+    pending_summary = runner.invoke(
+        app,
+        ["calendar", "calibration-summary", "--profile", str(profile)],
+    )
+    assert pending_summary.exit_code == 0, pending_summary.output
+    assert "Mapper readiness: NOT READY" in pending_summary.output
+    assert "- subcolumn-order calibration" in pending_summary.output
+
+    slots = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "slot-order-observation",
+            "--pattern",
+            "subcolumn-order",
+            "--visual-order-forward",
+            "0,1,2,3,4,5",
+            "--visual-order-reverse",
+            "5,4,3,2,1,0",
+            "--visual-order-shuffled",
+            "2,5,0,4,1,3",
+            "--stable-after-refresh",
+            "--stable-after-navigation",
+            "--stable-after-reopen",
+            "--creation-order-controls-layout",
+            "--recommended-slot-order-strategy",
+            "creation-order",
+            "--notes",
+            "Creation order remained stable.",
+            "--output",
+            str(tmp_path / "slots.yaml"),
+            "--profile-output",
+            str(profile),
+        ],
+    )
+    assert slots.exit_code == 0, slots.output
+    slot_yaml = yaml.safe_load((tmp_path / "slots.yaml").read_text(encoding="utf-8"))
+    assert slot_yaml["observations"]["visual_order_forward"] == [0, 1, 2, 3, 4, 5]
+    assert slot_yaml["observations"]["stable_after_refresh"] is True
+
     summary = runner.invoke(
         app,
         ["calendar", "calibration-summary", "--profile", str(profile)],
@@ -446,5 +491,31 @@ def test_cli_records_all_remaining_calibrations_and_becomes_mapper_ready(
     assert "Preferred color IDs: 1, 5, 7, 9" in summary.output
     assert "Week alignment: OK" in summary.output
     assert "Recommended strategy: independent-cells" in summary.output
+    assert "Subcolumn order mapping\n  Status: recorded" in summary.output
+    assert "Recommended slot strategy: creation-order" in summary.output
     assert "Candidate logical grid: 42x24" in summary.output
     assert "Mapper readiness: READY FOR SINGLE-FRAME EXPERIMENT" in summary.output
+
+
+def test_record_subcolumn_order_rejects_invalid_or_incomplete_permutations(
+    tmp_path: Path,
+) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "invalid-slots",
+            "--pattern",
+            "subcolumn-order",
+            "--visual-order-forward",
+            "0,1,2,3,4,6",
+            "--output",
+            str(tmp_path / "invalid.yaml"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "must contain each slot index from 0 to 5 exactly once" in result.output
+    assert not (tmp_path / "invalid.yaml").exists()

@@ -69,5 +69,15 @@ def make_ready_calibration_profile() -> CalibrationProfile:
                 "maximum_useful_bar_width": 6,
                 "recommended_horizontal_strategy": "independent-cells",
             },
+            "subcolumn_order_mapping": {
+                "forward_visual_order": [0, 1, 2, 3, 4, 5],
+                "reverse_visual_order": [5, 4, 3, 2, 1, 0],
+                "shuffled_visual_order": [2, 5, 0, 4, 1, 3],
+                "stable_after_refresh": True,
+                "stable_after_navigation": True,
+                "stable_after_reopen": True,
+                "creation_order_controls_layout": True,
+                "recommended_slot_order_strategy": "creation-order",
+            },
         }
     )

@@ -173,20 +173,57 @@ recommended strategy: independent-cells
 
 This is acceptable pixel-art segmentation. It does not prove that sparse events can address arbitrary subcolumns. The full-grid mapper therefore creates six simultaneous cells for every day/row and uses background events as structural fillers.
 
+## `subcolumn-order`
+
+Six overlapping events create six visual columns, but Google Calendar decides their final left-to-right layout. Full-grid guarantees six simultaneous structural cells; visual fidelity also requires stable subcolumn ordering.
+
+The pattern creates 24 events in four groups:
+
+```text
+09:00 forward-1  S0 S1 S2 S3 S4 S5
+10:00 forward-2  S0 S1 S2 S3 S4 S5
+11:00 reverse    S5 S4 S3 S2 S1 S0
+12:00 shuffled   S2 S5 S0 S4 S1 S3
+```
+
+Each slot keeps one distinctive color. `creation_sequence` records the list position, while `subcolumn_index` records the logical slot represented by that event. The plan, serialization, calibration service, fake gateway, and Google gateway all preserve the supplied list order. This is still a hypothesis about the UI, not proof of visual ordering.
+
+Dry-run:
+
+```powershell
+python -m calendar_anim calendar calibrate --pattern subcolumn-order --start-date 2026-09-07 --run-id slot-order-real-01
+```
+
+Open `expected-layout.png` and `calibration-report.txt`. The image is the expected logical creation order, not a guarantee of Google Calendar visual ordering.
+
+Real calibration, only after reviewing the dry-run:
+
+```powershell
+python -m calendar_anim calendar calibrate --pattern subcolumn-order --start-date 2026-09-07 --run-id slot-order-real-01 --execute
+```
+
+Observe all four groups, refresh the browser, navigate away and back, and reopen Calendar if practical. Then record only what was actually observed:
+
+```powershell
+python -m calendar_anim calendar record-calibration --run-id slot-order-real-01 --pattern subcolumn-order --browser-zoom 100 --viewport-width 1920 --viewport-height 1080 --visual-order-forward "0,1,2,3,4,5" --visual-order-reverse "5,4,3,2,1,0" --visual-order-shuffled "2,5,0,4,1,3" --stable-after-refresh --stable-after-navigation --stable-after-reopen --creation-order-controls-layout --recommended-slot-order-strategy creation-order --notes "Replace with real observations."
+```
+
+Do not copy those observation flags unless the real Calendar result supports them. Negative paired flags are available, and omitted values remain `null`/pending.
+
 ## Consolidated profile and readiness
 
 ```powershell
 python -m calendar_anim calendar calibration-summary
 ```
 
-The profile schema keeps old vertical and overlap YAML compatible while adding optional `color_mapping`, `position_mapping`, `horizontal_bar_mapping`, and derived `candidate_grid` sections.
+The profile schema keeps older YAML compatible while adding optional `color_mapping`, `position_mapping`, `horizontal_bar_mapping`, `subcolumn_order_mapping`, and derived `candidate_grid` sections.
 
 `Mapper readiness` is diagnostic only:
 
 - `NOT READY`: at least one required experiment has no recorded measurements;
-- `READY FOR SINGLE-FRAME EXPERIMENT`: vertical, overlap, colors, position, and horizontal bars all have recorded measurements.
+- `READY FOR SINGLE-FRAME EXPERIMENT`: vertical, overlap, colors, position, horizontal bars, and a stable creation-order subcolumn strategy all have recorded measurements.
 
-Readiness does not block local mapping and does not mark `42x24` as final. It does block a real single-frame upload. Position readiness includes `week_starts_on`; horizontal-bar readiness includes continuity, gaps, same-color merging, maximum useful width, and the recommended strategy.
+Readiness does not block local mapping and does not mark `42x24` as final. It does block a real single-frame upload. Position readiness includes `week_starts_on`; horizontal-bar readiness includes continuity, gaps, same-color merging, maximum useful width, and the recommended strategy. Subcolumn-order readiness requires stable results after refresh, navigation, and reopen, plus evidence that creation order controls layout. A recorded negative result remains valuable evidence but does not unlock upload.
 
 ## Cleanup
 
@@ -196,6 +233,7 @@ Preview each deletion before using `--execute`:
 python -m calendar_anim calendar cleanup --animation-id calibration-color-palette --run-id color-real-20260807-01
 python -m calendar_anim calendar cleanup --animation-id calibration-position-grid --run-id position-real-20260807-01
 python -m calendar_anim calendar cleanup --animation-id calibration-horizontal-bars --run-id bars-real-20260807-01
+python -m calendar_anim calendar cleanup --animation-id calibration-subcolumn-order --run-id slot-order-real-01
 ```
 
 Cleanup matches only `generated_by`, `animation_id`, and `run_id` in the recognized lab calendar.
@@ -204,4 +242,4 @@ Cleanup matches only `generated_by`, `animation_id`, and `run_id` in the recogni
 
 The **Single Frame Calendar Mapper** supports `sparse` and `full-grid`. Sparse is efficient but horizontally unstable; full-grid is the recommended first visual baseline because every calibrated slot exists. Dry-run can be used before readiness, while real upload waits for a complete profile. See [single-frame mapper](single-frame-mapper.md).
 
-The next manual experiment compares both local plans and uploads at most one explicitly confirmed full-grid frame. Multiple frames, hybrid optimization, Playwright, browser capture, batching, retry, and resume remain outside this phase.
+The next manual experiment is `subcolumn-order`. Only after it is recorded as stable should a full-grid plan be reviewed for an explicitly confirmed single-frame upload. Multiple frames, hybrid optimization, Playwright, browser capture, batching, retry, and resume remain outside this phase.
