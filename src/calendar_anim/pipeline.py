@@ -13,7 +13,7 @@ from calendar_anim.models.video import VideoInfo
 from calendar_anim.renderer.block_merger import merge_horizontal
 from calendar_anim.renderer.manifest import write_manifest
 from calendar_anim.renderer.palette import palette_colors, quantize
-from calendar_anim.renderer.pixelizer import background_mask
+from calendar_anim.renderer.pixelizer import final_background_mask
 from calendar_anim.renderer.preview import save_frame, save_gif
 from calendar_anim.video.inspector import inspect_video
 from calendar_anim.video.processor import crop_frame, resize_to_grid
@@ -45,8 +45,13 @@ def render_video(
         grid = resize_to_grid(
             crop_frame(source, config.crop), config.grid_width, config.grid_height, config.fit
         )
-        empty = background_mask(grid, config.background, config.background_tolerance)
         quantized, color_indices = quantize(grid, config.palette, config.colors)
+        empty = final_background_mask(
+            grid,
+            quantized,
+            config.background,
+            config.background_tolerance,
+        )
         blocks = merge_horizontal(color_indices, colors, empty)
         relative_path = f"frames/frame_{index:03d}.png"
         save_frame(quantized, empty, output_dir / relative_path)

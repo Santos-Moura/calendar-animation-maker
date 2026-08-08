@@ -4,6 +4,7 @@ from typing import Final
 from calendar_anim.exceptions import CalendarAnimError
 
 DEFAULT_CALENDAR_BACKGROUND: Final = "#202124"
+DEFAULT_CALENDAR_BACKGROUND_COLOR_ID: Final = "8"
 DEFAULT_MIN_CONTRAST_RATIO: Final = 2.0
 
 
@@ -26,6 +27,19 @@ CALENDAR_EVENT_PALETTE: Final[tuple[CalendarPaletteColor, ...]] = (
     CalendarPaletteColor("10", "#0B8043"),
     CalendarPaletteColor("11", "#D50000"),
 )
+
+
+def calendar_palette_color(color_id: str | None = None) -> CalendarPaletteColor:
+    """Resolve an explicit structural background color deterministically."""
+
+    resolved = color_id or DEFAULT_CALENDAR_BACKGROUND_COLOR_ID
+    match = next((color for color in CALENDAR_EVENT_PALETTE if color.id == resolved), None)
+    if match is None:
+        supported = ", ".join(color.id for color in CALENDAR_EVENT_PALETTE)
+        raise CalendarAnimError(
+            f"Unsupported Calendar background color ID: {resolved!r}. Supported IDs: {supported}"
+        )
+    return match
 
 
 def map_calendar_color(

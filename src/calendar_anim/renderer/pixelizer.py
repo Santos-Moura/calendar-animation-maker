@@ -20,3 +20,16 @@ def background_mask(
     if background is None:
         return np.zeros(frame.shape[:2], dtype=np.bool_)
     return color_distance(frame, parse_hex_color(background)) <= tolerance
+
+
+def final_background_mask(
+    source_frame: RGBFrame,
+    quantized_frame: RGBFrame,
+    background: str | None,
+    tolerance: float,
+) -> npt.NDArray[np.bool_]:
+    """Mask source background plus colors quantized to the exact background."""
+
+    source_background = background_mask(source_frame, background, tolerance)
+    quantized_background = background_mask(quantized_frame, background, 0)
+    return source_background | quantized_background

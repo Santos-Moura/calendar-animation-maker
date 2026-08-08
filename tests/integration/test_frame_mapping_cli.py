@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -66,8 +67,95 @@ def test_map_frame_dry_run_is_local_and_writes_all_artifacts(
         "mapping-report.txt",
         "source-frame.png",
         "mapped-preview.png",
+        "mapped-debug.png",
         "execution-result.json",
     }
+    assert "Mapping mode: sparse" in result.output
+
+
+def test_map_frame_full_grid_and_background_flag_are_fully_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _mapping_inputs(tmp_path)
+    output = tmp_path / "full-grid"
+    monkeypatch.setattr(
+        calendar_commands,
+        "_google_gateway",
+        lambda: pytest.fail("full-grid dry-run must not create an API gateway"),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--start-date",
+            "2026-09-07",
+            "--mapping-mode",
+            "full-grid",
+            "--calendar-background-color-id",
+            "5",
+            "--run-id",
+            "full-grid-dry",
+            "--output",
+            str(output),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Mapping mode: full-grid" in result.output
+    assert "Background structural cells:" in result.output
+    assert "Calendar events: 1008 / 1200" in result.output
+    assert "Background colorId: 5" in result.output
+    plan = json.loads((output / "frame-plan.json").read_text(encoding="utf-8"))
+    assert plan["mapping_mode"] == "full-grid"
+    assert plan["background_color_id"] == "5"
+    assert plan["statistics"]["calendar_events"] == 1008
+
+
+def test_map_frame_rejects_invalid_mode_and_background_color(tmp_path: Path) -> None:
+    manifest, profile = _mapping_inputs(tmp_path)
+    invalid_mode = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--mapping-mode",
+            "filled-sometimes",
+        ],
+    )
+    assert invalid_mode.exit_code != 0
+    assert "Invalid value for '--mapping-mode'" in invalid_mode.output
+
+    invalid_background = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--mapping-mode",
+            "full-grid",
+            "--calendar-background-color-id",
+            "99",
+        ],
+    )
+    assert invalid_background.exit_code == 1
+    assert "Unsupported Calendar background color ID" in invalid_background.output
+
+
+def test_map_frame_help_lists_both_mapping_modes_and_background_option() -> None:
+    result = runner.invoke(app, ["calendar", "map-frame", "--help"])
+    assert result.exit_code == 0
+    assert "--mapping-mode" in result.output
+    assert "sparse" in result.output
+    assert "full-grid" in result.output
+    assert "Calendar colorId used" in result.output
 
 
 def test_map_frame_reports_invalid_frame_range(tmp_path: Path) -> None:
@@ -168,6 +256,67 @@ def test_execute_requires_explicit_date_and_confirmation(tmp_path: Path) -> None
     )
     assert aborted.exit_code != 0
     assert "Continue?" in aborted.output
+
+
+def test_full_grid_confirmation_discloses_cost_and_limit_blocks_before_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _mapping_inputs(tmp_path)
+    monkeypatch.setattr(
+        calendar_commands,
+        "_google_gateway",
+        lambda: pytest.fail("guard must run before API gateway construction"),
+    )
+    aborted = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--start-date",
+            "2026-09-07",
+            "--mapping-mode",
+            "full-grid",
+            "--run-id",
+            "confirm-full-grid",
+            "--output",
+            str(tmp_path / "confirm"),
+            "--execute",
+        ],
+        input="n\n",
+    )
+    assert aborted.exit_code != 0
+    assert "Mapping mode: FULL-GRID" in aborted.output
+    assert "Foreground events:" in aborted.output
+    assert "Background events:" in aborted.output
+    assert "This will create 1008 real Google Calendar events" in aborted.output
+
+    blocked = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--start-date",
+            "2026-09-07",
+            "--mapping-mode",
+            "full-grid",
+            "--max-events",
+            "1000",
+            "--run-id",
+            "limited-full-grid",
+            "--output",
+            str(tmp_path / "limited-full-grid"),
+            "--execute",
+            "--yes",
+        ],
+    )
+    assert blocked.exit_code == 1
+    assert "above the configured execute limit" in blocked.output
 
 
 def test_execute_uses_fake_gateway_and_limit_blocks_before_api(

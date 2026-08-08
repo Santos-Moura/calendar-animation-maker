@@ -2,7 +2,7 @@
 
 Google Calendar controls event height, overlap, colors, borders, padding, and text visibility. The mapper must therefore use measurements from the real Calendar UI instead of assuming that a local pixel grid maps directly to events.
 
-The current `42x24` grid is a candidate derived from completed vertical and overlap measurements. It is not final, and `block.width` must not be interpreted as a number of simultaneous events until the horizontal-bar experiment is reviewed.
+The current `42x24` grid is a candidate derived from completed vertical and overlap measurements. It is not final, and `block.width` is never sent as one Calendar event: mapper strategies expand blocks into logical cells first.
 
 ## Standard UI conditions
 
@@ -159,6 +159,20 @@ python -m calendar_anim calendar record-calibration --run-id bars-real-20260807-
 
 Available opposite flags include `--independent-cells-not-contiguous`, `--visible-cell-gaps`, and `--same-color-cells-do-not-merge`.
 
+### Recorded result
+
+At 100% browser zoom and 1920x1080, bars of 1-6 cells remained recognizable in both light and dark themes. Cells appeared contiguous but retained thin theme-colored separators, so the recorded result is:
+
+```text
+independent cells contiguous: yes
+visible gaps/separators: yes
+same-color cells merge completely: no
+maximum useful width: 6
+recommended strategy: independent-cells
+```
+
+This is acceptable pixel-art segmentation. It does not prove that sparse events can address arbitrary subcolumns. The full-grid mapper therefore creates six simultaneous cells for every day/row and uses background events as structural fillers.
+
 ## Consolidated profile and readiness
 
 ```powershell
@@ -186,8 +200,8 @@ python -m calendar_anim calendar cleanup --animation-id calibration-horizontal-b
 
 Cleanup matches only `generated_by`, `animation_id`, and `run_id` in the recognized lab calendar.
 
-## Next delivery
+## Mapper baseline
 
-The **Single Frame Calendar Mapper** is now available as `calendar map-frame`. Dry-run can be used before horizontal observation; real upload waits for a complete profile. See [single-frame mapper](single-frame-mapper.md).
+The **Single Frame Calendar Mapper** supports `sparse` and `full-grid`. Sparse is efficient but horizontally unstable; full-grid is the recommended first visual baseline because every calibrated slot exists. Dry-run can be used before readiness, while real upload waits for a complete profile. See [single-frame mapper](single-frame-mapper.md).
 
-Multiple frames, full animation, Playwright, browser capture, batching, retry, and resume remain outside this phase.
+The next manual experiment compares both local plans and uploads at most one explicitly confirmed full-grid frame. Multiple frames, hybrid optimization, Playwright, browser capture, batching, retry, and resume remain outside this phase.
