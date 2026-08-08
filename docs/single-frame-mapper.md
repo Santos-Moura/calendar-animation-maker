@@ -58,6 +58,28 @@ Every target cell becomes exactly one event. For every day and row, all calibrat
 
 This does not create an API-level subcolumn property. Events are emitted deterministically in `day -> row -> subcolumn` order, while final visual ordering still belongs to Google Calendar and must be inspected in the real UI.
 
+## Subcolumn ordering risk
+
+The mapper uses the explicit submission key:
+
+```text
+(day_offset, logical_y, subcolumn_index)
+```
+
+`frame-plan.json` preserves that order, `SingleFrameMappingService` passes the list unchanged, and both gateways iterate it sequentially. `mapping-report.txt` records the strategy and prints one row-ordering sample such as:
+
+```text
+day_offset=1 row=4
+0 -> colorId 8 background
+1 -> colorId 8 background
+2 -> colorId 5 foreground
+3 -> colorId 8 background
+4 -> colorId 3 foreground
+5 -> colorId 8 background
+```
+
+That proves internal determinism only. Google Calendar has no `subcolumn` API field, so the separate `subcolumn-order` calibration must verify actual left-to-right behavior using forward, reverse, and shuffled creation sequences. Full-grid guarantees six occupied cells, but not visual fidelity until that real observation is stable.
+
 ## Source background versus structural background
 
 These are different concepts:
@@ -112,7 +134,7 @@ output/frame-mapping/<run_id>/
 - `source-frame.png` is the processed manifest image;
 - `mapped-preview.png` is a solid logical pixel canvas, not Calendar CSS;
 - `mapped-debug.png` adds rows, subcolumns, and day boundaries;
-- `mapping-report.txt` includes both mode estimates;
+- `mapping-report.txt` includes both mode estimates, the submission-order strategy, and a row sample;
 - `frame-plan.json` records mode, background, roles, metrics, events, and metadata.
 
 The report distinguishes expanded source cells, fitted foreground, structural background, total cells, foreground/background events, foreground colors, and execution limits.
@@ -122,11 +144,11 @@ For the tested frame 0:
 ```text
 Source grid: 28x20
 Target grid: 42x24
-Expanded source cells: 75
-Foreground cells after fitting: 101
+Expanded source cells: 26
+Foreground cells after fitting: 32
 
-Sparse events: 101
-Full-grid background cells: 907
+Sparse events: 32
+Full-grid background cells: 976
 Full-grid events: 1008
 ```
 
@@ -150,7 +172,7 @@ Real execution additionally requires:
 
 - explicit `--execute`;
 - explicit `--start-date`;
-- a complete calibration profile;
+- a complete calibration profile, including stable `subcolumn-order` evidence;
 - confirmation defaulting to `N`, unless `--yes` is supplied;
 - the recognized secondary `Calendar Animation Lab`;
 - no existing frame with the same run metadata.
@@ -178,8 +200,9 @@ Calendar API writes are not visually atomic. The future animation will pre-uploa
 
 ```text
 full-grid single frame
-    -> compare with real Calendar
-    -> validate subcolumn ordering
+    -> subcolumn-order calibration
+    -> record stable ordering evidence
+    -> compare one full-grid frame with real Calendar
     -> validate shape fidelity
     -> test 2-3 frames
     -> identify fillers that can be removed safely

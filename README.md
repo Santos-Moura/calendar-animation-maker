@@ -34,7 +34,7 @@ flowchart LR
 - deterministic Calendar calibration patterns with JSON/text/PNG artifacts;
 - opt-in OAuth upload of at most 30 calibration events by default to a dedicated lab calendar;
 - duplicate-run detection and cleanup filtered by private metadata.
-- structured color, position, and horizontal-bar observations with mapper-readiness summary.
+- structured color, position, horizontal-bar, and subcolumn-order observations with mapper-readiness summary.
 - sparse and full-grid one-frame mapping, Calendar color mapping, local comparison artifacts, and guarded upload.
 
 ## Install
@@ -128,7 +128,15 @@ python -m calendar_anim calendar calibration-summary
 
 The current measured profile records six usable overlap columns per day and therefore derives a candidate `42x24` grid. The local profile separates minimum visible duration from minimum distinguishable height and leaves missing measurements as `pending`. The expected-layout PNG is only a logical reference—not a simulation of Google's layout. See [Google setup](docs/google-calendar-setup.md), [calibration guide](docs/calendar-calibration.md), and [security](docs/calendar-security.md).
 
-The calibration observations extend the local profile without inventing defaults. `calendar calibration-summary` reports each section as pending, incomplete, or recorded and only reports readiness for a single-frame experiment after all five calibration areas have complete measurements.
+The calibration observations extend the local profile without inventing defaults. `calendar calibration-summary` reports each section as pending, incomplete, or recorded. Readiness now also requires a real `subcolumn-order` observation proving that creation order remains stable after refresh, navigation, and reopening.
+
+Before any full-grid upload, run the 24-event ordering experiment locally and inspect its logical artifacts:
+
+```powershell
+python -m calendar_anim calendar calibrate --pattern subcolumn-order --start-date 2026-09-07 --run-id slot-order-real-01
+```
+
+The pattern contains two forward groups, one reverse group, and one shuffled group. Its logical preview documents creation order only; Google Calendar still decides the actual left-to-right layout.
 
 ## Single-frame Calendar mapper
 
@@ -145,7 +153,7 @@ The command reads `output/calibration/calibration-profile.yaml` by default and w
 
 For the current candidate grid, full-grid costs `42x24 = 1008` events for one frame. Twelve frames would require 12,096 events and 60 frames would require 60,480 events before any future optimization. These volumes are estimates, not guaranteed safe Calendar workloads.
 
-Dry-run remains available while `horizontal-bars` is pending, but real upload is blocked until the profile reports `READY FOR SINGLE-FRAME EXPERIMENT`. An upload additionally requires an explicit date, event-limit validation, confirmation, OAuth, the laboratory calendar, and a unique frame run:
+Dry-run remains available while any calibration is pending, but real upload is blocked until the profile reports `READY FOR SINGLE-FRAME EXPERIMENT`. An upload additionally requires an explicit date, event-limit validation, confirmation, OAuth, the laboratory calendar, and a unique frame run. In particular, do not execute a full-grid frame before `subcolumn-order` has been observed and recorded:
 
 ```powershell
 python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --calendar-background-color-id 8 --start-date 2026-09-07 --run-id frame-full-grid-001 --execute
@@ -177,7 +185,7 @@ Playwright will eventually use a separate persistent profile after manual authen
 
 ## Limitations and roadmap
 
-Calendar colors and final event ordering still require manual validation. Only calibration and one-frame uploads are supported; there is no hybrid mapping, multi-frame upload, batching/resume, Playwright selector implementation, vertical block merge, or final screenshot composition.
+Calendar colors and final event ordering still require manual validation. The `subcolumn-order` calibration exists to perform that validation before the first full-grid upload. Only calibration and one-frame uploads are supported; there is no hybrid mapping, multi-frame upload, batching/resume, Playwright selector implementation, vertical block merge, or final screenshot composition.
 
 1. **Phase 0 – calibration:** a few static events, useful resolution, event duration, zoom, and window size.
 2. **Phase 1 – local MVP:** video, frames, pixelization, GIF, manifest, and estimate (implemented).
