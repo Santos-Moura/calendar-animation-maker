@@ -110,9 +110,7 @@ class AnimationRunStore:
             raise CalendarAnimError(f"Animation plan has no frame {frame_index}")
         return self.run_directory(plan.run_id) / frame.artifact_directory
 
-    def load_frame_plan(
-        self, plan: MultiFramePlan, frame_index: int
-    ) -> SingleFrameCalendarPlan:
+    def load_frame_plan(self, plan: MultiFramePlan, frame_index: int) -> SingleFrameCalendarPlan:
         path = self.frame_directory(plan, frame_index) / "frame-plan.json"
         try:
             return SingleFrameCalendarPlan.model_validate_json(path.read_text(encoding="utf-8"))
@@ -121,9 +119,7 @@ class AnimationRunStore:
         except (OSError, ValidationError, ValueError) as error:
             raise CalendarAnimError(f"Invalid frame plan: {path}") from error
 
-    def save_frame_result(
-        self, plan: MultiFramePlan, result: FrameUploadExecutionResult
-    ) -> Path:
+    def save_frame_result(self, plan: MultiFramePlan, result: FrameUploadExecutionResult) -> Path:
         path = self.frame_directory(plan, result.frame_index) / "execution-result.json"
         _write_json_atomic(path, result.model_dump_json(indent=2) + "\n")
         return path
