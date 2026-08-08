@@ -112,3 +112,11 @@ class FrameUploadExecutionResult(BaseModel):
     failed_events: int = Field(default=0, ge=0)
     created_event_ids: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+
+
+class AnimationCleanupResult(BaseModel):
+    selected_frames: list[int]
+    matched_events: int = Field(ge=0)
+    deleted_events: int = Field(ge=0)
+    failed_events: int = Field(ge=0)
+    errors: list[str] = Field(default_factory=list)
