@@ -129,6 +129,36 @@ def test_capture_dry_run_writes_plan_without_opening_browser(
     assert (capture_root / "capture-cli/capture-report.txt").is_file()
 
 
+def test_browser_login_uses_normal_chrome_launcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Path, Path | None]] = []
+    monkeypatch.setattr(
+        capture_commands,
+        "launch_manual_login_browser",
+        lambda profile, executable: calls.append((profile, executable)),
+    )
+    profile = tmp_path / "browser-profile"
+    chrome = tmp_path / "chrome.exe"
+
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "browser-login",
+            "--profile-directory",
+            str(profile),
+            "--browser-executable",
+            str(chrome),
+        ],
+        input="\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "normal Google Chrome" in result.output
+    assert calls == [(profile, chrome)]
+
+
 def test_capture_execute_uses_fake_browser_and_resume_skips_completed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -168,6 +198,18 @@ def test_capture_execute_uses_fake_browser_and_resume_skips_completed(
     assert "Frames: 2" in composition.output
     assert "GIF:" in composition.output
     assert (capture_root / "capture-cli/animation.gif").is_file()
+
+    recapture = runner.invoke(app, [*command, "--recapture"])
+    assert recapture.exit_code == 0, recapture.output
+    assert "Previous capture backup:" in recapture.output
+    assert FakePlaywrightGateway.instances[-1].weeks == [
+        date(2026, 10, 4),
+        date(2026, 10, 11),
+    ]
+    backups = list((capture_root / "capture-cli/backups").glob("*"))
+    assert len(backups) == 1
+    assert (backups[0] / "animation.gif").is_file()
+    assert (backups[0] / "frames/frame-0000.png").is_file()
 
 
 def test_capture_rejects_incomplete_upload_before_browser(
