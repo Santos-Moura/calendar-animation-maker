@@ -40,6 +40,8 @@ def build_report(plan: CalibrationPlan, executed: bool) -> str:
         return _build_subcolumn_order_report(plan, executed)
     if plan.pattern == "vertical-compression":
         return _build_vertical_compression_report(plan, executed)
+    if plan.pattern == "synchronized-horizontal-bands":
+        return _build_synchronized_horizontal_bands_report(plan, executed)
 
     lines = [
         "Calendar Animation Calibration",
@@ -432,6 +434,62 @@ def _build_vertical_compression_report(plan: CalibrationPlan, executed: bool) ->
     return "\n".join(lines)
 
 
+def _build_synchronized_horizontal_bands_report(plan: CalibrationPlan, executed: bool) -> str:
+    groups: dict[str, list[CalendarEventDraft]] = defaultdict(list)
+    for event in plan.events:
+        groups[event.private_metadata["group"]].append(event)
+    lines = [
+        "Synchronized Horizontal Bands Calibration",
+        "=========================================",
+        "",
+        f"Run ID: {plan.run_id}",
+        f"Start date: {plan.start_date.isoformat()}",
+        f"Timezone: {plan.timezone}",
+        f"Calendar: {plan.calendar_name}",
+        f"Events: {plan.event_count}",
+        f"Execution: {'REAL' if executed else 'DRY RUN'}",
+        "Summary keys: 00, 01, 02, 03, 04, 05",
+        "Every group contains six events with identical starts and ends.",
+        "",
+        "Bands",
+        "-----",
+    ]
+    for group, events in groups.items():
+        foreground = sum(event.private_metadata["cell_role"] == "foreground" for event in events)
+        lines.extend(
+            [
+                group,
+                f"  Time: {events[0].start:%H:%M}-{events[0].end:%H:%M}",
+                f"  Events: {len(events)}",
+                f"  Foreground/background slots: {foreground}/{len(events) - foreground}",
+                "  Expected order: 00 01 02 03 04 05",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Observed Results",
+            "================",
+            "",
+            "All bands keep equal widths: yes/no",
+            "All bands keep 00..05 order: yes/no",
+            "Color vectors appear in the intended slots: yes/no",
+            "Adjacent band boundaries remain aligned: yes/no",
+            "Stable after refresh: yes/no",
+            "Stable after navigation: yes/no",
+            "Visually acceptable: yes/no",
+            "Safe for production mapper: yes/no",
+            "",
+            "Notes:",
+            "",
+            "Expected synchronized geometry. Validate the real Google Calendar layout manually.",
+            "No production event compression is enabled by this calibration.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def write_report(plan: CalibrationPlan, output_dir: Path, executed: bool = False) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "calibration-report.txt"
@@ -458,6 +516,7 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
         "horizontal-bars": "Horizontal Bars Calibration",
         "subcolumn-order": "Subcolumn Order Calibration",
         "vertical-compression": "Vertical Event Compression Calibration",
+        "synchronized-horizontal-bands": "Synchronized Horizontal Bands Calibration",
     }
     if plan.pattern in preview_titles:
         draw.text((15, 12), preview_titles[plan.pattern], fill="black", font=font)
@@ -468,7 +527,7 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
             font=font,
         )
     day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    if plan.pattern == "vertical-compression":
+    if plan.pattern in {"vertical-compression", "synchronized-horizontal-bands"}:
         day_names = [
             (plan.start_date + timedelta(days=offset)).strftime("%a") for offset in range(7)
         ]
@@ -513,7 +572,13 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
         y2 = top + ((end_minutes / 60) - start_hour) * hour_height
         group_name = event.private_metadata.get("group", "ungrouped")
         if (
-            plan.pattern in {"overlap-columns", "horizontal-bars", "subcolumn-order"}
+            plan.pattern
+            in {
+                "overlap-columns",
+                "horizontal-bars",
+                "subcolumn-order",
+                "synchronized-horizontal-bands",
+            }
             and group_name not in labeled_groups
         ):
             draw.text((8, round(y1) + 2), group_name, fill="#424242", font=font)
@@ -590,6 +655,15 @@ def write_dry_run_artifacts(plan: CalibrationPlan, output_dir: Path) -> None:
                 run_id=plan.run_id,
                 pattern=plan.pattern,
                 observations={"vertical_compression": {}},
+            ),
+            output_dir / "calibration-observations.yaml",
+        )
+    elif plan.pattern == "synchronized-horizontal-bands":
+        write_observations(
+            CalibrationObservations(
+                run_id=plan.run_id,
+                pattern=plan.pattern,
+                observations={"synchronized_horizontal_bands": {}},
             ),
             output_dir / "calibration-observations.yaml",
         )

@@ -23,6 +23,7 @@ def test_cli_lists_patterns() -> None:
     assert "overlap-columns" in result.output
     assert "subcolumn-order" in result.output
     assert "vertical-compression" in result.output
+    assert "synchronized-horizontal-bands" in result.output
     assert "combined" in result.output
 
 

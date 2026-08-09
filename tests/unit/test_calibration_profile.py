@@ -326,3 +326,35 @@ def test_slot_order_observations_require_each_index_exactly_once() -> None:
             pattern="subcolumn-order",
             observations={"visual_order_forward": [0, 1, 2, 3, 4, 4]},
         )
+
+
+def test_synchronized_band_observations_are_reported_without_changing_mapper_readiness() -> None:
+    profile = make_ready_calibration_profile()
+    observations = CalibrationObservations(
+        run_id="synchronized-observed",
+        pattern="synchronized-horizontal-bands",
+        observations={
+            "synchronized_horizontal_bands": {
+                "equal_widths_preserved": True,
+                "slot_order_preserved": True,
+                "color_vectors_preserved": True,
+                "adjacent_boundaries_stable": True,
+                "stable_after_refresh": True,
+                "stable_after_navigation": True,
+                "visually_acceptable": True,
+                "safe_for_mapper": False,
+                "notes": "Synthetic observation for profile coverage.",
+            }
+        },
+    )
+
+    updated = apply_observations(profile, observations)
+    summary = profile_summary(updated)
+
+    assert updated.mapper_ready is True
+    assert updated.synchronized_horizontal_bands is not None
+    assert updated.synchronized_horizontal_bands.safe_for_mapper is False
+    assert "Synchronized horizontal bands experiment" in summary
+    assert "Status: recorded" in summary
+    assert "Equal widths preserved: yes" in summary
+    assert "Safe for production mapper: no" in summary

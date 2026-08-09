@@ -17,6 +17,7 @@ CalibrationPattern = Literal[
     "horizontal-bars",
     "subcolumn-order",
     "vertical-compression",
+    "synchronized-horizontal-bands",
     "combined",
 ]
 SlotOrderStrategy = Literal[
@@ -119,6 +120,18 @@ class VerticalCompressionObservations(BaseModel):
     conclusion: VerticalCompressionConclusion = Field(default_factory=VerticalCompressionConclusion)
 
 
+class SynchronizedHorizontalBandObservations(BaseModel):
+    equal_widths_preserved: bool | None = None
+    slot_order_preserved: bool | None = None
+    color_vectors_preserved: bool | None = None
+    adjacent_boundaries_stable: bool | None = None
+    stable_after_refresh: bool | None = None
+    stable_after_navigation: bool | None = None
+    visually_acceptable: bool | None = None
+    safe_for_mapper: bool | None = None
+    notes: str = ""
+
+
 class CalibrationObservationValues(BaseModel):
     """Human observations, including fields written by older releases."""
 
@@ -158,6 +171,7 @@ class CalibrationObservationValues(BaseModel):
     ordering_controlling_property: OrderingControllingProperty | None = None
     ordering_factor_stable: bool | None = None
     vertical_compression: VerticalCompressionObservations | None = None
+    synchronized_horizontal_bands: SynchronizedHorizontalBandObservations | None = None
     notes: str = ""
 
     # Compatibility with observation YAML written before the two vertical
@@ -382,6 +396,7 @@ class CalibrationProfile(BaseModel):
         default_factory=SubcolumnOrderMappingProfile
     )
     vertical_compression: VerticalCompressionObservations | None = None
+    synchronized_horizontal_bands: SynchronizedHorizontalBandObservations | None = None
     candidate_grid: CandidateGridProfile = Field(default_factory=CandidateGridProfile)
 
     @model_validator(mode="after")

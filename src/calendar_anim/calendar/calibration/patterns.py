@@ -89,6 +89,11 @@ PATTERNS: Final[dict[CalibrationPattern, PatternDescription]] = {
         description="Compare unit cells with vertically compressed mixed-duration columns",
         approximate_events=30,
     ),
+    "synchronized-horizontal-bands": PatternDescription(
+        name="synchronized-horizontal-bands",
+        description="Test six-slot cohorts with synchronized starts and ends",
+        approximate_events=30,
+    ),
     "combined": PatternDescription(
         name="combined",
         description="Small combined calibration suite",
@@ -382,6 +387,66 @@ def _vertical_compression(start: date, zone: ZoneInfo) -> list[CalendarEventDraf
     return events
 
 
+def _synchronized_horizontal_bands(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
+    foreground = EVENT_COLORS[1]
+    background = EVENT_COLORS[7]
+    bands = (
+        ("band-uniform-long", 6, 0, 120, [foreground] * 6),
+        (
+            "band-vector-a",
+            8,
+            0,
+            60,
+            [foreground, background, foreground, background, foreground, background],
+        ),
+        (
+            "band-vector-b",
+            9,
+            0,
+            90,
+            [background, foreground, background, foreground, background, foreground],
+        ),
+        (
+            "band-background-heavy",
+            10,
+            30,
+            150,
+            [background, background, background, background, foreground, foreground],
+        ),
+        (
+            "band-foreground-heavy",
+            13,
+            0,
+            300,
+            [foreground, foreground, foreground, foreground, background, background],
+        ),
+    )
+    events: list[CalendarEventDraft] = []
+    for band_index, (group, hour, minute, duration, colors) in enumerate(bands):
+        for slot, color in enumerate(colors):
+            events.append(
+                _event(
+                    start,
+                    hour,
+                    minute,
+                    duration,
+                    zone,
+                    f"{slot:02d}",
+                    group,
+                    color,
+                    {
+                        "experiment": "synchronized-horizontal-bands",
+                        "representation": "synchronized-band",
+                        "band_index": str(band_index),
+                        "subcolumn_index": str(slot),
+                        "duration_minutes": str(duration),
+                        "cell_role": "foreground" if color == foreground else "background",
+                    },
+                )
+            )
+    return events
+
+
 def _combined(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
     events = [
         _event(
@@ -455,6 +520,7 @@ def build_calibration_plan(
         "horizontal-bars": _horizontal_bars,
         "subcolumn-order": _subcolumn_order,
         "vertical-compression": _vertical_compression,
+        "synchronized-horizontal-bands": _synchronized_horizontal_bands,
         "combined": _combined,
     }
     events = builders[pattern](start_date, zone)

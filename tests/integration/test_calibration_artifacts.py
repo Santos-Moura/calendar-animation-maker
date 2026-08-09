@@ -157,3 +157,32 @@ def test_vertical_compression_writes_specific_report_preview_and_observation_tem
 
     with Image.open(tmp_path / "expected-layout.png") as image:
         assert image.size == (1400, 900)
+
+
+def test_synchronized_bands_write_report_preview_and_observation_template(
+    tmp_path: Path,
+) -> None:
+    plan = build_calibration_plan(
+        "synchronized-horizontal-bands",
+        date(2026, 11, 22),
+        run_id="synchronized-band-artifacts",
+    )
+    write_dry_run_artifacts(plan, tmp_path)
+
+    report = (tmp_path / "calibration-report.txt").read_text(encoding="utf-8")
+    assert report.startswith("Synchronized Horizontal Bands Calibration")
+    assert "band-uniform-long\n  Time: 06:00-08:00\n  Events: 6" in report
+    assert "band-foreground-heavy\n  Time: 13:00-18:00\n  Events: 6" in report
+    assert "Every group contains six events with identical starts and ends." in report
+    assert "All bands keep equal widths: yes/no" in report
+
+    observations = yaml.safe_load(
+        (tmp_path / "calibration-observations.yaml").read_text(encoding="utf-8")
+    )
+    synchronized = observations["observations"]["synchronized_horizontal_bands"]
+    assert synchronized["equal_widths_preserved"] is None
+    assert synchronized["slot_order_preserved"] is None
+    assert synchronized["safe_for_mapper"] is None
+
+    with Image.open(tmp_path / "expected-layout.png") as image:
+        assert image.size == (1400, 900)

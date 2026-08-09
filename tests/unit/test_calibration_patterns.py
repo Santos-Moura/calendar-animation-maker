@@ -24,6 +24,7 @@ EXPECTED_COUNTS = {
     "horizontal-bars": 21,
     "subcolumn-order": 24,
     "vertical-compression": 30,
+    "synchronized-horizontal-bands": 30,
     "combined": 27,
 }
 
@@ -248,6 +249,49 @@ def test_vertical_compression_has_control_compressed_mixed_and_staggered_groups(
     assert all(
         event.summary == event.private_metadata["subcolumn_index"].zfill(2) for event in plan.events
     )
+
+
+def test_synchronized_horizontal_bands_keep_six_equal_intervals_per_group() -> None:
+    plan = build_calibration_plan(
+        "synchronized-horizontal-bands", START, run_id="synchronized-bands-run"
+    )
+    groups: dict[str, list] = {}
+    for event in plan.events:
+        groups.setdefault(event.private_metadata["group"], []).append(event)
+
+    assert list(groups) == [
+        "band-uniform-long",
+        "band-vector-a",
+        "band-vector-b",
+        "band-background-heavy",
+        "band-foreground-heavy",
+    ]
+    assert [len(events) for events in groups.values()] == [6] * 5
+    assert [event.summary for event in plan.events] == [
+        f"{slot:02d}" for _ in range(5) for slot in range(6)
+    ]
+    assert [
+        round((events[0].end - events[0].start).total_seconds() / 60) for events in groups.values()
+    ] == [120, 60, 90, 150, 300]
+    for band_index, events in enumerate(groups.values()):
+        assert len({event.start for event in events}) == 1
+        assert len({event.end for event in events}) == 1
+        assert {event.private_metadata["band_index"] for event in events} == {str(band_index)}
+        assert [event.private_metadata["subcolumn_index"] for event in events] == [
+            str(slot) for slot in range(6)
+        ]
+        assert {event.private_metadata["representation"] for event in events} == {
+            "synchronized-band"
+        }
+    ordered = list(groups.values())
+    assert all(
+        left[0].end == right[0].start for left, right in zip(ordered, ordered[1:], strict=False)
+    )
+    assert {event.color_id for event in plan.events} == {"2", "8"}
+    assert {event.private_metadata["cell_role"] for event in plan.events} == {
+        "foreground",
+        "background",
+    }
 
 
 def test_limit_is_enforced_and_can_be_explicitly_increased() -> None:

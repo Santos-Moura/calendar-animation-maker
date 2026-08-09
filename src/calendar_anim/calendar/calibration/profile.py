@@ -124,6 +124,8 @@ def apply_observations(
 
     if values.vertical_compression is not None:
         profile.vertical_compression = values.vertical_compression
+    if values.synchronized_horizontal_bands is not None:
+        profile.synchronized_horizontal_bands = values.synchronized_horizontal_bands
 
     if recorded.pattern == "color-palette" and values.notes:
         profile.color_mapping.notes = values.notes
@@ -147,6 +149,7 @@ def profile_summary(profile: CalibrationProfile) -> str:
     bars = profile.horizontal_bar_mapping
     slot_order = profile.subcolumn_order_mapping
     vertical_compression = profile.vertical_compression
+    synchronized_bands = profile.synchronized_horizontal_bands
     vertical_pending = "pending calibration"
     control_height = vertical_pending
     control_equivalent = vertical_pending
@@ -161,6 +164,19 @@ def profile_summary(profile: CalibrationProfile) -> str:
         staggered_stable = _yes_no(vertical_compression.staggered.overlap_layout_stable)
         compression_acceptable = _yes_no(vertical_compression.conclusion.visually_acceptable)
         compression_safe = _yes_no(vertical_compression.conclusion.safe_for_mapper)
+
+    synchronized_pending = "pending calibration"
+    synchronized_widths = synchronized_pending
+    synchronized_order = synchronized_pending
+    synchronized_boundaries = synchronized_pending
+    synchronized_acceptable = synchronized_pending
+    synchronized_safe = synchronized_pending
+    if synchronized_bands is not None:
+        synchronized_widths = _yes_no(synchronized_bands.equal_widths_preserved)
+        synchronized_order = _yes_no(synchronized_bands.slot_order_preserved)
+        synchronized_boundaries = _yes_no(synchronized_bands.adjacent_boundaries_stable)
+        synchronized_acceptable = _yes_no(synchronized_bands.visually_acceptable)
+        synchronized_safe = _yes_no(synchronized_bands.safe_for_mapper)
 
     viewport = "pending"
     if ui.viewport_width is not None and ui.viewport_height is not None:
@@ -259,6 +275,14 @@ def profile_summary(profile: CalibrationProfile) -> str:
         f"  Visually acceptable: {compression_acceptable}",
         f"  Safe for production mapper: {compression_safe}",
         "",
+        "Synchronized horizontal bands experiment",
+        f"  Status: {_synchronized_bands_status(synchronized_bands)}",
+        f"  Equal widths preserved: {synchronized_widths}",
+        f"  Slot order preserved: {synchronized_order}",
+        f"  Adjacent boundaries stable: {synchronized_boundaries}",
+        f"  Visually acceptable: {synchronized_acceptable}",
+        f"  Safe for production mapper: {synchronized_safe}",
+        "",
         (
             "Candidate logical grid: "
             f"{_candidate_grid(profile.candidate_grid.width, profile.candidate_grid.height)}"
@@ -333,6 +357,14 @@ def _vertical_compression_status(value: Any | None) -> str:
     if conclusion.visually_acceptable is not None and conclusion.safe_for_mapper is not None:
         return "recorded"
     return "incomplete vertical-compression calibration"
+
+
+def _synchronized_bands_status(value: Any | None) -> str:
+    if value is None:
+        return "pending synchronized-horizontal-bands calibration"
+    if value.visually_acceptable is not None and value.safe_for_mapper is not None:
+        return "recorded"
+    return "incomplete synchronized-horizontal-bands calibration"
 
 
 def _color_status(profile: CalibrationProfile) -> str:
