@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -5,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
+from calendar_anim.calendar.frame_mapping.models import EventCompressionMode
 from calendar_anim.calendar.multi_frame.artifacts import (
     AnimationRunStore,
     build_animation_report,
@@ -45,6 +47,7 @@ def _planned_run(tmp_path: Path):
         anchor_date=date(2026, 10, 4),
         run_id="artifact-test",
         max_events_per_frame=1200,
+        event_compression=EventCompressionMode.NONE,
     )
     return manifest, plan, frame_plans
 
@@ -122,3 +125,25 @@ def test_existing_plan_cannot_be_changed(tmp_path: Path) -> None:
 
     with pytest.raises(CalendarAnimError, match="different content"):
         store.save_plan(changed)
+
+
+def test_legacy_persisted_plans_without_compression_field_load_as_none(tmp_path: Path) -> None:
+    manifest, plan, frame_plans = _planned_run(tmp_path)
+    store = AnimationRunStore(tmp_path / "runs")
+    initialize_animation_run(plan, frame_plans, manifest, tmp_path / "animation.json", store)
+
+    plan_path = store.run_directory(plan.run_id) / "animation-plan.json"
+    plan_payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan_payload.pop("event_compression")
+    plan_path.write_text(json.dumps(plan_payload), encoding="utf-8")
+
+    frame_path = store.frame_directory(plan, 0) / "frame-plan.json"
+    frame_payload = json.loads(frame_path.read_text(encoding="utf-8"))
+    frame_payload.pop("event_compression")
+    frame_path.write_text(json.dumps(frame_payload), encoding="utf-8")
+
+    loaded_plan = store.load_plan(plan.run_id)
+    loaded_frame = store.load_frame_plan(loaded_plan, 0)
+
+    assert loaded_plan.event_compression is EventCompressionMode.NONE
+    assert loaded_frame.event_compression is EventCompressionMode.NONE

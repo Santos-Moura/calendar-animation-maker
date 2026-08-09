@@ -2,6 +2,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 from PIL import Image
 
 from calendar_anim.calendar.calibration.artifacts import (
@@ -126,3 +127,62 @@ def test_subcolumn_order_serialization_preserves_creation_sequence(tmp_path: Pat
     assert [event.private_metadata["subcolumn_index"] for event in loaded.events] == [
         event.private_metadata["subcolumn_index"] for event in plan.events
     ]
+
+
+def test_vertical_compression_writes_specific_report_preview_and_observation_template(
+    tmp_path: Path,
+) -> None:
+    plan = build_calibration_plan(
+        "vertical-compression", date(2026, 11, 15), run_id="vertical-artifacts"
+    )
+    write_dry_run_artifacts(plan, tmp_path)
+
+    report = (tmp_path / "calibration-report.txt").read_text(encoding="utf-8")
+    assert report.startswith("Vertical Event Compression Calibration")
+    assert "CONTROL\n-------\nevents: 12" in report
+    assert "COMPRESSED\n----------\nevents: 6" in report
+    assert "MIXED LENGTH\n------------\nevents: 6" in report
+    assert "STAGGERED\n---------\nevents: 6" in report
+    assert "Compressed columns keep 00..05 order: yes/no" in report
+    assert "No result is inferred by this dry-run." in report
+
+    observations = yaml.safe_load(
+        (tmp_path / "calibration-observations.yaml").read_text(encoding="utf-8")
+    )
+    vertical = observations["observations"]["vertical_compression"]
+    assert vertical["control_vs_compressed"]["same_total_height"] is None
+    assert vertical["fixed_start_mixed_duration"]["slot_order_preserved"] is None
+    assert vertical["staggered"]["overlap_layout_stable"] is None
+    assert vertical["conclusion"]["safe_for_mapper"] is None
+
+    with Image.open(tmp_path / "expected-layout.png") as image:
+        assert image.size == (1400, 900)
+
+
+def test_synchronized_bands_write_report_preview_and_observation_template(
+    tmp_path: Path,
+) -> None:
+    plan = build_calibration_plan(
+        "synchronized-horizontal-bands",
+        date(2026, 11, 22),
+        run_id="synchronized-band-artifacts",
+    )
+    write_dry_run_artifacts(plan, tmp_path)
+
+    report = (tmp_path / "calibration-report.txt").read_text(encoding="utf-8")
+    assert report.startswith("Synchronized Horizontal Bands Calibration")
+    assert "band-uniform-long\n  Time: 06:00-08:00\n  Events: 6" in report
+    assert "band-foreground-heavy\n  Time: 13:00-18:00\n  Events: 6" in report
+    assert "Every group contains six events with identical starts and ends." in report
+    assert "All bands keep equal widths: yes/no" in report
+
+    observations = yaml.safe_load(
+        (tmp_path / "calibration-observations.yaml").read_text(encoding="utf-8")
+    )
+    synchronized = observations["observations"]["synchronized_horizontal_bands"]
+    assert synchronized["equal_widths_preserved"] is None
+    assert synchronized["slot_order_preserved"] is None
+    assert synchronized["safe_for_mapper"] is None
+
+    with Image.open(tmp_path / "expected-layout.png") as image:
+        assert image.size == (1400, 900)

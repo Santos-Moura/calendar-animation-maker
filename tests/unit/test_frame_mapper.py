@@ -16,7 +16,12 @@ from calendar_anim.calendar.frame_mapping.mapper import (
     resolve_week_start,
     select_frame,
 )
-from calendar_anim.calendar.frame_mapping.models import CellRole, FrameMappingMode, LogicalCell
+from calendar_anim.calendar.frame_mapping.models import (
+    CellRole,
+    EventCompressionMode,
+    FrameMappingMode,
+    LogicalCell,
+)
 from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.frame import Block
@@ -244,6 +249,77 @@ def test_full_grid_plan_has_fillers_metadata_and_exact_canvas_size() -> None:
     assert plan.events[3].private_metadata["subcolumn_order_key"] == "03"
 
 
+def test_synchronized_band_compression_keeps_canvas_and_merges_equal_row_vectors() -> None:
+    manifest = make_manifest(Block(x=0, y=0, width=6, height=2, color_id="0", color_hex="#039BE5"))
+    manifest.render.grid_width = 6
+    manifest.render.grid_height = 4
+    plan = build_single_frame_plan(
+        manifest,
+        _small_profile(height=4),
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="compressed-bands",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+        event_compression=EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
+        calendar_background_color_id="8",
+    )
+
+    assert len(plan.mapped_cells) == 24
+    assert plan.event_count == 12
+    assert plan.statistics.baseline_calendar_events == 24
+    assert plan.statistics.saved_calendar_events == 12
+    assert plan.statistics.synchronized_horizontal_bands == 2
+    assert plan.statistics.foreground_events == 6
+    assert plan.statistics.background_events == 6
+    assert plan.statistics.cells_per_event == 2
+    assert plan.statistics.compression_ratio == 0.5
+    assert {event.end - event.start for event in plan.events} == {timedelta(hours=2)}
+    assert [event.summary for event in plan.events[:6]] == [
+        "00",
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+    ]
+    assert plan.events[0].private_metadata["band_start_y"] == "0"
+    assert plan.events[0].private_metadata["band_end_y_exclusive"] == "2"
+    assert plan.events[0].private_metadata["band_length_rows"] == "2"
+    assert plan.events[0].private_metadata["event_compression"] == "synchronized-horizontal-bands"
+    assert plan.profile_ready is True
+
+
+def test_synchronized_band_compression_requires_full_grid_and_approved_profile() -> None:
+    with pytest.raises(CalendarAnimError, match="requires full-grid"):
+        build_single_frame_plan(
+            make_manifest(),
+            make_ready_calibration_profile(),
+            frame_index=0,
+            anchor_date=date(2026, 9, 6),
+            run_id="invalid-compression",
+            max_execute_events=1200,
+            mapping_mode=FrameMappingMode.SPARSE,
+            event_compression=EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
+        )
+
+    profile = make_ready_calibration_profile()
+    profile.synchronized_horizontal_bands = None
+    plan = build_single_frame_plan(
+        make_manifest(),
+        profile,
+        frame_index=0,
+        anchor_date=date(2026, 9, 6),
+        run_id="unapproved-compression",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+        event_compression=EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
+    )
+
+    assert plan.profile_ready is False
+    assert any("not approved" in warning for warning in plan.warnings)
+
+
 def test_full_grid_contain_centers_foreground_and_fills_borders() -> None:
     manifest = make_manifest(Block(x=0, y=0, width=2, color_id="0", color_hex="#039BE5"))
     manifest.render.grid_width = 2
@@ -296,6 +372,7 @@ def test_sparse_mode_preserves_foreground_only_count() -> None:
         run_id="sparse",
         max_execute_events=500,
         mapping_mode=FrameMappingMode.SPARSE,
+        event_compression=EventCompressionMode.NONE,
     )
     assert plan.background_color_id is None
     assert plan.statistics.background_events == 0
@@ -314,6 +391,7 @@ def test_full_grid_order_and_six_columns_are_deterministic_for_every_day_row() -
         run_id="ordered",
         max_execute_events=1200,
         mapping_mode=FrameMappingMode.FULL_GRID,
+        event_compression=EventCompressionMode.NONE,
     )
     order = [
         (
@@ -454,13 +532,16 @@ def test_build_plan_expands_blocks_adds_metadata_and_statistics() -> None:
     assert plan.week_start_date == date(2026, 9, 6)
     assert plan.statistics.source_blocks == 1
     assert plan.statistics.expanded_logical_cells == 2
-    assert plan.statistics.mapped_cells > 2
+    assert plan.mapping_mode is FrameMappingMode.FULL_GRID
+    assert plan.event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS
+    assert plan.statistics.mapped_cells == 42 * 24
     assert plan.statistics.calendar_events == len(plan.events)
-    assert plan.statistics.cells_per_event == 1
-    assert plan.statistics.compression_ratio == 1
+    assert plan.statistics.calendar_events < plan.statistics.baseline_calendar_events
+    assert plan.statistics.cells_per_event > 1
+    assert plan.statistics.compression_ratio < 1
     assert plan.events[0].private_metadata["generated_by"] == "calendar-anim"
     assert plan.events[0].private_metadata["frame_index"] == "0"
-    assert "logical_x" in plan.events[0].private_metadata
+    assert plan.events[0].private_metadata["event_compression"] == ("synchronized-horizontal-bands")
 
 
 def test_frame_selection_reports_exact_valid_range() -> None:

@@ -39,8 +39,14 @@ from calendar_anim.calendar.frame_mapping.artifacts import (
     write_frame_execution_result,
     write_frame_mapping_artifacts,
 )
-from calendar_anim.calendar.frame_mapping.mapper import build_single_frame_plan, select_frame
+from calendar_anim.calendar.frame_mapping.mapper import (
+    build_single_frame_plan,
+    select_frame,
+    synchronized_horizontal_bands_ready,
+)
 from calendar_anim.calendar.frame_mapping.models import (
+    DEFAULT_EVENT_COMPRESSION,
+    EventCompressionMode,
     FitMode,
     FrameMappingMode,
     SingleFrameExecutionResult,
@@ -53,9 +59,15 @@ from calendar_anim.calendar.frame_mapping.service import (
 from calendar_anim.calendar.gateway import CalendarGateway
 from calendar_anim.calendar.google_auth import GoogleOAuthClient, GoogleOAuthConfig
 from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
+from calendar_anim.calendar.horizontal_band_compression.commands import (
+    register_horizontal_band_compression_commands,
+)
 from calendar_anim.calendar.lab import LAB_CALENDAR_DESCRIPTION, LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.commands import register_multi_frame_commands
+from calendar_anim.calendar.vertical_compression.commands import (
+    register_vertical_compression_commands,
+)
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.renderer.manifest import read_manifest, validate_manifest_files
 
@@ -478,12 +490,46 @@ def record_calibration_command(
         typer.Option("--ordering-factor-stable/--ordering-factor-unstable"),
     ] = None,
     notes: Annotated[str, typer.Option("--notes")] = "",
+    observations_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--observations-file",
+            help="Import a manually completed calibration-observations.yaml file.",
+        ),
+    ] = None,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     profile_output: Annotated[Path | None, typer.Option("--profile-output")] = None,
 ) -> None:
     """Record manual observations from the Google Calendar UI."""
     try:
         run_id = _valid_identifier(run_id, "run-id")
+        if observations_file is not None:
+            observations = load_observations(observations_file)
+            if observations.run_id != run_id:
+                raise CalendarAnimError(
+                    f"Observation run ID {observations.run_id!r} does not match --run-id {run_id!r}"
+                )
+            if observations.pattern is not None and observations.pattern not in PATTERNS:
+                raise CalendarAnimError(
+                    f"Unknown calibration pattern in observations: {observations.pattern}"
+                )
+            if pattern is not None and observations.pattern != pattern:
+                raise CalendarAnimError(
+                    f"Observation pattern {observations.pattern!r} does not match "
+                    f"--pattern {pattern!r}"
+                )
+            path = output or Path("output/calibration") / run_id / "calibration-observations.yaml"
+            write_observations(observations, path)
+            resolved_profile_path = profile_output or (
+                DEFAULT_PROFILE_PATH
+                if output is None
+                else path.with_name("calibration-profile.yaml")
+            )
+            profile = apply_observations(load_profile(resolved_profile_path), observations)
+            save_profile(profile, resolved_profile_path)
+            typer.echo(f"Observations: {path}")
+            typer.echo(f"Calibration profile: {resolved_profile_path}")
+            return
         if pattern is not None and pattern not in PATTERNS:
             raise CalendarAnimError(f"Unknown calibration pattern: {pattern}")
         if (
@@ -664,7 +710,17 @@ def map_frame_command(
             "--mapping-mode",
             help="Cell generation mode: sparse or full-grid.",
         ),
-    ] = FrameMappingMode.SPARSE,
+    ] = FrameMappingMode.FULL_GRID,
+    event_compression: Annotated[
+        EventCompressionMode,
+        typer.Option(
+            "--event-compression",
+            help=(
+                "Calendar event compression strategy. The production default is "
+                "synchronized-horizontal-bands; use none for baseline/debug behavior."
+            ),
+        ),
+    ] = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: Annotated[
         str | None,
         typer.Option(
@@ -701,6 +757,8 @@ def map_frame_command(
             raise CalendarAnimError("--start-date is required with --execute")
         anchor_date = date.fromisoformat(start_date_value) if start_date_value else date.today()
         mode_suffix = "" if mapping_mode is FrameMappingMode.SPARSE else "-full-grid"
+        if event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS:
+            mode_suffix += "-bands"
         default_run_id = f"frame-{frame_index:03d}-{manifest.animation_id}{mode_suffix}"[:64]
         resolved_run_id = _valid_identifier(run_id or default_run_id, "run-id")
         plan = build_single_frame_plan(
@@ -713,6 +771,7 @@ def map_frame_command(
             fit=fit_mode,
             calendar_name=calendar_name,
             mapping_mode=mapping_mode,
+            event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
         )
         output_dir = output or Path("output/frame-mapping") / plan.run_id
@@ -726,6 +785,7 @@ def map_frame_command(
     typer.echo(f"Run ID: {plan.run_id}")
     typer.echo(f"Frame: {plan.frame_index}")
     typer.echo(f"Mapping mode: {plan.mapping_mode.value}")
+    typer.echo(f"Event compression: {plan.event_compression.value}")
     typer.echo(f"Week start: {plan.week_start_date}")
     typer.echo(f"Source grid: {plan.source_grid_width}x{plan.source_grid_height}")
     typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
@@ -735,6 +795,14 @@ def map_frame_command(
     typer.echo(f"Background structural cells: {stats.background_structural_cells}")
     typer.echo(f"Mapped cells: {stats.total_logical_cells}")
     typer.echo(f"Calendar events: {stats.calendar_events} / {plan.max_execute_events}")
+    typer.echo(f"Baseline Calendar events: {stats.baseline_calendar_events}")
+    typer.echo(f"Saved Calendar events: {stats.saved_calendar_events}")
+    reduction_percent = (
+        (stats.saved_calendar_events / stats.baseline_calendar_events) * 100
+        if stats.baseline_calendar_events
+        else 0
+    )
+    typer.echo(f"Compression reduction: {reduction_percent:.1f}%")
     typer.echo(f"Foreground events: {stats.foreground_events}")
     typer.echo(f"Background events: {stats.background_events}")
     typer.echo(f"Foreground Calendar colors: {stats.foreground_calendar_colors}")
@@ -760,6 +828,11 @@ def map_frame_command(
             and not profile.subcolumn_order_mapping.strategy_ready(plan.subcolumn_order_strategy)
         ):
             blockers.append(f"confirmed {plan.subcolumn_order_strategy.value} mapper strategy")
+        if (
+            plan.event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS
+            and not synchronized_horizontal_bands_ready(profile)
+        ):
+            blockers.append("synchronized horizontal-bands calibration")
         missing = ", ".join(blockers)
         _fail(CalendarAnimError(f"Calibration profile is NOT READY; missing: {missing}"))
     if plan.event_count > plan.max_execute_events:
@@ -771,6 +844,7 @@ def map_frame_command(
         )
     if not yes:
         typer.echo(f"\nMapping mode: {plan.mapping_mode.value.upper()}")
+        typer.echo(f"Event compression: {plan.event_compression.value}")
         typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
         typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
         typer.echo(f"Foreground events: {stats.foreground_events}")
@@ -813,3 +887,5 @@ def register_calendar_commands(app: typer.Typer) -> None:
     app.command("map-frame")(map_frame_command)
     register_multi_frame_commands(app)
     register_capture_commands(app)
+    register_vertical_compression_commands(app)
+    register_horizontal_band_compression_commands(app)

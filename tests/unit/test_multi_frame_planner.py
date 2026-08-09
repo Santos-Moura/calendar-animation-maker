@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from calendar_anim.calendar.frame_mapping.models import FrameMappingMode
+from calendar_anim.calendar.frame_mapping.models import EventCompressionMode, FrameMappingMode
 from calendar_anim.calendar.multi_frame.planner import build_multi_frame_plan, frame_run_id
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.frame import AnimationFrame, Block
@@ -44,7 +44,7 @@ def test_plans_one_frame_with_normalized_week_and_deterministic_run_id() -> None
     assert frames[0].run_id == plan.frames[0].frame_run_id
 
 
-def test_plans_six_full_grid_frames_in_consecutive_weeks() -> None:
+def test_explicit_none_plans_six_uncompressed_frames_in_consecutive_weeks() -> None:
     plan, frames = build_multi_frame_plan(
         _manifest_with_frames(6),
         make_ready_calibration_profile(),
@@ -54,6 +54,7 @@ def test_plans_six_full_grid_frames_in_consecutive_weeks() -> None:
         run_id="six-frames",
         max_events_per_frame=1200,
         mapping_mode=FrameMappingMode.FULL_GRID,
+        event_compression=EventCompressionMode.NONE,
     )
 
     assert plan.frame_count == 6
@@ -74,6 +75,25 @@ def test_plans_six_full_grid_frames_in_consecutive_weeks() -> None:
     assert all(
         frame.subcolumn_order_keys == ["00", "01", "02", "03", "04", "05"] for frame in frames
     )
+
+
+def test_multi_frame_plan_defaults_to_compressed_event_drafts_for_real_upload() -> None:
+    plan, frames = build_multi_frame_plan(
+        _manifest_with_frames(2),
+        make_ready_calibration_profile(),
+        frame_start=0,
+        frame_count=2,
+        anchor_date=date(2026, 11, 22),
+        run_id="compressed-frames",
+        max_events_per_frame=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+    )
+
+    assert plan.event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS
+    assert all(frame.event_compression is plan.event_compression for frame in frames)
+    assert all(frame.event_count < 1008 for frame in frames)
+    assert plan.events_per_frame == [frame.event_count for frame in frames]
+    assert plan.total_events == sum(frame.event_count for frame in frames)
 
 
 def test_selected_frame_start_maps_to_first_requested_week() -> None:

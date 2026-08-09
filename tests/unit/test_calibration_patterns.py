@@ -23,6 +23,8 @@ EXPECTED_COUNTS = {
     "position-grid": 9,
     "horizontal-bars": 21,
     "subcolumn-order": 24,
+    "vertical-compression": 30,
+    "synchronized-horizontal-bands": 30,
     "combined": 27,
 }
 
@@ -193,6 +195,103 @@ def test_subcolumn_order_has_forward_reverse_and_shuffled_groups() -> None:
     assert [event.private_metadata["event_index"] for event in plan.events] == [
         str(index) for index in range(24)
     ]
+
+
+def test_vertical_compression_has_control_compressed_mixed_and_staggered_groups() -> None:
+    plan = build_calibration_plan("vertical-compression", START, run_id="vertical-run")
+    groups: dict[str, list] = {}
+    for event in plan.events:
+        groups.setdefault(event.private_metadata["group"], []).append(event)
+
+    assert list(groups) == [
+        "vertical-control",
+        "vertical-compressed",
+        "vertical-mixed-length",
+        "vertical-staggered",
+    ]
+    assert [len(events) for events in groups.values()] == [12, 6, 6, 6]
+    assert {event.color_id for event in plan.events} == {"2"}
+    assert {event.color_hex for event in plan.events} == {"#33B679"}
+
+    control = groups["vertical-control"]
+    assert [event.summary for event in control] == ["00", "01", "02"] * 4
+    assert {round((event.end - event.start).total_seconds() / 60) for event in control} == {30}
+    assert [event.private_metadata["segment_index"] for event in control] == [
+        str(segment) for segment in range(4) for _ in range(3)
+    ]
+
+    compressed = groups["vertical-compressed"]
+    assert [event.summary for event in compressed] == [f"{slot:02d}" for slot in range(6)]
+    assert {event.start for event in compressed} == {compressed[0].start}
+    assert {event.end for event in compressed} == {compressed[0].end}
+    assert round((compressed[0].end - compressed[0].start).total_seconds() / 60) == 120
+
+    mixed = groups["vertical-mixed-length"]
+    assert [round((event.end - event.start).total_seconds() / 60) for event in mixed] == [
+        30,
+        60,
+        90,
+        120,
+        90,
+        60,
+    ]
+    assert {event.start for event in mixed} == {mixed[0].start}
+
+    staggered = groups["vertical-staggered"]
+    assert [(event.start.hour, event.start.minute) for event in staggered] == [
+        (14, 0),
+        (14, 30),
+        (14, 0),
+        (15, 0),
+        (14, 0),
+        (14, 30),
+    ]
+    assert all(
+        event.summary == event.private_metadata["subcolumn_index"].zfill(2) for event in plan.events
+    )
+
+
+def test_synchronized_horizontal_bands_keep_six_equal_intervals_per_group() -> None:
+    plan = build_calibration_plan(
+        "synchronized-horizontal-bands", START, run_id="synchronized-bands-run"
+    )
+    groups: dict[str, list] = {}
+    for event in plan.events:
+        groups.setdefault(event.private_metadata["group"], []).append(event)
+
+    assert list(groups) == [
+        "band-uniform-long",
+        "band-vector-a",
+        "band-vector-b",
+        "band-background-heavy",
+        "band-foreground-heavy",
+    ]
+    assert [len(events) for events in groups.values()] == [6] * 5
+    assert [event.summary for event in plan.events] == [
+        f"{slot:02d}" for _ in range(5) for slot in range(6)
+    ]
+    assert [
+        round((events[0].end - events[0].start).total_seconds() / 60) for events in groups.values()
+    ] == [120, 60, 90, 150, 300]
+    for band_index, events in enumerate(groups.values()):
+        assert len({event.start for event in events}) == 1
+        assert len({event.end for event in events}) == 1
+        assert {event.private_metadata["band_index"] for event in events} == {str(band_index)}
+        assert [event.private_metadata["subcolumn_index"] for event in events] == [
+            str(slot) for slot in range(6)
+        ]
+        assert {event.private_metadata["representation"] for event in events} == {
+            "synchronized-band"
+        }
+    ordered = list(groups.values())
+    assert all(
+        left[0].end == right[0].start for left, right in zip(ordered, ordered[1:], strict=False)
+    )
+    assert {event.color_id for event in plan.events} == {"2", "8"}
+    assert {event.private_metadata["cell_role"] for event in plan.events} == {
+        "foreground",
+        "background",
+    }
 
 
 def test_limit_is_enforced_and_can_be_explicitly_increased() -> None:

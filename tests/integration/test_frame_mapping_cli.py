@@ -70,7 +70,12 @@ def test_map_frame_dry_run_is_local_and_writes_all_artifacts(
         "mapped-debug.png",
         "execution-result.json",
     }
-    assert "Mapping mode: sparse" in result.output
+    assert "Mapping mode: full-grid" in result.output
+    assert "Event compression: synchronized-horizontal-bands" in result.output
+    plan = json.loads((output / "frame-plan.json").read_text(encoding="utf-8"))
+    assert plan["event_compression"] == "synchronized-horizontal-bands"
+    assert len(plan["mapped_cells"]) == 1008
+    assert len(plan["events"]) < 1008
 
 
 def test_map_frame_full_grid_and_background_flag_are_fully_local(
@@ -95,6 +100,8 @@ def test_map_frame_full_grid_and_background_flag_are_fully_local(
             "2026-09-07",
             "--mapping-mode",
             "full-grid",
+            "--event-compression",
+            "none",
             "--calendar-background-color-id",
             "5",
             "--run-id",
@@ -105,6 +112,7 @@ def test_map_frame_full_grid_and_background_flag_are_fully_local(
     )
     assert result.exit_code == 0, result.output
     assert "Mapping mode: full-grid" in result.output
+    assert "Event compression: none" in result.output
     assert "Background structural cells:" in result.output
     assert "Calendar events: 1008 / 1200" in result.output
     assert "Background colorId: 5" in result.output
@@ -112,8 +120,58 @@ def test_map_frame_full_grid_and_background_flag_are_fully_local(
     assert "Subcolumn slot keys: 00, 01, 02, 03, 04, 05" in result.output
     plan = json.loads((output / "frame-plan.json").read_text(encoding="utf-8"))
     assert plan["mapping_mode"] == "full-grid"
+    assert plan["event_compression"] == "none"
     assert plan["background_color_id"] == "5"
     assert plan["statistics"]["calendar_events"] == 1008
+
+
+def test_map_frame_can_plan_real_synchronized_band_events_locally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _mapping_inputs(tmp_path)
+    output = tmp_path / "compressed-full-grid"
+    monkeypatch.setattr(
+        calendar_commands,
+        "_google_gateway",
+        lambda: pytest.fail("compressed dry-run must not create an API gateway"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--start-date",
+            "2026-11-22",
+            "--mapping-mode",
+            "full-grid",
+            "--event-compression",
+            "synchronized-horizontal-bands",
+            "--run-id",
+            "compressed-full-grid",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Event compression: synchronized-horizontal-bands" in result.output
+    plan = json.loads((output / "frame-plan.json").read_text(encoding="utf-8"))
+    assert plan["event_compression"] == "synchronized-horizontal-bands"
+    assert len(plan["mapped_cells"]) == 1008
+    assert len(plan["events"]) < 1008
+    assert plan["statistics"]["baseline_calendar_events"] == 1008
+    assert plan["statistics"]["saved_calendar_events"] == 1008 - len(plan["events"])
+    assert plan["profile_ready"] is True
+    report = (output / "mapping-report.txt").read_text(encoding="utf-8")
+    assert "Total logical cells: 1008" in report
+    assert "Calendar events before compression: 1008" in report
+    assert f"Calendar events after compression: {len(plan['events'])}" in report
+    assert "Compression reduction:" in report
+    assert "Synchronized bands:" in report
 
 
 def test_map_frame_rejects_invalid_mode_and_background_color(tmp_path: Path) -> None:
@@ -336,6 +394,8 @@ def test_full_grid_confirmation_discloses_cost_and_limit_blocks_before_api(
             "2026-09-07",
             "--mapping-mode",
             "full-grid",
+            "--event-compression",
+            "none",
             "--run-id",
             "confirm-full-grid",
             "--output",
@@ -363,6 +423,8 @@ def test_full_grid_confirmation_discloses_cost_and_limit_blocks_before_api(
             "2026-09-07",
             "--mapping-mode",
             "full-grid",
+            "--event-compression",
+            "none",
             "--max-events",
             "1000",
             "--run-id",

@@ -16,6 +16,8 @@ CalibrationPattern = Literal[
     "position-grid",
     "horizontal-bars",
     "subcolumn-order",
+    "vertical-compression",
+    "synchronized-horizontal-bands",
     "combined",
 ]
 SlotOrderStrategy = Literal[
@@ -81,6 +83,55 @@ class CalendarUIProfile(BaseModel):
         return self
 
 
+class ControlVsCompressedObservations(BaseModel):
+    same_total_height: bool | None = None
+    visually_equivalent: bool | None = None
+    visible_boundary_difference: bool | None = None
+
+
+class MixedDurationObservations(BaseModel):
+    slot_order_preserved: bool | None = None
+    equal_widths_preserved: bool | None = None
+    layout_changes_detected: bool | None = None
+
+
+class StaggeredCompressionObservations(BaseModel):
+    slot_order_preserved: bool | None = None
+    overlap_layout_stable: bool | None = None
+    layout_changes_detected: bool | None = None
+
+
+class VerticalCompressionConclusion(BaseModel):
+    visually_acceptable: bool | None = None
+    safe_for_mapper: bool | None = None
+    notes: str = ""
+
+
+class VerticalCompressionObservations(BaseModel):
+    control_vs_compressed: ControlVsCompressedObservations = Field(
+        default_factory=ControlVsCompressedObservations
+    )
+    fixed_start_mixed_duration: MixedDurationObservations = Field(
+        default_factory=MixedDurationObservations
+    )
+    staggered: StaggeredCompressionObservations = Field(
+        default_factory=StaggeredCompressionObservations
+    )
+    conclusion: VerticalCompressionConclusion = Field(default_factory=VerticalCompressionConclusion)
+
+
+class SynchronizedHorizontalBandObservations(BaseModel):
+    equal_widths_preserved: bool | None = None
+    slot_order_preserved: bool | None = None
+    color_vectors_preserved: bool | None = None
+    adjacent_boundaries_stable: bool | None = None
+    stable_after_refresh: bool | None = None
+    stable_after_navigation: bool | None = None
+    visually_acceptable: bool | None = None
+    safe_for_mapper: bool | None = None
+    notes: str = ""
+
+
 class CalibrationObservationValues(BaseModel):
     """Human observations, including fields written by older releases."""
 
@@ -119,6 +170,8 @@ class CalibrationObservationValues(BaseModel):
     ordering_factor_tested: bool | None = None
     ordering_controlling_property: OrderingControllingProperty | None = None
     ordering_factor_stable: bool | None = None
+    vertical_compression: VerticalCompressionObservations | None = None
+    synchronized_horizontal_bands: SynchronizedHorizontalBandObservations | None = None
     notes: str = ""
 
     # Compatibility with observation YAML written before the two vertical
@@ -342,6 +395,8 @@ class CalibrationProfile(BaseModel):
     subcolumn_order_mapping: SubcolumnOrderMappingProfile = Field(
         default_factory=SubcolumnOrderMappingProfile
     )
+    vertical_compression: VerticalCompressionObservations | None = None
+    synchronized_horizontal_bands: SynchronizedHorizontalBandObservations | None = None
     candidate_grid: CandidateGridProfile = Field(default_factory=CandidateGridProfile)
 
     @model_validator(mode="after")

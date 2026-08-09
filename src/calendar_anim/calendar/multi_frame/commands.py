@@ -8,7 +8,12 @@ from googleapiclient.errors import HttpError
 
 from calendar_anim.calendar.calibration.patterns import DEFAULT_CALENDAR_NAME
 from calendar_anim.calendar.calibration.profile import DEFAULT_PROFILE_PATH, load_profile
-from calendar_anim.calendar.frame_mapping.models import FitMode, FrameMappingMode
+from calendar_anim.calendar.frame_mapping.models import (
+    DEFAULT_EVENT_COMPRESSION,
+    EventCompressionMode,
+    FitMode,
+    FrameMappingMode,
+)
 from calendar_anim.calendar.frame_mapping.service import (
     ABSOLUTE_SINGLE_FRAME_MAX_EVENTS,
     DEFAULT_SINGLE_FRAME_MAX_EVENTS,
@@ -64,6 +69,16 @@ def plan_animation_command(
     mapping_mode: Annotated[
         FrameMappingMode, typer.Option("--mapping-mode")
     ] = FrameMappingMode.FULL_GRID,
+    event_compression: Annotated[
+        EventCompressionMode,
+        typer.Option(
+            "--event-compression",
+            help=(
+                "Calendar event compression strategy. The production default is "
+                "synchronized-horizontal-bands; use none for baseline/debug behavior."
+            ),
+        ),
+    ] = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: Annotated[
         str | None, typer.Option("--calendar-background-color-id")
     ] = None,
@@ -97,6 +112,7 @@ def plan_animation_command(
             fit=fit,
             calendar_name=calendar_name,
             mapping_mode=mapping_mode,
+            event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
         )
         store = AnimationRunStore(output_root)
@@ -108,6 +124,7 @@ def plan_animation_command(
     typer.echo(f"Frames: {plan.frame_count}")
     typer.echo(f"Weeks: {plan.frame_count} ({plan.start_week} onward)")
     typer.echo(f"Mapping mode: {plan.mapping_mode.value}")
+    typer.echo(f"Event compression: {plan.event_compression.value}")
     typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
     typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
     typer.echo(f"Slot keys: {', '.join(plan.subcolumn_order_keys) or 'not used'}")
@@ -277,6 +294,7 @@ def _print_upload_summary(plan: MultiFramePlan, state: AnimationUploadState, exe
     typer.echo(f"Frames: {plan.frame_count}")
     typer.echo(f"Weeks: {plan.frame_count}")
     typer.echo(f"Mapping mode: {plan.mapping_mode.value}")
+    typer.echo(f"Event compression: {plan.event_compression.value}")
     typer.echo(f"Ordering: {plan.subcolumn_order_strategy.value}")
     typer.echo(f"Events/frame: {', '.join(str(value) for value in plan.events_per_frame)}")
     typer.echo(f"Total planned events: {plan.total_events}")

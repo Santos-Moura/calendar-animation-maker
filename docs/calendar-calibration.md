@@ -33,6 +33,10 @@ output/calibration/<run_id>/
 `-- execution-result.json
 ```
 
+Experimental patterns may add an observation template. `vertical-compression` additionally writes
+`calibration-observations.yaml` with every result left as `null` until a person inspects the real
+Calendar UI.
+
 `expected-layout.png` is a deterministic logical reference. It is not a simulation of Google Calendar's rendering algorithm.
 
 After manual inspection, `record-calibration` additionally writes `calibration-observations.yaml` and updates `output/calibration/calibration-profile.yaml`.
@@ -228,6 +232,31 @@ python -m calendar_anim calendar record-calibration --run-id summary-ordering-ev
 
 Readiness requires all three pieces of evidence: `controlling_property=summary`, stable factor results, and the mapper capability `summary-prefix`. Merely writing the strategy string does not unlock real execution.
 
+## `vertical-compression`
+
+This isolated experiment compares 30-minute unit cells with longer same-color events, then tests
+fixed-start mixed durations and staggered partial overlaps. It uses the real `00..05` summary keys
+and a single validated color so duration and overlap remain the variables under test.
+
+It also adds the fully local `estimate-compression` diagnostic. The diagnostic counts compatible
+vertical runs in existing full-grid manifests but does not create compressed
+`CalendarEventDraft` objects or change mapper output.
+
+See [vertical event compression experiment](vertical-compression-experiment.md) for the group
+geometry, estimator metrics, manual YAML recording flow, cleanup, and production decision gate.
+
+## `synchronized-horizontal-bands`
+
+This follow-up avoids independent mixed-duration events. It merges consecutive rows only when the
+complete six-slot vector for one day is unchanged, so every compressed band still creates six
+events with identical starts and ends. Real Calendar calibration and the final multi-frame
+validation passed: the validated six-frame sample fell from 6,048 events to 792, all 792 events
+were created, capture and GIF composition completed, and manual visual equivalence passed. The
+strategy is now the default for new plans; actual reduction depends on frame content.
+
+See [synchronized horizontal bands](synchronized-horizontal-bands-experiment.md) for the algorithm,
+measured estimate, calibration commands, observation checklist, and cleanup.
+
 ## Consolidated profile and readiness
 
 ```powershell
@@ -252,6 +281,8 @@ python -m calendar_anim calendar cleanup --animation-id calibration-color-palett
 python -m calendar_anim calendar cleanup --animation-id calibration-position-grid --run-id position-real-20260807-01
 python -m calendar_anim calendar cleanup --animation-id calibration-horizontal-bars --run-id bars-real-20260807-01
 python -m calendar_anim calendar cleanup --animation-id calibration-subcolumn-order --run-id slot-order-real-01
+python -m calendar_anim calendar cleanup --animation-id calibration-vertical-compression --run-id vertical-compression-real-01
+python -m calendar_anim calendar cleanup --animation-id calibration-synchronized-horizontal-bands --run-id synchronized-bands-real-01
 ```
 
 Cleanup matches only `generated_by`, `animation_id`, and `run_id` in the recognized lab calendar.

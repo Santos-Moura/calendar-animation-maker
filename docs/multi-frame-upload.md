@@ -13,7 +13,10 @@ animation.json
     -> atomic frame-level checkpoint
 ```
 
-Reliability and resumability are more important than upload speed. The implementation does not use the batch API, async workers, aggressive concurrency, event compression, or event-level resume.
+Reliability and resumability are more important than upload speed. The implementation does not use
+the batch API, async workers, aggressive concurrency, or event-level resume. Geometrically
+calibrated synchronized-band event compression is the default for new plans; real
+video-frame and final-animation validation remain pending.
 
 ## Frame and week assignment
 
@@ -48,8 +51,27 @@ These values are a testing recommendation, not hardcoded planner behavior.
 ## Plan locally
 
 ```powershell
-python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --start-date 2026-10-04 --run-id animation-test-01
+python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --start-date 2027-01-03 --run-id animation-bands-01
 ```
+
+The equivalent explicit production command is:
+
+```powershell
+python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --event-compression synchronized-horizontal-bands --start-date 2026-11-22 --run-id animation-bands-01
+```
+
+Use the uncompressed fallback explicitly with:
+
+```powershell
+python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --event-compression none --start-date 2027-03-07 --run-id animation-baseline-01
+```
+
+The chosen compression mode and compressed event drafts are persisted in the immutable global and
+per-frame plans, so resume uploads exactly what was reviewed locally.
+
+The production default is consulted only while creating a new plan. Upload, resume, recovery, and
+cleanup always use the strategy persisted in the immutable plan. Legacy plan JSON without an
+`event_compression` field loads as `none`, preserving historical behavior.
 
 Planning never constructs a Google gateway or authenticates. It produces:
 
@@ -138,13 +160,18 @@ python -m calendar_anim calendar upload-animation --run-id animation-test-01 --r
 
 `--execute` displays frame count, total events, current progress, and a confirmation defaulting to `N`. Upload is serial and reports progress every 50 attempted events. Each completed frame is checkpointed immediately and skipped on later runs.
 
-The normal 1200-event guard applies independently to every frame. It is not a 1200-event limit for the whole animation. A six-frame full-grid plan therefore contains approximately:
+The normal 1200-event guard applies independently to every frame. It is not a 1200-event limit for
+the whole animation. An explicit six-frame uncompressed full-grid baseline contains:
 
 ```text
 1008 events/frame
 6 frames
 6048 total events
 ```
+
+In the validated six-frame compressed sample, the same logical frames required 792 events
+(86.9% fewer), all 792 were created, and the captured GIF passed manual visual comparison. Other
+frames may compress by a different percentage.
 
 ## Failure and partial recovery
 

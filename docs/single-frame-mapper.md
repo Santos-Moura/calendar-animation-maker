@@ -54,7 +54,9 @@ manifest blocks
     -> foreground + structural background events
 ```
 
-Every target cell becomes exactly one event. For every day and row, all calibrated subcolumns exist and share the same start/end interval. Structural background cells occupy otherwise empty slots, making the geometry more predictable.
+Every target cell exists in the logical canvas. In the uncompressed baseline, each cell becomes
+one event. Structural background cells occupy otherwise empty slots, making the geometry more
+predictable.
 
 This does not create an API-level subcolumn property. Events are emitted deterministically in `day -> row -> subcolumn` order, while final visual ordering still belongs to Google Calendar and must be inspected in the real UI.
 
@@ -118,17 +120,19 @@ When omitted, the deterministic project default is `8`. Foreground RGB still pas
 
 ## Dry-run commands
 
-Sparse:
+Production default (`full-grid` plus synchronized bands):
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode sparse --start-date 2026-09-07 --run-id primeiro-frame-sparse-01
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --start-date 2026-11-22 --run-id primeiro-frame-bands-01
 ```
 
-Full-grid:
+Explicit uncompressed baseline:
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --calendar-background-color-id 8 --start-date 2026-09-07 --run-id primeiro-frame-full-grid-01
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --event-compression none --calendar-background-color-id 8 --start-date 2026-09-07 --run-id primeiro-frame-baseline-01
 ```
+
+Sparse diagnostics require both `--mapping-mode sparse --event-compression none`.
 
 Dry-run is fully local: it does not construct a Google gateway, authenticate, write a token, create a calendar, create an event, or delete an event.
 
@@ -167,7 +171,7 @@ Full-grid events: 1008
 
 ## Cost of fidelity
 
-Full-grid intentionally performs no filler optimization:
+The uncompressed full-grid fallback performs no filler optimization:
 
 ```text
 42x24 = 1008 events/frame
@@ -176,6 +180,29 @@ Full-grid intentionally performs no filler optimization:
 ```
 
 These totals are planning estimates, not a claim that Google Calendar will safely accept those workloads. The baseline prioritizes visual fidelity over event economy.
+
+### Synchronized horizontal-band compression (production default)
+
+New plans use the strategy automatically. It may also be selected explicitly with:
+
+```powershell
+--event-compression synchronized-horizontal-bands
+```
+
+For each day, consecutive rows merge only when their complete six-slot vectors have identical
+Calendar colors and foreground/background roles. Each band still creates six simultaneous events
+with summaries `00..05`; all six share the same start and end. Day boundaries are never crossed.
+The `42x24` mapped canvas and its previews remain unchanged while the persisted event drafts and
+upload counts become smaller. `--event-compression none` preserves the original one-event-per-cell
+behavior.
+
+Real compressed execution additionally requires the synchronized-band calibration to be recorded
+as stable and safe in the loaded profile. Production validation passed with six real frames:
+792/792 events were created, capture and GIF composition completed, and manual visual equivalence
+with the 6,048-event baseline passed. This 86.9% reduction is sample-specific.
+
+`--event-compression none` remains supported for fallback, baseline, and debug plans. Existing
+persisted plans retain their recorded strategy; legacy plans without the field load as `none`.
 
 ## Real upload safety
 
