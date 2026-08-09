@@ -132,6 +132,11 @@ The current measured profile records six usable overlap columns per day and ther
 
 The calibration observations extend the local profile without inventing defaults. `calendar calibration-summary` reports each section as pending, incomplete, or recorded. Real execution requires ordering evidence that matches a strategy actually supported by the mapper; a strategy name by itself never marks the profile ready.
 
+The first scalability experiment is vertical run compression. The local
+`calendar estimate-compression` command measures possible savings without changing the mapper or
+calling Google; the separate 30-event calibration tests whether mixed-duration overlaps remain
+visually stable. See [vertical compression experiment](docs/vertical-compression-experiment.md).
+
 Before any full-grid upload, run the 24-event ordering experiment locally and inspect its logical artifacts:
 
 ```powershell
@@ -267,4 +272,4 @@ uv run pytest tests/unit
 uv run pytest tests/integration
 ```
 
-See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [single-frame mapper](docs/single-frame-mapper.md), [multi-frame upload](docs/multi-frame-upload.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.
+See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [vertical compression experiment](docs/vertical-compression-experiment.md), [single-frame mapper](docs/single-frame-mapper.md), [multi-frame upload](docs/multi-frame-upload.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.
