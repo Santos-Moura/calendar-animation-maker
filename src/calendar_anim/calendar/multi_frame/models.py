@@ -3,7 +3,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, model_validator
 
-from calendar_anim.calendar.frame_mapping.models import FrameMappingMode
+from calendar_anim.calendar.frame_mapping.models import EventCompressionMode, FrameMappingMode
 from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 
 
@@ -24,7 +24,7 @@ class FrameUploadPlan(BaseModel):
 
 
 class MultiFramePlan(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     animation_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     calendar_name: str = "Calendar Animation Lab"
@@ -33,6 +33,7 @@ class MultiFramePlan(BaseModel):
     frame_start: int = Field(ge=0)
     frame_count: int = Field(gt=0)
     mapping_mode: FrameMappingMode
+    event_compression: EventCompressionMode = EventCompressionMode.NONE
     target_grid_width: int = Field(gt=0)
     target_grid_height: int = Field(gt=0)
     subcolumn_order_strategy: SubcolumnOrderStrategy

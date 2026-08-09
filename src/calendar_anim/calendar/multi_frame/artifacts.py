@@ -187,6 +187,7 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
         f"Frames: {plan.frame_count}",
         f"Grid: {plan.target_grid_width}x{plan.target_grid_height}",
         f"Mapping: {plan.mapping_mode.value}",
+        f"Event compression: {plan.event_compression.value}",
         f"Ordering: {plan.subcolumn_order_strategy.value}",
         f"Slot keys: {', '.join(plan.subcolumn_order_keys) or 'not used'}",
         f"Events/frame: {', '.join(str(value) for value in plan.events_per_frame)}",
