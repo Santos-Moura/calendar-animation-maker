@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import timedelta
 from pathlib import Path
 
 import yaml
@@ -467,6 +468,10 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
             font=font,
         )
     day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    if plan.pattern == "vertical-compression":
+        day_names = [
+            (plan.start_date + timedelta(days=offset)).strftime("%a") for offset in range(7)
+        ]
     for day in range(8):
         x = round(left + day * day_width)
         draw.line((x, top, x, height - bottom), fill="#BDBDBD", width=1)
