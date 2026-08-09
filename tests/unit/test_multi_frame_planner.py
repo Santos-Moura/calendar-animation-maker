@@ -44,7 +44,7 @@ def test_plans_one_frame_with_normalized_week_and_deterministic_run_id() -> None
     assert frames[0].run_id == plan.frames[0].frame_run_id
 
 
-def test_plans_six_full_grid_frames_in_consecutive_weeks() -> None:
+def test_explicit_none_plans_six_uncompressed_frames_in_consecutive_weeks() -> None:
     plan, frames = build_multi_frame_plan(
         _manifest_with_frames(6),
         make_ready_calibration_profile(),
@@ -54,6 +54,7 @@ def test_plans_six_full_grid_frames_in_consecutive_weeks() -> None:
         run_id="six-frames",
         max_events_per_frame=1200,
         mapping_mode=FrameMappingMode.FULL_GRID,
+        event_compression=EventCompressionMode.NONE,
     )
 
     assert plan.frame_count == 6
@@ -76,7 +77,7 @@ def test_plans_six_full_grid_frames_in_consecutive_weeks() -> None:
     )
 
 
-def test_multi_frame_plan_preserves_compressed_event_drafts_for_real_upload() -> None:
+def test_multi_frame_plan_defaults_to_compressed_event_drafts_for_real_upload() -> None:
     plan, frames = build_multi_frame_plan(
         _manifest_with_frames(2),
         make_ready_calibration_profile(),
@@ -86,7 +87,6 @@ def test_multi_frame_plan_preserves_compressed_event_drafts_for_real_upload() ->
         run_id="compressed-frames",
         max_events_per_frame=1200,
         mapping_mode=FrameMappingMode.FULL_GRID,
-        event_compression=EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
     )
 
     assert plan.event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS

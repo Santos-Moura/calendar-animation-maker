@@ -31,6 +31,7 @@ def _plan(
         run_id=run_id,
         max_execute_events=1200,
         mapping_mode=mapping_mode,
+        event_compression=EventCompressionMode.NONE,
     )
 
 
@@ -164,6 +165,7 @@ def test_full_grid_execute_reports_foreground_and_background_created(tmp_path: P
         run_id="full-grid-execute",
         max_execute_events=1200,
         mapping_mode=FrameMappingMode.FULL_GRID,
+        event_compression=EventCompressionMode.NONE,
         calendar_background_color_id="8",
     )
     result = service.execute(plan)
@@ -235,6 +237,7 @@ def test_full_grid_partial_failure_counts_created_background_role(tmp_path: Path
         run_id="full-grid-partial",
         max_execute_events=1200,
         mapping_mode=FrameMappingMode.FULL_GRID,
+        event_compression=EventCompressionMode.NONE,
     )
     result = service.execute(plan)
     assert plan.events[0].private_metadata["cell_role"] == "background"

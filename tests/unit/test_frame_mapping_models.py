@@ -5,6 +5,7 @@ import pytest
 from calendar_anim.calendar.frame_mapping.models import (
     CalendarMappedCell,
     CellRole,
+    EventCompressionMode,
     FrameMappingMode,
     FrameMappingStatistics,
     SingleFrameCalendarPlan,
@@ -109,6 +110,7 @@ def test_full_grid_fields_serialize_without_breaking_sparse_defaults() -> None:
     }
     plan = SingleFrameCalendarPlan.model_validate(plan_data)
     assert plan.mapping_mode is FrameMappingMode.FULL_GRID
+    assert plan.event_compression is EventCompressionMode.NONE
     assert plan.statistics.background_structural_cells == 5
 
     legacy_cell = CalendarMappedCell.model_validate(

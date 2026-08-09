@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from calendar_anim.calendar.fake import FakeCalendarGateway
+from calendar_anim.calendar.frame_mapping.models import EventCompressionMode
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.models import CalendarEventDraft, CalendarWriteResult
@@ -90,6 +91,7 @@ def _initialized_run(tmp_path: Path, frame_count: int = 3):
         anchor_date=date(2026, 10, 4),
         run_id="resume-test",
         max_events_per_frame=1200,
+        event_compression=EventCompressionMode.NONE,
     )
     store = AnimationRunStore(tmp_path / "runs")
     state = initialize_animation_run(

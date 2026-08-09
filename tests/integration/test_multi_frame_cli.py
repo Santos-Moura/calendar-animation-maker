@@ -81,8 +81,7 @@ def test_plan_animation_is_local_and_writes_global_and_frame_artifacts(
     assert result.exit_code == 0, result.output
     assert "Frames: 3" in result.output
     assert "Weeks: 3 (2026-10-04 onward)" in result.output
-    assert "Events/frame: 1008, 1008, 1008" in result.output
-    assert "Total events: 3024" in result.output
+    assert "Event compression: synchronized-horizontal-bands" in result.output
     assert "Execution: DRY RUN" in result.output
     run_dir = output_root / "cli-animation"
     assert (run_dir / "animation-plan.json").is_file()
@@ -91,9 +90,12 @@ def test_plan_animation_is_local_and_writes_global_and_frame_artifacts(
     assert (run_dir / "frames/frame-0002/frame-plan.json").is_file()
     serialized = json.loads((run_dir / "animation-plan.json").read_text(encoding="utf-8"))
     assert serialized["frames"][1]["week_start"] == "2026-10-11"
+    assert serialized["event_compression"] == "synchronized-horizontal-bands"
+    assert all(value < 1008 for value in serialized["events_per_frame"])
+    assert serialized["total_events"] == sum(serialized["events_per_frame"])
 
 
-def test_plan_animation_persists_synchronized_band_compression(
+def test_plan_animation_persists_explicit_none_baseline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest, profile = _inputs(tmp_path, frame_count=2)
@@ -104,19 +106,19 @@ def test_plan_animation_persists_synchronized_band_compression(
         lambda: pytest.fail("compressed planning must not construct an API gateway"),
     )
     command = _plan_command(manifest, profile, output_root, 2)
-    command.extend(["--event-compression", "synchronized-horizontal-bands"])
+    command.extend(["--event-compression", "none"])
 
     result = runner.invoke(app, command)
 
     assert result.exit_code == 0, result.output
-    assert "Event compression: synchronized-horizontal-bands" in result.output
+    assert "Event compression: none" in result.output
     plan = AnimationRunStore(output_root).load_plan("cli-animation")
-    assert plan.event_compression.value == "synchronized-horizontal-bands"
-    assert all(value < 1008 for value in plan.events_per_frame)
+    assert plan.event_compression.value == "none"
+    assert plan.events_per_frame == [1008, 1008]
     frame_plan = AnimationRunStore(output_root).load_frame_plan(plan, 0)
-    assert frame_plan.event_compression.value == "synchronized-horizontal-bands"
+    assert frame_plan.event_compression.value == "none"
     assert len(frame_plan.mapped_cells) == 1008
-    assert len(frame_plan.events) == plan.events_per_frame[0]
+    assert len(frame_plan.events) == 1008
 
 
 def test_upload_animation_dry_run_skips_api_and_lists_actions(
@@ -177,7 +179,9 @@ def test_upload_execute_requires_confirmation_before_gateway(
     )
 
     assert result.exit_code != 0
-    assert "Total planned events: 1008" in result.output
+    plan = AnimationRunStore(output_root).load_plan("cli-animation")
+    assert f"Total planned events: {plan.total_events}" in result.output
+    assert plan.total_events < 1008
     assert "Continue?" in result.output
 
 
@@ -209,7 +213,7 @@ def test_upload_execute_uses_fake_gateway_and_persists_completion(
     assert "Animation progress: 1/1 completed" in result.output
     state = AnimationRunStore(output_root).load_state("cli-animation")
     assert state.frames[0].status is FrameUploadStatus.COMPLETED
-    assert state.frames[0].created_events == 1008
+    assert state.frames[0].created_events == state.frames[0].planned_events < 1008
 
 
 def test_cleanup_dry_run_is_local_and_invalid_run_is_clear(
