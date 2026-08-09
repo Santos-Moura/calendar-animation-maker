@@ -137,12 +137,14 @@ The first scalability experiment is vertical run compression. The local
 calling Google; the separate 30-event calibration tests whether mixed-duration overlaps remain
 visually stable. See [vertical compression experiment](docs/vertical-compression-experiment.md).
 
-Because independent mixed-duration columns proved visually unstable, the constrained follow-up
-merges only complete six-slot row vectors. The real Calendar calibration preserved widths, order,
-colors, boundaries, refresh, and navigation. The mapper now exposes this geometrically calibrated
-strategy through `--event-compression synchronized-horizontal-bands`; `none` remains the fallback.
-Validation with a real mapped video frame and final animation is still pending. The current
-six-frame sample estimates 792 events instead of 6,048. See [synchronized horizontal bands](docs/synchronized-horizontal-bands-experiment.md).
+Because independent mixed-duration columns caused Calendar overlap reflow and unequal slot widths,
+the production strategy merges only complete six-slot row vectors. Equal start/end boundaries for
+all six slots preserved widths, `00..05` order, colors, refresh, and navigation in the real UI.
+`synchronized-horizontal-bands` is now the default for new plans; `none` remains an explicit
+fallback, baseline, and debug mode. In the validated six-frame sample, the event count fell from
+6,048 to 792 (86.9%); actual reduction depends on frame content. The real upload created 792/792
+events, capture and GIF composition completed, and manual visual equivalence passed. See
+[synchronized horizontal bands](docs/synchronized-horizontal-bands-experiment.md).
 
 Before any full-grid upload, run the 24-event ordering experiment locally and inspect its logical artifacts:
 
@@ -160,24 +162,36 @@ This behavior is empirically validated for this project, not part of a documente
 
 ## Single-frame Calendar mapper
 
-Map exactly one manifest frame without contacting Google:
+Map exactly one manifest frame with the production defaults, without contacting Google:
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode sparse --start-date 2026-09-07 --run-id frame-sparse-001
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --calendar-background-color-id 8 --start-date 2026-09-07 --run-id frame-full-grid-001
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --calendar-background-color-id 8 --start-date 2026-11-22 --run-id frame-bands-001
 ```
 
 The command reads `output/calibration/calibration-profile.yaml` by default and writes `frame-plan.json`, `mapping-report.txt`, `source-frame.png`, `mapped-preview.png`, `mapped-debug.png`, and `execution-result.json` below `output/frame-mapping/<run_id>/`. A manifest grid such as `28x20` is fitted with aspect-preserving `contain` into the calibrated candidate grid.
 
-`sparse` is the backward-compatible default and creates only foreground events. It keeps blank summaries and remains horizontally non-absolute. `full-grid` is recommended for the first real visual experiment: every target cell becomes an event, structural background events keep all calibrated subcolumns occupied, and `summary-prefix` supplies the keys `00..05`. The background is a configurable Calendar `colorId`, not an attempt to match the browser theme.
+The production defaults are `full-grid` plus `synchronized-horizontal-bands`: the logical canvas
+keeps all calibrated positions, while only the persisted `CalendarEventDraft` representation is
+compressed. Structural background events keep every subcolumn occupied and `summary-prefix`
+supplies the keys `00..05`. The background is a configurable Calendar `colorId`, not an attempt to
+match the browser theme.
+
+The uncompressed baseline remains explicit:
+
+```powershell
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --event-compression none --start-date 2026-09-07 --run-id frame-baseline-001
+```
+
+Sparse diagnostics remain available with `--mapping-mode sparse --event-compression none`; they
+create foreground events only, keep blank summaries, and cannot guarantee horizontal positions.
 
 For the current candidate grid, full-grid costs `42x24 = 1008` events for one frame. Twelve frames would require 12,096 events and 60 frames would require 60,480 events before any future optimization. These volumes are estimates, not guaranteed safe Calendar workloads.
 
-The calibrated compressed path keeps the same `42x24` preview while merging consecutive equal
-six-slot row vectors into longer Calendar events:
+The default compressed path keeps the same `42x24` preview while merging consecutive equal
+six-slot row vectors into longer Calendar events. The flags are shown here only for clarity:
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --event-compression synchronized-horizontal-bands --calendar-background-color-id 8 --start-date 2026-11-22 --run-id frame-bands-001
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --event-compression synchronized-horizontal-bands --calendar-background-color-id 8 --start-date 2026-11-22 --run-id frame-bands-explicit-001
 ```
 
 Dry-run remains available while any calibration is pending, but real upload is blocked until the profile reports `READY FOR SINGLE-FRAME EXPERIMENT`. An upload additionally requires an explicit date, event-limit validation, confirmation, OAuth, the laboratory calendar, and a unique frame run. In particular, do not execute a full-grid frame before `subcolumn-order` has been observed and recorded:
@@ -193,15 +207,15 @@ See [single-frame mapper](docs/single-frame-mapper.md) for mapping rules, metric
 The validated single-frame mapper is reused unchanged by a planner that assigns selected frames to consecutive calibrated weeks. Planning is fully local and writes an immutable plan, a mutable frame-level checkpoint, a global report, and the normal single-frame artifacts:
 
 ```powershell
-python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --start-date 2026-10-04 --run-id animation-test-01
-python -m calendar_anim calendar upload-animation --run-id animation-test-01
+python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --start-date 2027-01-03 --run-id animation-bands-01
+python -m calendar_anim calendar upload-animation --run-id animation-bands-01
 ```
 
 The second command is also a local dry-run unless `--execute` is supplied. Real uploads are serial and checkpoint every frame. Completed frames are skipped; a partial frame requires explicit `--recover-partial`, which deletes and recreates only that frame before continuing:
 
 ```powershell
-python -m calendar_anim calendar upload-animation --run-id animation-test-01 --execute
-python -m calendar_anim calendar upload-animation --run-id animation-test-01 --resume --recover-partial --execute
+python -m calendar_anim calendar upload-animation --run-id animation-bands-01 --execute
+python -m calendar_anim calendar upload-animation --run-id animation-bands-01 --resume --recover-partial --execute
 ```
 
 Cleanup is local by default and can target one frame or the whole run:
@@ -211,7 +225,11 @@ python -m calendar_anim calendar cleanup-animation --run-id animation-test-01 --
 python -m calendar_anim calendar cleanup-animation --run-id animation-test-01
 ```
 
-For the current full-grid baseline, six frames plan `6 x 1008 = 6048` events. The 1200-event normal guard remains a per-frame limit, not an animation-wide limit. See [multi-frame upload](docs/multi-frame-upload.md) for state transitions, recovery, artifacts, and the complete command workflow.
+For an explicit uncompressed full-grid baseline, six frames plan `6 x 1008 = 6048` events. The
+validated compressed sample planned 792 events, but other content may produce a different saving.
+The 1200-event normal guard remains a per-frame limit, not an animation-wide limit. See
+[multi-frame upload](docs/multi-frame-upload.md) for state transitions, recovery, artifacts, and the
+complete command workflow.
 
 ## Capture uploaded Calendar weeks
 

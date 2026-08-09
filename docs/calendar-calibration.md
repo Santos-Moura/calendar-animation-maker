@@ -249,10 +249,10 @@ geometry, estimator metrics, manual YAML recording flow, cleanup, and production
 
 This follow-up avoids independent mixed-duration events. It merges consecutive rows only when the
 complete six-slot vector for one day is unchanged, so every compressed band still creates six
-events with identical starts and ends. The local estimate reduces the current six-frame example
-from 6,048 events to 792 potential events, but production remains disabled until the real Calendar
-calibration confirms equal widths, `00..05` ordering, color placement, adjacent boundaries, and
-refresh/navigation stability.
+events with identical starts and ends. Real Calendar calibration and the final multi-frame
+validation passed: the validated six-frame sample fell from 6,048 events to 792, all 792 events
+were created, capture and GIF composition completed, and manual visual equivalence passed. The
+strategy is now the default for new plans; actual reduction depends on frame content.
 
 See [synchronized horizontal bands](synchronized-horizontal-bands-experiment.md) for the algorithm,
 measured estimate, calibration commands, observation checklist, and cleanup.

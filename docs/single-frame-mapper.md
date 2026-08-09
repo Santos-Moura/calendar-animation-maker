@@ -120,17 +120,19 @@ When omitted, the deterministic project default is `8`. Foreground RGB still pas
 
 ## Dry-run commands
 
-Sparse:
+Production default (`full-grid` plus synchronized bands):
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode sparse --start-date 2026-09-07 --run-id primeiro-frame-sparse-01
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --start-date 2026-11-22 --run-id primeiro-frame-bands-01
 ```
 
-Full-grid:
+Explicit uncompressed baseline:
 
 ```powershell
-python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --calendar-background-color-id 8 --start-date 2026-09-07 --run-id primeiro-frame-full-grid-01
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --event-compression none --calendar-background-color-id 8 --start-date 2026-09-07 --run-id primeiro-frame-baseline-01
 ```
+
+Sparse diagnostics require both `--mapping-mode sparse --event-compression none`.
 
 Dry-run is fully local: it does not construct a Google gateway, authenticate, write a token, create a calendar, create an event, or delete an event.
 
@@ -179,9 +181,9 @@ The uncompressed full-grid fallback performs no filler optimization:
 
 These totals are planning estimates, not a claim that Google Calendar will safely accept those workloads. The baseline prioritizes visual fidelity over event economy.
 
-### Synchronized horizontal-band compression
+### Synchronized horizontal-band compression (production default)
 
-The geometrically calibrated optimization candidate is explicitly enabled with:
+New plans use the strategy automatically. It may also be selected explicitly with:
 
 ```powershell
 --event-compression synchronized-horizontal-bands
@@ -195,8 +197,12 @@ upload counts become smaller. `--event-compression none` preserves the original 
 behavior.
 
 Real compressed execution additionally requires the synchronized-band calibration to be recorded
-as stable and safe in the loaded profile. Calibration of the layout has passed, but visual
-equivalence for a real mapped video frame and the final animation remains a separate pending gate.
+as stable and safe in the loaded profile. Production validation passed with six real frames:
+792/792 events were created, capture and GIF composition completed, and manual visual equivalence
+with the 6,048-event baseline passed. This 86.9% reduction is sample-specific.
+
+`--event-compression none` remains supported for fallback, baseline, and debug plans. Existing
+persisted plans retain their recorded strategy; legacy plans without the field load as `none`.
 
 ## Real upload safety
 
