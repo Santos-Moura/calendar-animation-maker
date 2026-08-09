@@ -4,8 +4,10 @@ Independent vertical compression was rejected because mixed durations and partia
 Google Calendar's horizontal order, visible widths, and placement. This follow-up uses a stricter
 rule: every compressed interval contains all six subcolumns with exactly the same start and end.
 
-The production mapper is still unchanged. This branch only estimates savings and generates a
-small Calendar calibration.
+The real Calendar geometry calibration passed: equal widths, `00..05` order, color vectors,
+aligned boundaries, refresh, and week navigation all remained stable. The mapper therefore
+supports this strategy as an explicit, calibrated opt-in while retaining the uncompressed mode.
+Visual equivalence for a real mapped video frame and the final animation is still pending.
 
 ## Algorithm
 
@@ -54,7 +56,8 @@ The estimate writes JSON and text below:
 output/compression-estimates/<animation_id>/synchronized-bands/
 ```
 
-It is entirely local and never creates compressed `CalendarEventDraft` objects.
+The estimator is entirely local. The production mapper uses the same band-building rule when
+`--event-compression synchronized-horizontal-bands` is selected.
 
 ## Visual calibration
 
@@ -99,9 +102,17 @@ python -m calendar_anim calendar cleanup --animation-id calibration-synchronized
 python -m calendar_anim calendar cleanup --animation-id calibration-synchronized-horizontal-bands --run-id synchronized-bands-real-01 --execute
 ```
 
-## Decision gate
+## Geometry decision and pending production validation
 
-Do not implement production compression unless equal widths, summary order, color placement,
-adjacent boundaries, and refresh/navigation stability all pass. A positive result would justify a
-new feature branch from `main`; this experimental branch should not be merged as production logic.
+The geometry gate passed in the real Google Calendar UI. This does not yet prove that a compressed
+video frame or GIF is visually equivalent to the uncompressed baseline. Record the completed
+observations into the profile before planning the single-frame production validation:
 
+```powershell
+python -m calendar_anim calendar map-frame .\output\multi-frame-test\animation.json --frame 0 --mapping-mode full-grid --event-compression synchronized-horizontal-bands --start-date 2026-11-22 --run-id compressed-frame-01
+python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --event-compression synchronized-horizontal-bands --start-date 2026-11-22 --run-id compressed-animation-01
+```
+
+The mapper keeps all `42x24` logical cells for preview and diagnostics. Only the
+`CalendarEventDraft` layer is compressed: consecutive equal six-slot vectors become six longer
+events. `--event-compression none` remains the backward-compatible fallback.

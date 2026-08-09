@@ -13,7 +13,10 @@ animation.json
     -> atomic frame-level checkpoint
 ```
 
-Reliability and resumability are more important than upload speed. The implementation does not use the batch API, async workers, aggressive concurrency, event compression, or event-level resume.
+Reliability and resumability are more important than upload speed. The implementation does not use
+the batch API, async workers, aggressive concurrency, or event-level resume. Geometrically
+calibrated synchronized-band event compression is available as an explicit planning option; real
+video-frame and final-animation validation remain pending.
 
 ## Frame and week assignment
 
@@ -50,6 +53,15 @@ These values are a testing recommendation, not hardcoded planner behavior.
 ```powershell
 python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --start-date 2026-10-04 --run-id animation-test-01
 ```
+
+Use the calibrated compressed path with:
+
+```powershell
+python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --event-compression synchronized-horizontal-bands --start-date 2026-11-22 --run-id animation-bands-01
+```
+
+The chosen compression mode and compressed event drafts are persisted in the immutable global and
+per-frame plans, so resume uploads exactly what was reviewed locally.
 
 Planning never constructs a Google gateway or authenticates. It produces:
 

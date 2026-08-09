@@ -137,10 +137,12 @@ The first scalability experiment is vertical run compression. The local
 calling Google; the separate 30-event calibration tests whether mixed-duration overlaps remain
 visually stable. See [vertical compression experiment](docs/vertical-compression-experiment.md).
 
-Because independent mixed-duration columns proved visually unstable, the constrained follow-up is
-`calendar estimate-band-compression`: it merges only complete six-slot row vectors and estimates
-792 events instead of 6,048 for the current six-frame sample. This remains experimental pending a
-real Calendar check. See [synchronized horizontal bands](docs/synchronized-horizontal-bands-experiment.md).
+Because independent mixed-duration columns proved visually unstable, the constrained follow-up
+merges only complete six-slot row vectors. The real Calendar calibration preserved widths, order,
+colors, boundaries, refresh, and navigation. The mapper now exposes this geometrically calibrated
+strategy through `--event-compression synchronized-horizontal-bands`; `none` remains the fallback.
+Validation with a real mapped video frame and final animation is still pending. The current
+six-frame sample estimates 792 events instead of 6,048. See [synchronized horizontal bands](docs/synchronized-horizontal-bands-experiment.md).
 
 Before any full-grid upload, run the 24-event ordering experiment locally and inspect its logical artifacts:
 
@@ -170,6 +172,13 @@ The command reads `output/calibration/calibration-profile.yaml` by default and w
 `sparse` is the backward-compatible default and creates only foreground events. It keeps blank summaries and remains horizontally non-absolute. `full-grid` is recommended for the first real visual experiment: every target cell becomes an event, structural background events keep all calibrated subcolumns occupied, and `summary-prefix` supplies the keys `00..05`. The background is a configurable Calendar `colorId`, not an attempt to match the browser theme.
 
 For the current candidate grid, full-grid costs `42x24 = 1008` events for one frame. Twelve frames would require 12,096 events and 60 frames would require 60,480 events before any future optimization. These volumes are estimates, not guaranteed safe Calendar workloads.
+
+The calibrated compressed path keeps the same `42x24` preview while merging consecutive equal
+six-slot row vectors into longer Calendar events:
+
+```powershell
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --event-compression synchronized-horizontal-bands --calendar-background-color-id 8 --start-date 2026-11-22 --run-id frame-bands-001
+```
 
 Dry-run remains available while any calibration is pending, but real upload is blocked until the profile reports `READY FOR SINGLE-FRAME EXPERIMENT`. An upload additionally requires an explicit date, event-limit validation, confirmation, OAuth, the laboratory calendar, and a unique frame run. In particular, do not execute a full-grid frame before `subcolumn-order` has been observed and recorded:
 

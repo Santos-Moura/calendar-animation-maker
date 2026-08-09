@@ -54,7 +54,9 @@ manifest blocks
     -> foreground + structural background events
 ```
 
-Every target cell becomes exactly one event. For every day and row, all calibrated subcolumns exist and share the same start/end interval. Structural background cells occupy otherwise empty slots, making the geometry more predictable.
+Every target cell exists in the logical canvas. In the uncompressed baseline, each cell becomes
+one event. Structural background cells occupy otherwise empty slots, making the geometry more
+predictable.
 
 This does not create an API-level subcolumn property. Events are emitted deterministically in `day -> row -> subcolumn` order, while final visual ordering still belongs to Google Calendar and must be inspected in the real UI.
 
@@ -167,7 +169,7 @@ Full-grid events: 1008
 
 ## Cost of fidelity
 
-Full-grid intentionally performs no filler optimization:
+The uncompressed full-grid fallback performs no filler optimization:
 
 ```text
 42x24 = 1008 events/frame
@@ -176,6 +178,25 @@ Full-grid intentionally performs no filler optimization:
 ```
 
 These totals are planning estimates, not a claim that Google Calendar will safely accept those workloads. The baseline prioritizes visual fidelity over event economy.
+
+### Synchronized horizontal-band compression
+
+The geometrically calibrated optimization candidate is explicitly enabled with:
+
+```powershell
+--event-compression synchronized-horizontal-bands
+```
+
+For each day, consecutive rows merge only when their complete six-slot vectors have identical
+Calendar colors and foreground/background roles. Each band still creates six simultaneous events
+with summaries `00..05`; all six share the same start and end. Day boundaries are never crossed.
+The `42x24` mapped canvas and its previews remain unchanged while the persisted event drafts and
+upload counts become smaller. `--event-compression none` preserves the original one-event-per-cell
+behavior.
+
+Real compressed execution additionally requires the synchronized-band calibration to be recorded
+as stable and safe in the loaded profile. Calibration of the layout has passed, but visual
+equivalence for a real mapped video frame and the final animation remains a separate pending gate.
 
 ## Real upload safety
 
