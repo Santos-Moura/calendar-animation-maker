@@ -4,6 +4,7 @@ from typing import Annotated, Never
 
 import typer
 
+from calendar_anim.browser.login import launch_manual_login_browser
 from calendar_anim.browser.playwright_gateway import PlaywrightCalendarCaptureGateway
 from calendar_anim.calendar.capture.artifacts import (
     CaptureStore,
@@ -15,6 +16,7 @@ from calendar_anim.calendar.capture.composition import (
     validate_completed_capture,
 )
 from calendar_anim.calendar.capture.models import (
+    BrowserChannel,
     CalendarCaptureConfig,
     CaptureState,
     FrameCaptureStatus,
@@ -39,11 +41,13 @@ def _capture_config(
     profile_directory: Path,
     stabilization_seconds: float,
     ready_timeout_seconds: float,
+    browser_channel: BrowserChannel,
 ) -> CalendarCaptureConfig:
     return CalendarCaptureConfig(
         profile_directory=profile_directory,
         stabilization_seconds=stabilization_seconds,
         ready_timeout_seconds=ready_timeout_seconds,
+        browser_channel=browser_channel,
     )
 
 
@@ -51,19 +55,20 @@ def browser_login_command(
     profile_directory: Annotated[Path, typer.Option("--profile-directory")] = Path(
         ".calendar-anim/browser-profile"
     ),
+    browser_executable: Annotated[Path | None, typer.Option("--browser-executable")] = None,
 ) -> None:
-    """Open headed Chromium for a one-time manual Google login and UI setup."""
-    config = CalendarCaptureConfig(profile_directory=profile_directory)
+    """Open normal Chrome for a one-time manual Google login and UI setup."""
     typer.echo(f"Persistent browser profile: {profile_directory}")
+    typer.echo("Browser mode: normal Google Chrome (not controlled by Playwright).")
     typer.echo("No Google credentials will be read or typed by this command.")
     try:
-        with PlaywrightCalendarCaptureGateway(config) as gateway:
-            gateway.open_for_manual_login()
-            typer.echo("Log in manually and configure week view, dark theme, and hidden sidebar.")
-            typer.prompt("Press Enter here after Calendar is ready", default="", show_default=False)
+        launch_manual_login_browser(profile_directory, browser_executable)
+        typer.echo("Log in manually and configure week view, dark theme, and hidden sidebar.")
+        typer.echo("Close that Chrome window completely when Calendar is ready.")
+        typer.prompt("Press Enter here after closing Chrome", default="", show_default=False)
     except (CalendarAnimError, OSError, RuntimeError) as error:
         _fail(error)
-    typer.echo("Browser profile saved. The browser window can now be closed.")
+    typer.echo("Browser profile saved and ready for Playwright capture.")
 
 
 def capture_animation_command(
@@ -79,6 +84,16 @@ def capture_animation_command(
     ),
     stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2.0,
     ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 30.0,
+    browser_channel: Annotated[
+        BrowserChannel, typer.Option("--browser-channel")
+    ] = BrowserChannel.CHROME,
+    recapture: Annotated[
+        bool,
+        typer.Option(
+            "--recapture",
+            help="Back up existing screenshots and recapture every frame with --execute.",
+        ),
+    ] = False,
     execute: Annotated[
         bool, typer.Option("--execute", help="Open the browser and capture screenshots.")
     ] = False,
@@ -86,7 +101,12 @@ def capture_animation_command(
     """Plan or execute resumable screenshots for uploaded animation weeks."""
     try:
         resolved_run_id = _valid_run_id(run_id)
-        config = _capture_config(profile_directory, stabilization_seconds, ready_timeout_seconds)
+        config = _capture_config(
+            profile_directory,
+            stabilization_seconds,
+            ready_timeout_seconds,
+            browser_channel,
+        )
         animation_store = AnimationRunStore(animation_output_root)
         plan = build_capture_plan(resolved_run_id, animation_store, config)
         store = CaptureStore(capture_output_root)
@@ -102,9 +122,14 @@ def capture_animation_command(
     if not execute:
         typer.echo("\nPlanned actions:")
         for frame in state.frames:
-            action = (
-                "SKIP (completed)" if frame.status is FrameCaptureStatus.COMPLETED else "CAPTURE"
-            )
+            if recapture:
+                action = "RECAPTURE (backup occurs only with --execute)"
+            else:
+                action = (
+                    "SKIP (completed)"
+                    if frame.status is FrameCaptureStatus.COMPLETED
+                    else "CAPTURE"
+                )
             typer.echo(f"Frame {frame.frame_index}: {action}")
         typer.echo("No browser was opened and no Calendar API call was made.")
         return
@@ -113,6 +138,9 @@ def capture_animation_command(
         typer.echo(f"Frame {frame_index}: {status.value}")
 
     try:
+        if recapture:
+            backup = store.reset_for_recapture(plan, state)
+            typer.echo(f"Previous capture backup: {backup or 'no previous files'}")
         with PlaywrightCalendarCaptureGateway(config) as gateway:
             state = CalendarWeekCaptureService(gateway, store, progress).capture(plan, state)
     except KeyboardInterrupt:

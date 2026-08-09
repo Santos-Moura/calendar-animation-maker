@@ -1,5 +1,6 @@
 import hashlib
 import os
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -162,6 +163,33 @@ class CaptureStore:
         path.write_text(build_capture_report(plan, state), encoding="utf-8")
         return path
 
+    def reset_for_recapture(self, plan: CapturePlan, state: CaptureState) -> Path | None:
+        self._validate_state(plan, state)
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        backup_directory = self.run_directory(plan.run_id) / "backups" / timestamp
+        copied = False
+        for plan_frame in plan.frames:
+            source = self.screenshot_path(plan, plan_frame.frame_index)
+            if source.is_file():
+                destination = backup_directory / plan_frame.screenshot_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+                copied = True
+        for name in ("animation.gif", "animation.mp4"):
+            source = self.run_directory(plan.run_id) / name
+            if source.is_file():
+                backup_directory.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, backup_directory / name)
+                copied = True
+        for state_frame in state.frames:
+            state_frame.status = FrameCaptureStatus.PENDING
+            state_frame.started_at = None
+            state_frame.completed_at = None
+            state_frame.error = None
+        self.save_state(state)
+        self.save_report(plan, state)
+        return backup_directory if copied else None
+
     @staticmethod
     def _validate_state(plan: CapturePlan, state: CaptureState) -> None:
         if state.run_id != plan.run_id or state.source_plan_digest != plan.source_plan_digest:
@@ -186,6 +214,7 @@ def build_capture_report(plan: CapturePlan, state: CaptureState) -> str:
         f"Device scale factor: {plan.config.device_scale_factor}",
         f"Browser zoom: {plan.config.browser_zoom_percent}%",
         f"Theme: {plan.config.color_scheme}",
+        f"Browser channel: {plan.config.browser_channel.value}",
         f"View: {plan.config.calendar_view}",
         f"Sidebar hidden: {plan.config.sidebar_hidden}",
         f"Visible hours: {plan.config.visible_start_hour:02d}:00-"

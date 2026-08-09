@@ -13,6 +13,12 @@ class FrameCaptureStatus(StrEnum):
     FAILED = "failed"
 
 
+class BrowserChannel(StrEnum):
+    CHROME = "chrome"
+    MSEDGE = "msedge"
+    BUNDLED_CHROMIUM = "bundled-chromium"
+
+
 class CalendarCaptureConfig(BaseModel):
     viewport_width: int = Field(default=1920, gt=0)
     viewport_height: int = Field(default=1080, gt=0)
@@ -27,6 +33,7 @@ class CalendarCaptureConfig(BaseModel):
     stabilization_seconds: float = Field(default=2.0, ge=0)
     stable_snapshot_count: int = Field(default=2, ge=1, le=10)
     profile_directory: Path = Path(".calendar-anim/browser-profile")
+    browser_channel: BrowserChannel = BrowserChannel.CHROME
 
     @model_validator(mode="after")
     def valid_visible_window(self) -> "CalendarCaptureConfig":

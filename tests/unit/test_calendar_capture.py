@@ -171,3 +171,31 @@ def test_capture_failure_is_checkpointed_and_stops_the_run(tmp_path: Path) -> No
     assert persisted.frames[0].status is FrameCaptureStatus.FAILED
     assert persisted.frames[0].error == "calendar did not stabilize"
     assert persisted.frames[1].status is FrameCaptureStatus.PENDING
+
+
+def test_recapture_backs_up_outputs_and_resets_every_frame(tmp_path: Path) -> None:
+    animation_store = _uploaded_animation(tmp_path)
+    plan = build_capture_plan("capture-test", animation_store, CalendarCaptureConfig())
+    store = CaptureStore(tmp_path / "captures")
+    state = store.initialize(plan)
+    for frame in state.frames:
+        frame.status = FrameCaptureStatus.COMPLETED
+        frame.started_at = datetime.now(UTC)
+        frame.completed_at = datetime.now(UTC)
+        screenshot = store.screenshot_path(plan, frame.frame_index)
+        screenshot.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (40, 20), "#334455").save(screenshot)
+    store.save_state(state)
+    gif = store.run_directory(plan.run_id) / "animation.gif"
+    gif.write_bytes(b"old-gif")
+
+    backup = store.reset_for_recapture(plan, state)
+
+    assert backup is not None
+    assert (backup / "frames/frame-0000.png").is_file()
+    assert (backup / "frames/frame-0001.png").is_file()
+    assert (backup / "animation.gif").read_bytes() == b"old-gif"
+    assert store.screenshot_path(plan, 0).is_file()
+    persisted = store.load_state(plan.run_id)
+    assert all(frame.status is FrameCaptureStatus.PENDING for frame in persisted.frames)
+    assert all(frame.started_at is None for frame in persisted.frames)
