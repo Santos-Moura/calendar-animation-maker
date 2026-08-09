@@ -245,6 +245,18 @@ vertical runs in existing full-grid manifests but does not create compressed
 See [vertical event compression experiment](vertical-compression-experiment.md) for the group
 geometry, estimator metrics, manual YAML recording flow, cleanup, and production decision gate.
 
+## `synchronized-horizontal-bands`
+
+This follow-up avoids independent mixed-duration events. It merges consecutive rows only when the
+complete six-slot vector for one day is unchanged, so every compressed band still creates six
+events with identical starts and ends. The local estimate reduces the current six-frame example
+from 6,048 events to 792 potential events, but production remains disabled until the real Calendar
+calibration confirms equal widths, `00..05` ordering, color placement, adjacent boundaries, and
+refresh/navigation stability.
+
+See [synchronized horizontal bands](synchronized-horizontal-bands-experiment.md) for the algorithm,
+measured estimate, calibration commands, observation checklist, and cleanup.
+
 ## Consolidated profile and readiness
 
 ```powershell
@@ -270,6 +282,7 @@ python -m calendar_anim calendar cleanup --animation-id calibration-position-gri
 python -m calendar_anim calendar cleanup --animation-id calibration-horizontal-bars --run-id bars-real-20260807-01
 python -m calendar_anim calendar cleanup --animation-id calibration-subcolumn-order --run-id slot-order-real-01
 python -m calendar_anim calendar cleanup --animation-id calibration-vertical-compression --run-id vertical-compression-real-01
+python -m calendar_anim calendar cleanup --animation-id calibration-synchronized-horizontal-bands --run-id synchronized-bands-real-01
 ```
 
 Cleanup matches only `generated_by`, `animation_id`, and `run_id` in the recognized lab calendar.

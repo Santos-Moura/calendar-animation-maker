@@ -137,6 +137,11 @@ The first scalability experiment is vertical run compression. The local
 calling Google; the separate 30-event calibration tests whether mixed-duration overlaps remain
 visually stable. See [vertical compression experiment](docs/vertical-compression-experiment.md).
 
+Because independent mixed-duration columns proved visually unstable, the constrained follow-up is
+`calendar estimate-band-compression`: it merges only complete six-slot row vectors and estimates
+792 events instead of 6,048 for the current six-frame sample. This remains experimental pending a
+real Calendar check. See [synchronized horizontal bands](docs/synchronized-horizontal-bands-experiment.md).
+
 Before any full-grid upload, run the 24-event ordering experiment locally and inspect its logical artifacts:
 
 ```powershell
@@ -272,4 +277,4 @@ uv run pytest tests/unit
 uv run pytest tests/integration
 ```
 
-See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [vertical compression experiment](docs/vertical-compression-experiment.md), [single-frame mapper](docs/single-frame-mapper.md), [multi-frame upload](docs/multi-frame-upload.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.
+See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [vertical compression experiment](docs/vertical-compression-experiment.md), [synchronized horizontal bands](docs/synchronized-horizontal-bands-experiment.md), [single-frame mapper](docs/single-frame-mapper.md), [multi-frame upload](docs/multi-frame-upload.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.

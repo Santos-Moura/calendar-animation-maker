@@ -120,3 +120,6 @@ If the visual experiment fails, record that vertical compression is not reliable
 API upload improvements, controlled concurrency, hybrid mapping, or background optimization. Do
 not use DOM or CSS hacks to force Calendar layout.
 
+The independent-column experiment did fail in the real Calendar. Mixed-duration and staggered
+groups changed widths and ordering. The constrained follow-up is documented in
+[synchronized horizontal-band compression](synchronized-horizontal-bands-experiment.md).
