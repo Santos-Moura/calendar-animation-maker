@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 from pathlib import Path
+from typing import cast
 
 from PIL import Image
 
@@ -35,9 +36,9 @@ def compose_gif(frame_paths: list[Path], output_path: Path, fps: float) -> Path:
         raise CalendarAnimError("Composition FPS must be positive")
     frames: list[Image.Image] = []
     try:
-        for path in frame_paths:
+        for sequence, path in enumerate(frame_paths):
             with Image.open(path) as source:
-                frames.append(source.convert("RGB"))
+                frames.append(_gif_frame(source.convert("RGB"), sequence))
         dimensions = {frame.size for frame in frames}
         if len(dimensions) != 1:
             raise CalendarAnimError("Captured screenshots do not have consistent dimensions")
@@ -57,6 +58,22 @@ def compose_gif(frame_paths: list[Path], output_path: Path, fps: float) -> Path:
         for frame in frames:
             frame.close()
     return output_path
+
+
+def _gif_frame(source: Image.Image, sequence: int) -> Image.Image:
+    """Keep visually identical adjacent frames distinct to preserve their timeline slots."""
+    frame = source.quantize(colors=254)
+    palette = frame.getpalette()
+    if palette is None:
+        raise CalendarAnimError("Could not build a GIF palette")
+    marker_color = cast(tuple[int, int, int], source.getpixel((0, 0)))
+    for palette_index in (254, 255):
+        offset = palette_index * 3
+        palette[offset : offset + 3] = list(marker_color)
+    frame.putpalette(palette)
+    frame.putpixel((0, 0), 254 + (sequence % 2))
+    source.close()
+    return frame
 
 
 def compose_mp4(frame_paths: list[Path], output_path: Path, fps: float) -> Path:

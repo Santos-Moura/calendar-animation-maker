@@ -48,9 +48,9 @@ def _capture_config(
 
 
 def browser_login_command(
-    profile_directory: Annotated[
-        Path, typer.Option("--profile-directory")
-    ] = Path(".calendar-anim/browser-profile"),
+    profile_directory: Annotated[Path, typer.Option("--profile-directory")] = Path(
+        ".calendar-anim/browser-profile"
+    ),
 ) -> None:
     """Open headed Chromium for a one-time manual Google login and UI setup."""
     config = CalendarCaptureConfig(profile_directory=profile_directory)
@@ -68,21 +68,17 @@ def browser_login_command(
 
 def capture_animation_command(
     run_id: Annotated[str, typer.Option("--run-id")],
-    animation_output_root: Annotated[
-        Path, typer.Option("--animation-output-root")
-    ] = Path("output/animation-runs"),
-    capture_output_root: Annotated[
-        Path, typer.Option("--capture-output-root")
-    ] = Path("output/captures"),
-    profile_directory: Annotated[
-        Path, typer.Option("--profile-directory")
-    ] = Path(".calendar-anim/browser-profile"),
-    stabilization_seconds: Annotated[
-        float, typer.Option("--stabilization-seconds", min=0)
-    ] = 2.0,
-    ready_timeout_seconds: Annotated[
-        float, typer.Option("--ready-timeout-seconds", min=1)
-    ] = 30.0,
+    animation_output_root: Annotated[Path, typer.Option("--animation-output-root")] = Path(
+        "output/animation-runs"
+    ),
+    capture_output_root: Annotated[Path, typer.Option("--capture-output-root")] = Path(
+        "output/captures"
+    ),
+    profile_directory: Annotated[Path, typer.Option("--profile-directory")] = Path(
+        ".calendar-anim/browser-profile"
+    ),
+    stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2.0,
+    ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 30.0,
     execute: Annotated[
         bool, typer.Option("--execute", help="Open the browser and capture screenshots.")
     ] = False,
@@ -90,9 +86,7 @@ def capture_animation_command(
     """Plan or execute resumable screenshots for uploaded animation weeks."""
     try:
         resolved_run_id = _valid_run_id(run_id)
-        config = _capture_config(
-            profile_directory, stabilization_seconds, ready_timeout_seconds
-        )
+        config = _capture_config(profile_directory, stabilization_seconds, ready_timeout_seconds)
         animation_store = AnimationRunStore(animation_output_root)
         plan = build_capture_plan(resolved_run_id, animation_store, config)
         store = CaptureStore(capture_output_root)
@@ -109,9 +103,7 @@ def capture_animation_command(
         typer.echo("\nPlanned actions:")
         for frame in state.frames:
             action = (
-                "SKIP (completed)"
-                if frame.status is FrameCaptureStatus.COMPLETED
-                else "CAPTURE"
+                "SKIP (completed)" if frame.status is FrameCaptureStatus.COMPLETED else "CAPTURE"
             )
             typer.echo(f"Frame {frame.frame_index}: {action}")
         typer.echo("No browser was opened and no Calendar API call was made.")
@@ -135,9 +127,9 @@ def capture_animation_command(
 def compose_capture_command(
     run_id: Annotated[str, typer.Option("--run-id")],
     fps: Annotated[float, typer.Option("--fps", min=0.01)] = 3.0,
-    capture_output_root: Annotated[
-        Path, typer.Option("--capture-output-root")
-    ] = Path("output/captures"),
+    capture_output_root: Annotated[Path, typer.Option("--capture-output-root")] = Path(
+        "output/captures"
+    ),
     mp4: Annotated[
         bool, typer.Option("--mp4", help="Also compose an H.264 MP4 using ffmpeg.")
     ] = False,

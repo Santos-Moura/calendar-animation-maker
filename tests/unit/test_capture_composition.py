@@ -60,6 +60,7 @@ def test_gif_composition_preserves_frame_order_and_duplicate_duration(tmp_path: 
     output = compose_gif(frames, store.run_directory(plan.run_id) / "animation.gif", fps=2)
 
     with Image.open(output) as image:
+        assert image.n_frames == 3
         durations: list[int] = []
         colors: list[tuple[int, int, int]] = []
         for index in range(image.n_frames):
@@ -67,6 +68,7 @@ def test_gif_composition_preserves_frame_order_and_duplicate_duration(tmp_path: 
             durations.append(int(image.info["duration"]))
             colors.append(image.convert("RGB").getpixel((10, 10)))
     assert sum(durations) == 1500
+    assert durations == [500, 500, 500]
     assert colors[0] == (255, 0, 0)
     assert colors[-1] == (0, 0, 255)
 

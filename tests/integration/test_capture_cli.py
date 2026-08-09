@@ -135,9 +135,7 @@ def test_capture_execute_uses_fake_browser_and_resume_skips_completed(
     FakePlaywrightGateway.instances.clear()
     animation_root = _animation_run(tmp_path)
     capture_root = tmp_path / "captures"
-    monkeypatch.setattr(
-        capture_commands, "PlaywrightCalendarCaptureGateway", FakePlaywrightGateway
-    )
+    monkeypatch.setattr(capture_commands, "PlaywrightCalendarCaptureGateway", FakePlaywrightGateway)
     command = [*_command(animation_root, capture_root), "--execute"]
 
     first = runner.invoke(app, command)

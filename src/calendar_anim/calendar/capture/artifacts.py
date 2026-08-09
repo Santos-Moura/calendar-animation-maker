@@ -39,6 +39,15 @@ def build_capture_plan(
 ) -> CapturePlan:
     animation_plan = animation_store.load_plan(run_id)
     upload_state = animation_store.load_state(run_id)
+    if (
+        upload_state.run_id != animation_plan.run_id
+        or upload_state.animation_id != animation_plan.animation_id
+    ):
+        raise CalendarAnimError("Animation upload state identity does not match its plan")
+    expected = [(frame.frame_index, frame.planned_events) for frame in animation_plan.frames]
+    actual = [(frame.frame_index, frame.planned_events) for frame in upload_state.frames]
+    if actual != expected:
+        raise CalendarAnimError("Animation upload state frames do not match its plan")
     incomplete = [
         frame.frame_index
         for frame in upload_state.frames

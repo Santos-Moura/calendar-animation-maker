@@ -103,6 +103,13 @@ def test_capture_plan_uses_persisted_weeks_and_requires_completed_uploads(
     with pytest.raises(CalendarAnimError, match="incomplete frames: 1"):
         build_capture_plan("capture-test", animation_store, CalendarCaptureConfig())
 
+    state.frames[1].status = FrameUploadStatus.COMPLETED
+    state.frames[1].created_events = state.frames[1].planned_events
+    state.frames.pop(0)
+    animation_store.save_state(state)
+    with pytest.raises(CalendarAnimError, match="state frames do not match"):
+        build_capture_plan("capture-test", animation_store, CalendarCaptureConfig())
+
 
 def test_capture_store_checkpoints_atomically_and_rejects_plan_drift(tmp_path: Path) -> None:
     animation_store = _uploaded_animation(tmp_path)

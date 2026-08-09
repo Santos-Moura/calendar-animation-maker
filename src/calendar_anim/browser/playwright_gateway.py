@@ -16,9 +16,7 @@ EVENT_SELECTORS = "[data-eventid], [data-eventchip], [data-dragsource-type='4']"
 
 
 def calendar_week_url(week_start: date) -> str:
-    return (
-        f"{CALENDAR_HOME_URL}/{week_start.year}/{week_start.month}/{week_start.day}"
-    )
+    return f"{CALENDAR_HOME_URL}/{week_start.year}/{week_start.month}/{week_start.day}"
 
 
 class PlaywrightCalendarCaptureGateway:
@@ -87,9 +85,7 @@ class PlaywrightCalendarCaptureGateway:
         if self.config.browser_zoom_percent == 100:
             page.keyboard.press("Control+0")
         else:
-            raise CalendarAnimError(
-                "Only the calibrated 100% browser zoom is currently supported"
-            )
+            raise CalendarAnimError("Only the calibrated 100% browser zoom is currently supported")
         self._capture_region = None
 
     def wait_until_ready(self, week_start: date, minimum_event_count: int) -> None:
