@@ -16,6 +16,7 @@ CalibrationPattern = Literal[
     "position-grid",
     "horizontal-bars",
     "subcolumn-order",
+    "vertical-compression",
     "combined",
 ]
 SlotOrderStrategy = Literal[
@@ -81,6 +82,43 @@ class CalendarUIProfile(BaseModel):
         return self
 
 
+class ControlVsCompressedObservations(BaseModel):
+    same_total_height: bool | None = None
+    visually_equivalent: bool | None = None
+    visible_boundary_difference: bool | None = None
+
+
+class MixedDurationObservations(BaseModel):
+    slot_order_preserved: bool | None = None
+    equal_widths_preserved: bool | None = None
+    layout_changes_detected: bool | None = None
+
+
+class StaggeredCompressionObservations(BaseModel):
+    slot_order_preserved: bool | None = None
+    overlap_layout_stable: bool | None = None
+    layout_changes_detected: bool | None = None
+
+
+class VerticalCompressionConclusion(BaseModel):
+    visually_acceptable: bool | None = None
+    safe_for_mapper: bool | None = None
+    notes: str = ""
+
+
+class VerticalCompressionObservations(BaseModel):
+    control_vs_compressed: ControlVsCompressedObservations = Field(
+        default_factory=ControlVsCompressedObservations
+    )
+    fixed_start_mixed_duration: MixedDurationObservations = Field(
+        default_factory=MixedDurationObservations
+    )
+    staggered: StaggeredCompressionObservations = Field(
+        default_factory=StaggeredCompressionObservations
+    )
+    conclusion: VerticalCompressionConclusion = Field(default_factory=VerticalCompressionConclusion)
+
+
 class CalibrationObservationValues(BaseModel):
     """Human observations, including fields written by older releases."""
 
@@ -119,6 +157,7 @@ class CalibrationObservationValues(BaseModel):
     ordering_factor_tested: bool | None = None
     ordering_controlling_property: OrderingControllingProperty | None = None
     ordering_factor_stable: bool | None = None
+    vertical_compression: VerticalCompressionObservations | None = None
     notes: str = ""
 
     # Compatibility with observation YAML written before the two vertical

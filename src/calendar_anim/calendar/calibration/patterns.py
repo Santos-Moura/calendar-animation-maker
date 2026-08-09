@@ -51,6 +51,7 @@ SUBCOLUMN_ORDER_VARIANTS: Final[list[tuple[str, list[int]]]] = [
     ("reverse", [5, 4, 3, 2, 1, 0]),
     ("shuffled", [2, 5, 0, 4, 1, 3]),
 ]
+VERTICAL_COMPRESSION_COLOR: Final[tuple[str, str]] = EVENT_COLORS[1]
 
 PATTERNS: Final[dict[CalibrationPattern, PatternDescription]] = {
     "duration-scale": PatternDescription(
@@ -82,6 +83,11 @@ PATTERNS: Final[dict[CalibrationPattern, PatternDescription]] = {
         name="subcolumn-order",
         description="Test stable left-to-right ordering of six simultaneous events",
         approximate_events=24,
+    ),
+    "vertical-compression": PatternDescription(
+        name="vertical-compression",
+        description="Compare unit cells with vertically compressed mixed-duration columns",
+        approximate_events=30,
     ),
     "combined": PatternDescription(
         name="combined",
@@ -277,6 +283,105 @@ def _subcolumn_order(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
     return events
 
 
+def _vertical_compression(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
+    events: list[CalendarEventDraft] = []
+
+    # CONTROL: three slots represented by four independent 30-minute cells.
+    for segment in range(4):
+        for slot in range(3):
+            events.append(
+                _event(
+                    start,
+                    6 + segment // 2,
+                    30 * (segment % 2),
+                    30,
+                    zone,
+                    f"{slot:02d}",
+                    "vertical-control",
+                    VERTICAL_COMPRESSION_COLOR,
+                    {
+                        "experiment": "control",
+                        "representation": "unit-cells",
+                        "subcolumn_index": str(slot),
+                        "segment_index": str(segment),
+                        "duration_minutes": "30",
+                    },
+                )
+            )
+
+    # COMPRESSED: the equivalent two-hour region as one event in each slot.
+    for slot in range(6):
+        events.append(
+            _event(
+                start,
+                8,
+                30,
+                120,
+                zone,
+                f"{slot:02d}",
+                "vertical-compressed",
+                VERTICAL_COMPRESSION_COLOR,
+                {
+                    "experiment": "compressed",
+                    "representation": "vertical-run",
+                    "subcolumn_index": str(slot),
+                    "duration_minutes": "120",
+                },
+            )
+        )
+
+    # MIXED LENGTH: fixed starts with different end times.
+    for slot, duration in enumerate((30, 60, 90, 120, 90, 60)):
+        events.append(
+            _event(
+                start,
+                11,
+                0,
+                duration,
+                zone,
+                f"{slot:02d}",
+                "vertical-mixed-length",
+                VERTICAL_COMPRESSION_COLOR,
+                {
+                    "experiment": "mixed-length",
+                    "representation": "vertical-run",
+                    "subcolumn_index": str(slot),
+                    "duration_minutes": str(duration),
+                },
+            )
+        )
+
+    # STAGGERED: partial overlaps approximate a compressed real frame.
+    staggered = (
+        (0, 14, 0, 120),
+        (1, 14, 30, 60),
+        (2, 14, 0, 60),
+        (3, 15, 0, 60),
+        (4, 14, 0, 150),
+        (5, 14, 30, 90),
+    )
+    for slot, hour, minute, duration in staggered:
+        events.append(
+            _event(
+                start,
+                hour,
+                minute,
+                duration,
+                zone,
+                f"{slot:02d}",
+                "vertical-staggered",
+                VERTICAL_COMPRESSION_COLOR,
+                {
+                    "experiment": "staggered",
+                    "representation": "vertical-run",
+                    "subcolumn_index": str(slot),
+                    "duration_minutes": str(duration),
+                },
+            )
+        )
+    return events
+
+
 def _combined(start: date, zone: ZoneInfo) -> list[CalendarEventDraft]:
     events = [
         _event(
@@ -349,6 +454,7 @@ def build_calibration_plan(
         "position-grid": _position_grid,
         "horizontal-bars": _horizontal_bars,
         "subcolumn-order": _subcolumn_order,
+        "vertical-compression": _vertical_compression,
         "combined": _combined,
     }
     events = builders[pattern](start_date, zone)

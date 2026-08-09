@@ -37,6 +37,8 @@ def build_report(plan: CalibrationPlan, executed: bool) -> str:
         return _build_horizontal_bars_report(plan, executed)
     if plan.pattern == "subcolumn-order":
         return _build_subcolumn_order_report(plan, executed)
+    if plan.pattern == "vertical-compression":
+        return _build_vertical_compression_report(plan, executed)
 
     lines = [
         "Calendar Animation Calibration",
@@ -360,6 +362,75 @@ def _build_subcolumn_order_report(plan: CalibrationPlan, executed: bool) -> str:
     return "\n".join(lines)
 
 
+def _build_vertical_compression_report(plan: CalibrationPlan, executed: bool) -> str:
+    groups: dict[str, list[CalendarEventDraft]] = defaultdict(list)
+    for event in plan.events:
+        groups[event.private_metadata["group"]].append(event)
+
+    def group_lines(name: str, label: str) -> list[str]:
+        events = groups[name]
+        durations = sorted(
+            {round((event.end - event.start).total_seconds() / 60) for event in events}
+        )
+        slots = sorted({event.summary for event in events})
+        return [
+            label,
+            "-" * len(label),
+            f"events: {len(events)}",
+            f"expected slots: {', '.join(slots)}",
+            "expected duration(s): " + ", ".join(f"{value} minutes" for value in durations),
+            f"time range: {min(event.start for event in events):%H:%M}-"
+            f"{max(event.end for event in events):%H:%M}",
+            "",
+        ]
+
+    lines = [
+        "Vertical Event Compression Calibration",
+        "======================================",
+        "",
+        f"Run ID: {plan.run_id}",
+        f"Start date: {plan.start_date.isoformat()}",
+        f"Timezone: {plan.timezone}",
+        f"Calendar: {plan.calendar_name}",
+        f"Events: {plan.event_count}",
+        "Browser zoom: record after observing",
+        "Viewport: record after observing",
+        f"Execution: {'REAL' if executed else 'DRY RUN'}",
+        "Summary keys: 00, 01, 02, 03, 04, 05",
+        f"Shared color ID: {plan.events[0].color_id}",
+        "",
+    ]
+    lines.extend(group_lines("vertical-control", "CONTROL"))
+    lines.extend(group_lines("vertical-compressed", "COMPRESSED"))
+    lines.extend(group_lines("vertical-mixed-length", "MIXED LENGTH"))
+    lines.extend(group_lines("vertical-staggered", "STAGGERED"))
+    lines.extend(
+        [
+            "Observed Results",
+            "================",
+            "",
+            "Control and compressed have same total height: yes/no",
+            "Compressed columns keep 00..05 order: yes/no",
+            "Compressed columns keep equal widths: yes/no",
+            "Mixed durations preserve horizontal slot: yes/no",
+            "Mixed durations cause width changes: yes/no",
+            "Staggered starts preserve horizontal slot: yes/no",
+            "Staggered overlap causes reordering: yes/no",
+            "Visible vertical difference between 4 x 30 min events and 1 x 120 min event: yes/no",
+            "Visible gaps/borders differ: yes/no",
+            "Compression visually acceptable: yes/no",
+            "Safe for production mapper: yes/no",
+            "",
+            "Notes:",
+            "",
+            "Expected logical geometry. Google Calendar overlap layout must be validated manually.",
+            "No result is inferred by this dry-run.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def write_report(plan: CalibrationPlan, output_dir: Path, executed: bool = False) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "calibration-report.txt"
@@ -385,6 +456,7 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
         "position-grid": "Position Grid Calibration",
         "horizontal-bars": "Horizontal Bars Calibration",
         "subcolumn-order": "Subcolumn Order Calibration",
+        "vertical-compression": "Vertical Event Compression Calibration",
     }
     if plan.pattern in preview_titles:
         draw.text((15, 12), preview_titles[plan.pattern], fill="black", font=font)
@@ -404,6 +476,18 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
         y = round(top + (hour - start_hour) * hour_height)
         draw.line((left, y, width - right, y), fill="#E0E0E0", width=1)
         draw.text((82, y - 6), f"{hour:02d}:00", fill="#424242", font=font)
+    if plan.pattern == "vertical-compression":
+        _draw_vertical_compression_events(draw, plan, left, top, day_width, hour_height, font)
+        draw.text(
+            (15, height - 28),
+            "Expected logical geometry. Google Calendar overlap layout must be validated manually.",
+            fill="#B3261E",
+            font=font,
+        )
+        path = output_dir / "expected-layout.png"
+        image.save(path)
+        return path
+
     simultaneous: dict[tuple[str, str], list[int]] = defaultdict(list)
     labeled_groups: set[str] = set()
     for index, event in enumerate(plan.events):
@@ -445,6 +529,43 @@ def write_expected_layout(plan: CalibrationPlan, output_dir: Path) -> Path:
     return path
 
 
+def _draw_vertical_compression_events(
+    draw: ImageDraw.ImageDraw,
+    plan: CalibrationPlan,
+    left: int,
+    top: int,
+    day_width: float,
+    hour_height: float,
+    font: ImageFont.ImageFont,
+) -> None:
+    labels = {
+        "vertical-control": "CONTROL",
+        "vertical-compressed": "COMPRESSED",
+        "vertical-mixed-length": "MIXED LENGTH",
+        "vertical-staggered": "STAGGERED",
+    }
+    labeled: set[str] = set()
+    slot_width = (day_width - 8) / 6
+    for event in plan.events:
+        slot = int(event.private_metadata["subcolumn_index"])
+        x1 = left + 4 + slot * slot_width
+        x2 = x1 + slot_width - 2
+        start_minutes = event.start.hour * 60 + event.start.minute
+        end_minutes = event.end.hour * 60 + event.end.minute
+        y1 = top + ((start_minutes / 60) - 6) * hour_height
+        y2 = top + ((end_minutes / 60) - 6) * hour_height
+        group = event.private_metadata["group"]
+        if group not in labeled:
+            draw.text((8, round(y1) + 2), labels[group], fill="#424242", font=font)
+            labeled.add(group)
+        draw.rectangle(
+            (round(x1), round(y1), round(x2), round(y2)),
+            fill=event.color_hex or "#4285F4",
+            outline="black",
+        )
+        draw.text((round(x1) + 2, round(y1) + 1), event.summary, fill="white", font=font)
+
+
 def write_dry_run_artifacts(plan: CalibrationPlan, output_dir: Path) -> None:
     write_plan(plan, output_dir)
     write_report(plan, output_dir, executed=False)
@@ -458,6 +579,15 @@ def write_dry_run_artifacts(plan: CalibrationPlan, output_dir: Path) -> None:
         ),
         output_dir,
     )
+    if plan.pattern == "vertical-compression":
+        write_observations(
+            CalibrationObservations(
+                run_id=plan.run_id,
+                pattern=plan.pattern,
+                observations={"vertical_compression": {}},
+            ),
+            output_dir / "calibration-observations.yaml",
+        )
 
 
 def write_observations(observations: CalibrationObservations, path: Path) -> None:
