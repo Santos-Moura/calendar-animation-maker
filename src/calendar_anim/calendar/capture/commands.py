@@ -9,6 +9,11 @@ from calendar_anim.calendar.capture.artifacts import (
     CaptureStore,
     build_capture_plan,
 )
+from calendar_anim.calendar.capture.composition import (
+    compose_gif,
+    compose_mp4,
+    validate_completed_capture,
+)
 from calendar_anim.calendar.capture.models import (
     CalendarCaptureConfig,
     CaptureState,
@@ -127,6 +132,37 @@ def capture_animation_command(
     typer.echo("Calendar events were not created, changed, or deleted.")
 
 
+def compose_capture_command(
+    run_id: Annotated[str, typer.Option("--run-id")],
+    fps: Annotated[float, typer.Option("--fps", min=0.01)] = 3.0,
+    capture_output_root: Annotated[
+        Path, typer.Option("--capture-output-root")
+    ] = Path("output/captures"),
+    mp4: Annotated[
+        bool, typer.Option("--mp4", help="Also compose an H.264 MP4 using ffmpeg.")
+    ] = False,
+) -> None:
+    """Compose completed screenshots into a GIF and optionally an H.264 MP4."""
+    try:
+        store = CaptureStore(capture_output_root)
+        plan = store.load_plan(_valid_run_id(run_id))
+        state = store.load_state(plan.run_id)
+        frame_paths = validate_completed_capture(plan, state, store)
+        output_directory = store.run_directory(plan.run_id)
+        gif_path = compose_gif(frame_paths, output_directory / "animation.gif", fps)
+        mp4_path = (
+            compose_mp4(frame_paths, output_directory / "animation.mp4", fps) if mp4 else None
+        )
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Frames: {len(frame_paths)}")
+    typer.echo(f"FPS: {fps:g}")
+    typer.echo(f"GIF: {gif_path}")
+    if mp4_path is not None:
+        typer.echo(f"MP4: {mp4_path}")
+    typer.echo("Repeated consecutive screenshots keep their full playback duration.")
+
+
 def _status_counts(state: CaptureState) -> str:
     frames = state.frames
     completed = sum(frame.status is FrameCaptureStatus.COMPLETED for frame in frames)
@@ -142,3 +178,4 @@ def _status_counts(state: CaptureState) -> str:
 def register_capture_commands(app: typer.Typer) -> None:
     app.command("browser-login")(browser_login_command)
     app.command("capture-animation")(capture_animation_command)
+    app.command("compose-capture")(compose_capture_command)

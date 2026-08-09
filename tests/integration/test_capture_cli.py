@@ -153,6 +153,24 @@ def test_capture_execute_uses_fake_browser_and_resume_skips_completed(
     assert (capture_root / "capture-cli/frames/frame-0000.png").is_file()
     assert (capture_root / "capture-cli/frames/frame-0001.png").is_file()
 
+    composition = runner.invoke(
+        app,
+        [
+            "calendar",
+            "compose-capture",
+            "--run-id",
+            "capture-cli",
+            "--fps",
+            "3",
+            "--capture-output-root",
+            str(capture_root),
+        ],
+    )
+    assert composition.exit_code == 0, composition.output
+    assert "Frames: 2" in composition.output
+    assert "GIF:" in composition.output
+    assert (capture_root / "capture-cli/animation.gif").is_file()
+
 
 def test_capture_rejects_incomplete_upload_before_browser(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
