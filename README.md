@@ -196,12 +196,11 @@ For the current full-grid baseline, six frames plan `6 x 1008 = 6048` events. Th
 
 ## Capture uploaded Calendar weeks
 
-After every animation frame has upload status `completed`, install Chromium explicitly and create a
-dedicated manually authenticated browser profile:
+After every animation frame has upload status `completed`, install the Playwright dependency and
+create a dedicated manually authenticated browser profile:
 
 ```powershell
 python -m pip install -e ".[dev]"
-python -m playwright install chromium
 python -m calendar_anim calendar browser-login
 ```
 
@@ -215,11 +214,11 @@ Invoke-Item .\output\captures\animation-test-01\animation.gif
 ```
 
 The capture plan consumes the exact persisted weeks from `animation-plan.json`; it never
-recalculates frame dates. The browser opens headed, uses `.calendar-anim/browser-profile`, waits for
-a stable Calendar region, captures one PNG per week, and skips completed screenshots on resume.
-Login remains manual and the browser layer never changes Calendar events. Add `--mp4` to composition
-only when `ffmpeg` is already installed. See [Calendar capture](docs/calendar-capture.md) for visual
-setup, artifact layout, stabilization, selectors, and recovery behavior.
+recalculates frame dates. Login opens normal Chrome without Playwright control. Capture later uses
+the installed Chrome with `.calendar-anim/browser-profile`, positions the time grid at 06:00, crops
+at 18:00, waits for stability, and skips completed screenshots on resume. Use `--recapture
+--execute` to back up and replace visually invalid screenshots. Add `--mp4` to composition only when
+`ffmpeg` is installed. See [Calendar capture](docs/calendar-capture.md) for the full workflow.
 
 Every render produces:
 

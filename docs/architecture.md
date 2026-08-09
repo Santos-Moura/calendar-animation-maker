@@ -16,9 +16,11 @@ Multi-frame planning sits above the existing single-frame mapper. It assigns sel
 
 OAuth is isolated in `google_auth.py`; API translation is isolated in `google_gateway.py`; `.calendar-anim/calendar-config.json` stores only the reusable lab calendar ID, never tokens. A deletion selects `generated_by`, `animation_id`, and `run_id`, then deletes only the returned event IDs.
 
-Browser capture is separate because it consumes already-created calendar state and has its own authentication, selectors, viewport, waiting, and screenshot concerns. It never creates events and must not automate login.
+Browser capture is separate because it consumes already-created calendar state and has its own authentication, selectors, viewport, waiting, and screenshot concerns. It never creates events. Manual login is launched in normal Chrome without Playwright control; only an already-authenticated profile is later opened through the Playwright `chrome` channel.
 
 The capture layer derives an immutable plan from the persisted multi-frame weeks and refuses
 incomplete uploads. Its mutable state is atomically replaced after every frame. The browser port has
 only `open_week`, `wait_until_ready`, and `capture`; the Playwright adapter implements it while tests
-use an offline fake. Composition reads only completed PNG files and does not reopen Calendar.
+use an offline fake. The adapter positions the largest Calendar time scroller at the configured
+start hour and crops at the configured end hour before stabilization. Composition reads only
+completed PNG files and does not reopen Calendar.
