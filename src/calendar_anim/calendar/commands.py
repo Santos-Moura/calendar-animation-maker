@@ -34,6 +34,7 @@ from calendar_anim.calendar.calibration.profile import (
     save_profile,
 )
 from calendar_anim.calendar.calibration.service import CalibrationService, CleanupMatch
+from calendar_anim.calendar.capture.commands import register_capture_commands
 from calendar_anim.calendar.frame_mapping.artifacts import (
     write_frame_execution_result,
     write_frame_mapping_artifacts,
@@ -811,3 +812,4 @@ def register_calendar_commands(app: typer.Typer) -> None:
     app.command("calibration-summary")(calibration_summary_command)
     app.command("map-frame")(map_frame_command)
     register_multi_frame_commands(app)
+    register_capture_commands(app)

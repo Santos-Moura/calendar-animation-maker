@@ -1,0 +1,144 @@
+import re
+from pathlib import Path
+from typing import Annotated, Never
+
+import typer
+
+from calendar_anim.browser.playwright_gateway import PlaywrightCalendarCaptureGateway
+from calendar_anim.calendar.capture.artifacts import (
+    CaptureStore,
+    build_capture_plan,
+)
+from calendar_anim.calendar.capture.models import (
+    CalendarCaptureConfig,
+    CaptureState,
+    FrameCaptureStatus,
+)
+from calendar_anim.calendar.capture.service import CalendarWeekCaptureService
+from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
+from calendar_anim.exceptions import CalendarAnimError
+
+
+def _fail(error: Exception) -> Never:
+    typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
+    raise typer.Exit(code=1)
+
+
+def _valid_run_id(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", value):
+        raise CalendarAnimError(f"Invalid run-id: {value!r}")
+    return value
+
+
+def _capture_config(
+    profile_directory: Path,
+    stabilization_seconds: float,
+    ready_timeout_seconds: float,
+) -> CalendarCaptureConfig:
+    return CalendarCaptureConfig(
+        profile_directory=profile_directory,
+        stabilization_seconds=stabilization_seconds,
+        ready_timeout_seconds=ready_timeout_seconds,
+    )
+
+
+def browser_login_command(
+    profile_directory: Annotated[
+        Path, typer.Option("--profile-directory")
+    ] = Path(".calendar-anim/browser-profile"),
+) -> None:
+    """Open headed Chromium for a one-time manual Google login and UI setup."""
+    config = CalendarCaptureConfig(profile_directory=profile_directory)
+    typer.echo(f"Persistent browser profile: {profile_directory}")
+    typer.echo("No Google credentials will be read or typed by this command.")
+    try:
+        with PlaywrightCalendarCaptureGateway(config) as gateway:
+            gateway.open_for_manual_login()
+            typer.echo("Log in manually and configure week view, dark theme, and hidden sidebar.")
+            typer.prompt("Press Enter here after Calendar is ready", default="", show_default=False)
+    except (CalendarAnimError, OSError, RuntimeError) as error:
+        _fail(error)
+    typer.echo("Browser profile saved. The browser window can now be closed.")
+
+
+def capture_animation_command(
+    run_id: Annotated[str, typer.Option("--run-id")],
+    animation_output_root: Annotated[
+        Path, typer.Option("--animation-output-root")
+    ] = Path("output/animation-runs"),
+    capture_output_root: Annotated[
+        Path, typer.Option("--capture-output-root")
+    ] = Path("output/captures"),
+    profile_directory: Annotated[
+        Path, typer.Option("--profile-directory")
+    ] = Path(".calendar-anim/browser-profile"),
+    stabilization_seconds: Annotated[
+        float, typer.Option("--stabilization-seconds", min=0)
+    ] = 2.0,
+    ready_timeout_seconds: Annotated[
+        float, typer.Option("--ready-timeout-seconds", min=1)
+    ] = 30.0,
+    execute: Annotated[
+        bool, typer.Option("--execute", help="Open the browser and capture screenshots.")
+    ] = False,
+) -> None:
+    """Plan or execute resumable screenshots for uploaded animation weeks."""
+    try:
+        resolved_run_id = _valid_run_id(run_id)
+        config = _capture_config(
+            profile_directory, stabilization_seconds, ready_timeout_seconds
+        )
+        animation_store = AnimationRunStore(animation_output_root)
+        plan = build_capture_plan(resolved_run_id, animation_store, config)
+        store = CaptureStore(capture_output_root)
+        state = store.initialize(plan)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Animation: {plan.run_id}")
+    typer.echo(f"Frames: {plan.frame_count}")
+    typer.echo(f"Weeks: {plan.frames[0].week_start} through {plan.frames[-1].week_start}")
+    typer.echo(f"Current state: {_status_counts(state)}")
+    typer.echo(f"Execution: {'REAL BROWSER' if execute else 'DRY RUN'}")
+    typer.echo(f"Artifacts: {store.run_directory(plan.run_id)}")
+    if not execute:
+        typer.echo("\nPlanned actions:")
+        for frame in state.frames:
+            action = (
+                "SKIP (completed)"
+                if frame.status is FrameCaptureStatus.COMPLETED
+                else "CAPTURE"
+            )
+            typer.echo(f"Frame {frame.frame_index}: {action}")
+        typer.echo("No browser was opened and no Calendar API call was made.")
+        return
+
+    def progress(frame_index: int, status: FrameCaptureStatus) -> None:
+        typer.echo(f"Frame {frame_index}: {status.value}")
+
+    try:
+        with PlaywrightCalendarCaptureGateway(config) as gateway:
+            state = CalendarWeekCaptureService(gateway, store, progress).capture(plan, state)
+    except KeyboardInterrupt:
+        typer.secho("Capture interrupted; checkpoint was preserved.", fg=typer.colors.RED)
+        raise typer.Exit(code=130) from None
+    except (CalendarAnimError, OSError, RuntimeError) as error:
+        _fail(error)
+    typer.echo(f"Capture progress: {_status_counts(state)}")
+    typer.echo("Calendar events were not created, changed, or deleted.")
+
+
+def _status_counts(state: CaptureState) -> str:
+    frames = state.frames
+    completed = sum(frame.status is FrameCaptureStatus.COMPLETED for frame in frames)
+    failed = sum(frame.status is FrameCaptureStatus.FAILED for frame in frames)
+    capturing = sum(frame.status is FrameCaptureStatus.CAPTURING for frame in frames)
+    pending = len(frames) - completed - failed - capturing
+    return (
+        f"{completed}/{len(frames)} completed, {pending} pending, "
+        f"{capturing} capturing, {failed} failed"
+    )
+
+
+def register_capture_commands(app: typer.Typer) -> None:
+    app.command("browser-login")(browser_login_command)
+    app.command("capture-animation")(capture_animation_command)
