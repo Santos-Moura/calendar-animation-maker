@@ -45,6 +45,7 @@ from calendar_anim.calendar.frame_mapping.mapper import (
     synchronized_horizontal_bands_ready,
 )
 from calendar_anim.calendar.frame_mapping.models import (
+    DEFAULT_EVENT_COMPRESSION,
     EventCompressionMode,
     FitMode,
     FrameMappingMode,
@@ -709,14 +710,17 @@ def map_frame_command(
             "--mapping-mode",
             help="Cell generation mode: sparse or full-grid.",
         ),
-    ] = FrameMappingMode.SPARSE,
+    ] = FrameMappingMode.FULL_GRID,
     event_compression: Annotated[
         EventCompressionMode,
         typer.Option(
             "--event-compression",
-            help="Calendar event compression: none or synchronized-horizontal-bands.",
+            help=(
+                "Calendar event compression strategy. The production default is "
+                "synchronized-horizontal-bands; use none for baseline/debug behavior."
+            ),
         ),
-    ] = EventCompressionMode.NONE,
+    ] = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: Annotated[
         str | None,
         typer.Option(

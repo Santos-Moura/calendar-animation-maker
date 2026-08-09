@@ -6,6 +6,7 @@ from calendar_anim.calendar.frame_mapping.mapper import build_single_frame_plan
 from calendar_anim.calendar.frame_mapping.models import (
     CalendarMappedCell,
     CellRole,
+    EventCompressionMode,
     FrameMappingMode,
 )
 from calendar_anim.calendar.frame_mapping.service import ABSOLUTE_SINGLE_FRAME_MAX_EVENTS
@@ -72,6 +73,7 @@ def estimate_manifest_horizontal_bands(
             run_id=f"band-estimate-{frame.index:04d}",
             max_execute_events=ABSOLUTE_SINGLE_FRAME_MAX_EVENTS,
             mapping_mode=FrameMappingMode.FULL_GRID,
+            event_compression=EventCompressionMode.NONE,
             calendar_background_color_id=calendar_background_color_id,
         )
         frame_estimates.append(

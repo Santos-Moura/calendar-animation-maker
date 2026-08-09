@@ -8,6 +8,7 @@ from calendar_anim.calendar.frame_mapping.colors import (
     map_calendar_color,
 )
 from calendar_anim.calendar.frame_mapping.models import (
+    DEFAULT_EVENT_COMPRESSION,
     CalendarMappedCell,
     CellRole,
     EventCompressionMode,
@@ -431,8 +432,8 @@ def build_single_frame_plan(
     max_execute_events: int,
     fit: FitMode = "contain",
     calendar_name: str = "Calendar Animation Lab",
-    mapping_mode: FrameMappingMode = FrameMappingMode.SPARSE,
-    event_compression: EventCompressionMode = EventCompressionMode.NONE,
+    mapping_mode: FrameMappingMode = FrameMappingMode.FULL_GRID,
+    event_compression: EventCompressionMode = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: str | None = None,
     subcolumn_order_strategy: str | SubcolumnOrderStrategy | None = None,
 ) -> SingleFrameCalendarPlan:

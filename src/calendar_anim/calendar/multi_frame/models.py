@@ -33,6 +33,7 @@ class MultiFramePlan(BaseModel):
     frame_start: int = Field(ge=0)
     frame_count: int = Field(gt=0)
     mapping_mode: FrameMappingMode
+    # Missing fields in persisted pre-compression plans retain their historical semantics.
     event_compression: EventCompressionMode = EventCompressionMode.NONE
     target_grid_width: int = Field(gt=0)
     target_grid_height: int = Field(gt=0)

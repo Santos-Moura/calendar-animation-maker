@@ -7,6 +7,7 @@ from calendar_anim.calendar.frame_mapping.mapper import (
     resolve_week_start,
 )
 from calendar_anim.calendar.frame_mapping.models import (
+    DEFAULT_EVENT_COMPRESSION,
     EventCompressionMode,
     FitMode,
     FrameMappingMode,
@@ -38,7 +39,7 @@ def build_multi_frame_plan(
     fit: FitMode = "contain",
     calendar_name: str = "Calendar Animation Lab",
     mapping_mode: FrameMappingMode = FrameMappingMode.FULL_GRID,
-    event_compression: EventCompressionMode = EventCompressionMode.NONE,
+    event_compression: EventCompressionMode = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: str | None = None,
 ) -> tuple[MultiFramePlan, list[SingleFrameCalendarPlan]]:
     if frame_start < 0:

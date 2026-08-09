@@ -20,6 +20,9 @@ class EventCompressionMode(StrEnum):
     SYNCHRONIZED_HORIZONTAL_BANDS = "synchronized-horizontal-bands"
 
 
+DEFAULT_EVENT_COMPRESSION = EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS
+
+
 class CellRole(StrEnum):
     FOREGROUND = "foreground"
     BACKGROUND = "background"
@@ -100,6 +103,7 @@ class SingleFrameCalendarPlan(BaseModel):
     days_used: int = Field(default=7, ge=1, le=7)
     fit: FitMode = "contain"
     mapping_mode: FrameMappingMode = FrameMappingMode.SPARSE
+    # Missing fields in persisted pre-compression plans retain their historical semantics.
     event_compression: EventCompressionMode = EventCompressionMode.NONE
     background_color_id: str | None = None
     profile_ready: bool

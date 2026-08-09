@@ -9,6 +9,7 @@ from googleapiclient.errors import HttpError
 from calendar_anim.calendar.calibration.patterns import DEFAULT_CALENDAR_NAME
 from calendar_anim.calendar.calibration.profile import DEFAULT_PROFILE_PATH, load_profile
 from calendar_anim.calendar.frame_mapping.models import (
+    DEFAULT_EVENT_COMPRESSION,
     EventCompressionMode,
     FitMode,
     FrameMappingMode,
@@ -72,9 +73,12 @@ def plan_animation_command(
         EventCompressionMode,
         typer.Option(
             "--event-compression",
-            help="Calendar event compression: none or synchronized-horizontal-bands.",
+            help=(
+                "Calendar event compression strategy. The production default is "
+                "synchronized-horizontal-bands; use none for baseline/debug behavior."
+            ),
         ),
-    ] = EventCompressionMode.NONE,
+    ] = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: Annotated[
         str | None, typer.Option("--calendar-background-color-id")
     ] = None,

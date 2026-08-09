@@ -3,7 +3,11 @@ from datetime import date
 
 from calendar_anim.calendar.calibration.models import CalibrationProfile
 from calendar_anim.calendar.frame_mapping.mapper import build_single_frame_plan
-from calendar_anim.calendar.frame_mapping.models import CalendarMappedCell, FrameMappingMode
+from calendar_anim.calendar.frame_mapping.models import (
+    CalendarMappedCell,
+    EventCompressionMode,
+    FrameMappingMode,
+)
 from calendar_anim.calendar.frame_mapping.service import ABSOLUTE_SINGLE_FRAME_MAX_EVENTS
 from calendar_anim.calendar.vertical_compression.models import (
     AnimationVerticalCompressionEstimate,
@@ -86,6 +90,7 @@ def estimate_manifest_vertical_compression(
             run_id=f"compression-estimate-{frame.index:04d}",
             max_execute_events=ABSOLUTE_SINGLE_FRAME_MAX_EVENTS,
             mapping_mode=FrameMappingMode.FULL_GRID,
+            event_compression=EventCompressionMode.NONE,
             calendar_background_color_id=calendar_background_color_id,
         )
         frame_estimates.append(
