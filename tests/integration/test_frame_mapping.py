@@ -8,7 +8,7 @@ from PIL import Image
 from calendar_anim.calendar.fake import FakeCalendarGateway
 from calendar_anim.calendar.frame_mapping.artifacts import write_frame_mapping_artifacts
 from calendar_anim.calendar.frame_mapping.mapper import build_single_frame_plan
-from calendar_anim.calendar.frame_mapping.models import FrameMappingMode
+from calendar_anim.calendar.frame_mapping.models import EventCompressionMode, FrameMappingMode
 from calendar_anim.calendar.frame_mapping.service import SingleFrameMappingService
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
@@ -185,6 +185,40 @@ def test_full_grid_execute_reports_foreground_and_background_created(tmp_path: P
     assert len({event.color_id for event in plan.events}) > 1
     deleted = gateway.delete_events(result.calendar_id or "", [event.id for event in matches])
     assert deleted.deleted_events == 42 * 24
+
+
+def test_synchronized_band_plan_uploads_only_compressed_real_event_drafts(
+    tmp_path: Path,
+) -> None:
+    gateway = FakeCalendarGateway()
+    service = SingleFrameMappingService(
+        gateway,
+        LabCalendarService(gateway, CalendarConfigStore(tmp_path / "calendar.json")),
+    )
+    plan = build_single_frame_plan(
+        make_manifest(),
+        make_ready_calibration_profile(),
+        frame_index=0,
+        anchor_date=date(2026, 11, 22),
+        run_id="compressed-execute",
+        max_execute_events=1200,
+        mapping_mode=FrameMappingMode.FULL_GRID,
+        event_compression=EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
+        calendar_background_color_id="8",
+    )
+
+    result = service.execute(plan)
+
+    assert result.created_events == plan.event_count < 1008
+    assert result.foreground_created == plan.statistics.foreground_events
+    assert result.background_created == plan.statistics.background_events
+    assert result.foreground_created + result.background_created == result.created_events
+    uploaded = gateway.events[result.calendar_id or ""]
+    assert len(uploaded) == plan.event_count
+    assert {event.private_metadata["event_compression"] for event in uploaded} == {
+        "synchronized-horizontal-bands"
+    }
+    assert max(event.end - event.start for event in uploaded).total_seconds() > 30 * 60
 
 
 def test_full_grid_partial_failure_counts_created_background_role(tmp_path: Path) -> None:

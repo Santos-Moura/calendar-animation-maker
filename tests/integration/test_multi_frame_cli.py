@@ -93,6 +93,32 @@ def test_plan_animation_is_local_and_writes_global_and_frame_artifacts(
     assert serialized["frames"][1]["week_start"] == "2026-10-11"
 
 
+def test_plan_animation_persists_synchronized_band_compression(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=2)
+    output_root = tmp_path / "compressed-runs"
+    monkeypatch.setattr(
+        multi_commands,
+        "_google_gateway",
+        lambda: pytest.fail("compressed planning must not construct an API gateway"),
+    )
+    command = _plan_command(manifest, profile, output_root, 2)
+    command.extend(["--event-compression", "synchronized-horizontal-bands"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    assert "Event compression: synchronized-horizontal-bands" in result.output
+    plan = AnimationRunStore(output_root).load_plan("cli-animation")
+    assert plan.event_compression.value == "synchronized-horizontal-bands"
+    assert all(value < 1008 for value in plan.events_per_frame)
+    frame_plan = AnimationRunStore(output_root).load_frame_plan(plan, 0)
+    assert frame_plan.event_compression.value == "synchronized-horizontal-bands"
+    assert len(frame_plan.mapped_cells) == 1008
+    assert len(frame_plan.events) == plan.events_per_frame[0]
+
+
 def test_upload_animation_dry_run_skips_api_and_lists_actions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

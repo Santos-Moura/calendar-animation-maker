@@ -82,5 +82,15 @@ def make_ready_calibration_profile() -> CalibrationProfile:
                 "controlling_property": "summary",
                 "factor_stable": True,
             },
+            "synchronized_horizontal_bands": {
+                "equal_widths_preserved": True,
+                "slot_order_preserved": True,
+                "color_vectors_preserved": True,
+                "adjacent_boundaries_stable": True,
+                "stable_after_refresh": True,
+                "stable_after_navigation": True,
+                "visually_acceptable": True,
+                "safe_for_mapper": True,
+            },
         }
     )
