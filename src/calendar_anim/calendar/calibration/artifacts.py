@@ -536,7 +536,7 @@ def _draw_vertical_compression_events(
     top: int,
     day_width: float,
     hour_height: float,
-    font: ImageFont.ImageFont,
+    font: ImageFont.ImageFont | ImageFont.FreeTypeFont,
 ) -> None:
     labels = {
         "vertical-control": "CONTROL",

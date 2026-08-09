@@ -381,6 +381,7 @@ class CalibrationProfile(BaseModel):
     subcolumn_order_mapping: SubcolumnOrderMappingProfile = Field(
         default_factory=SubcolumnOrderMappingProfile
     )
+    vertical_compression: VerticalCompressionObservations | None = None
     candidate_grid: CandidateGridProfile = Field(default_factory=CandidateGridProfile)
 
     @model_validator(mode="after")

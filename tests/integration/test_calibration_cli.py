@@ -22,6 +22,7 @@ def test_cli_lists_patterns() -> None:
     assert result.exit_code == 0, result.output
     assert "overlap-columns" in result.output
     assert "subcolumn-order" in result.output
+    assert "vertical-compression" in result.output
     assert "combined" in result.output
 
 
@@ -96,6 +97,84 @@ def test_execute_confirmation_can_be_cancelled_without_credentials(tmp_path: Pat
     )
     assert result.exit_code != 0
     assert "Aborted" in result.output
+
+
+def test_record_calibration_imports_completed_vertical_compression_yaml(
+    tmp_path: Path,
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    dry_run = runner.invoke(
+        app,
+        [
+            "calendar",
+            "calibrate",
+            "--pattern",
+            "vertical-compression",
+            "--start-date",
+            "2026-11-15",
+            "--run-id",
+            "vertical-observed",
+            "--output",
+            str(artifacts),
+        ],
+    )
+    assert dry_run.exit_code == 0, dry_run.output
+    observations_path = artifacts / "calibration-observations.yaml"
+    payload = yaml.safe_load(observations_path.read_text(encoding="utf-8"))
+    vertical = payload["observations"]["vertical_compression"]
+    vertical["control_vs_compressed"]["same_total_height"] = True
+    vertical["control_vs_compressed"]["visually_equivalent"] = True
+    vertical["fixed_start_mixed_duration"]["slot_order_preserved"] = True
+    vertical["staggered"]["overlap_layout_stable"] = True
+    vertical["conclusion"]["visually_acceptable"] = True
+    vertical["conclusion"]["safe_for_mapper"] = False
+    observations_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    profile = tmp_path / "profile.yaml"
+    recorded = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "vertical-observed",
+            "--pattern",
+            "vertical-compression",
+            "--observations-file",
+            str(observations_path),
+            "--profile-output",
+            str(profile),
+        ],
+    )
+    assert recorded.exit_code == 0, recorded.output
+
+    summary = runner.invoke(app, ["calendar", "calibration-summary", "--profile", str(profile)])
+    assert summary.exit_code == 0, summary.output
+    assert "Vertical event compression experiment" in summary.output
+    assert "Status: recorded" in summary.output
+    assert "Control/compressed same height: yes" in summary.output
+    assert "Safe for production mapper: no" in summary.output
+
+
+def test_record_calibration_rejects_mismatched_observation_identity(tmp_path: Path) -> None:
+    observations = tmp_path / "observations.yaml"
+    observations.write_text(
+        "schema_version: '1.0'\nrun_id: other-run\npattern: vertical-compression\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "record-calibration",
+            "--run-id",
+            "requested-run",
+            "--observations-file",
+            str(observations),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "does not match --run-id" in result.output
 
 
 def test_execute_without_credentials_has_friendly_error(

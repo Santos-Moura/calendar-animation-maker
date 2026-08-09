@@ -481,12 +481,46 @@ def record_calibration_command(
         typer.Option("--ordering-factor-stable/--ordering-factor-unstable"),
     ] = None,
     notes: Annotated[str, typer.Option("--notes")] = "",
+    observations_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--observations-file",
+            help="Import a manually completed calibration-observations.yaml file.",
+        ),
+    ] = None,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     profile_output: Annotated[Path | None, typer.Option("--profile-output")] = None,
 ) -> None:
     """Record manual observations from the Google Calendar UI."""
     try:
         run_id = _valid_identifier(run_id, "run-id")
+        if observations_file is not None:
+            observations = load_observations(observations_file)
+            if observations.run_id != run_id:
+                raise CalendarAnimError(
+                    f"Observation run ID {observations.run_id!r} does not match --run-id {run_id!r}"
+                )
+            if observations.pattern is not None and observations.pattern not in PATTERNS:
+                raise CalendarAnimError(
+                    f"Unknown calibration pattern in observations: {observations.pattern}"
+                )
+            if pattern is not None and observations.pattern != pattern:
+                raise CalendarAnimError(
+                    f"Observation pattern {observations.pattern!r} does not match "
+                    f"--pattern {pattern!r}"
+                )
+            path = output or Path("output/calibration") / run_id / "calibration-observations.yaml"
+            write_observations(observations, path)
+            resolved_profile_path = profile_output or (
+                DEFAULT_PROFILE_PATH
+                if output is None
+                else path.with_name("calibration-profile.yaml")
+            )
+            profile = apply_observations(load_profile(resolved_profile_path), observations)
+            save_profile(profile, resolved_profile_path)
+            typer.echo(f"Observations: {path}")
+            typer.echo(f"Calibration profile: {resolved_profile_path}")
+            return
         if pattern is not None and pattern not in PATTERNS:
             raise CalendarAnimError(f"Unknown calibration pattern: {pattern}")
         if (

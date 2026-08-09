@@ -122,6 +122,9 @@ def apply_observations(
         if value is not None:
             setattr(profile.subcolumn_order_mapping, profile_field, value)
 
+    if values.vertical_compression is not None:
+        profile.vertical_compression = values.vertical_compression
+
     if recorded.pattern == "color-palette" and values.notes:
         profile.color_mapping.notes = values.notes
     elif recorded.pattern == "position-grid" and values.notes:
@@ -143,6 +146,21 @@ def profile_summary(profile: CalibrationProfile) -> str:
     position = profile.position_mapping
     bars = profile.horizontal_bar_mapping
     slot_order = profile.subcolumn_order_mapping
+    vertical_compression = profile.vertical_compression
+    vertical_pending = "pending calibration"
+    control_height = vertical_pending
+    control_equivalent = vertical_pending
+    mixed_slots = vertical_pending
+    staggered_stable = vertical_pending
+    compression_acceptable = vertical_pending
+    compression_safe = vertical_pending
+    if vertical_compression is not None:
+        control_height = _yes_no(vertical_compression.control_vs_compressed.same_total_height)
+        control_equivalent = _yes_no(vertical_compression.control_vs_compressed.visually_equivalent)
+        mixed_slots = _yes_no(vertical_compression.fixed_start_mixed_duration.slot_order_preserved)
+        staggered_stable = _yes_no(vertical_compression.staggered.overlap_layout_stable)
+        compression_acceptable = _yes_no(vertical_compression.conclusion.visually_acceptable)
+        compression_safe = _yes_no(vertical_compression.conclusion.safe_for_mapper)
 
     viewport = "pending"
     if ui.viewport_width is not None and ui.viewport_height is not None:
@@ -232,6 +250,15 @@ def profile_summary(profile: CalibrationProfile) -> str:
             f"{_yes_no(slot_order.recommended_strategy_supported)}"
         ),
         "",
+        "Vertical event compression experiment",
+        f"  Status: {_vertical_compression_status(vertical_compression)}",
+        f"  Control/compressed same height: {control_height}",
+        f"  Control/compressed visually equivalent: {control_equivalent}",
+        f"  Mixed durations preserve slots: {mixed_slots}",
+        f"  Staggered overlaps remain stable: {staggered_stable}",
+        f"  Visually acceptable: {compression_acceptable}",
+        f"  Safe for production mapper: {compression_safe}",
+        "",
         (
             "Candidate logical grid: "
             f"{_candidate_grid(profile.candidate_grid.width, profile.candidate_grid.height)}"
@@ -297,6 +324,15 @@ def _slot_order(value: list[int] | None) -> str:
     if value is None:
         return "pending calibration"
     return ",".join(str(slot) for slot in value)
+
+
+def _vertical_compression_status(value: Any | None) -> str:
+    if value is None:
+        return "pending vertical-compression calibration"
+    conclusion = value.conclusion
+    if conclusion.visually_acceptable is not None and conclusion.safe_for_mapper is not None:
+        return "recorded"
+    return "incomplete vertical-compression calibration"
 
 
 def _color_status(profile: CalibrationProfile) -> str:
