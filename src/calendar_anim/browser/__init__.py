@@ -1,1 +1,1 @@
-"""Interfaces for future, manually authenticated browser capture."""
+"""Browser boundary for manually authenticated Calendar capture."""

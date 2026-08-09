@@ -189,12 +189,14 @@ Cleanup queries exact `generated_by`, `animation_id`, `run_id`, and `frame_index
 ```text
 single real full-grid frame (complete)
     -> multi-frame planner and checkpoint/resume (this feature)
-    -> real six-frame test
-    -> manual week navigation
-    -> Playwright week capture
-    -> screenshot sequence
-    -> GIF / MP4
+    -> real six-frame test (complete)
+    -> persistent-profile Playwright week capture (implemented separately)
+    -> screenshot checkpoint/resume (implemented separately)
+    -> GIF / optional MP4 composition (implemented separately)
     -> performance optimization
 ```
 
-Playwright is intentionally not part of this layer. Capture consumes stable, already-uploaded Calendar weeks and has different authentication, waiting, selector, and screenshot responsibilities.
+Playwright remains outside this upload layer. Capture consumes the exact weeks in this layer's
+immutable plan only after every upload frame is complete. See
+[Google Calendar week capture](calendar-capture.md) for manual authentication, visual stability,
+screenshot checkpoints, and composition.

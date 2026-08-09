@@ -1,6 +1,6 @@
 # destiny-calendar-animation
 
-> Development status: local MVP, guarded Calendar calibration, and a single-frame Calendar mapper. Multi-frame upload and browser capture remain deliberately disabled.
+> Development status: local MVP, guarded Calendar calibration, resumable multi-frame upload, and manually authenticated browser capture.
 
 `destiny-calendar-animation` turns a local video clip into a small, palette-limited pixel animation, a preview GIF, and a versioned JSON manifest. The manifest is suitable for safely planning a future experiment in which each frame is represented by one week of real Google Calendar events. The processor is generic; no Destiny assets are distributed here.
 
@@ -15,8 +15,8 @@ flowchart LR
     G --> H[Preview GIF]
     G --> I[Animation manifest]
     I --> J[Calendar event planning]
-    J --> K[Google Calendar - future]
-    K --> L[Playwright capture - future]
+    J --> K[Google Calendar upload]
+    K --> L[Playwright week capture]
     L --> M[Final GIF or MP4]
 ```
 
@@ -36,6 +36,8 @@ flowchart LR
 - duplicate-run detection and cleanup filtered by private metadata.
 - structured color, position, horizontal-bar, and subcolumn-order observations with mapper-readiness summary.
 - sparse and full-grid one-frame mapping, Calendar color mapping, local comparison artifacts, and guarded upload.
+- immutable multi-frame plans with serial upload, frame checkpoints, partial recovery, and cleanup;
+- manually authenticated Playwright week capture with resume plus local GIF/optional MP4 composition.
 
 ## Install
 
@@ -192,6 +194,32 @@ python -m calendar_anim calendar cleanup-animation --run-id animation-test-01
 
 For the current full-grid baseline, six frames plan `6 x 1008 = 6048` events. The 1200-event normal guard remains a per-frame limit, not an animation-wide limit. See [multi-frame upload](docs/multi-frame-upload.md) for state transitions, recovery, artifacts, and the complete command workflow.
 
+## Capture uploaded Calendar weeks
+
+After every animation frame has upload status `completed`, install the Playwright dependency and
+create a dedicated manually authenticated browser profile:
+
+```powershell
+python -m pip install -e ".[dev]"
+python -m calendar_anim calendar browser-login
+```
+
+Plan locally, capture with resumable per-frame checkpoints, and compose the screenshots:
+
+```powershell
+python -m calendar_anim calendar capture-animation --run-id animation-test-01
+python -m calendar_anim calendar capture-animation --run-id animation-test-01 --execute
+python -m calendar_anim calendar compose-capture --run-id animation-test-01 --fps 3
+Invoke-Item .\output\captures\animation-test-01\animation.gif
+```
+
+The capture plan consumes the exact persisted weeks from `animation-plan.json`; it never
+recalculates frame dates. Login opens normal Chrome without Playwright control. Capture later uses
+the installed Chrome with `.calendar-anim/browser-profile`, positions the time grid at 06:00, crops
+at 18:00, waits for stability, and skips completed screenshots on resume. Use `--recapture
+--execute` to back up and replace visually invalid screenshots. Add `--mp4` to composition only when
+`ffmpeg` is installed. See [Calendar capture](docs/calendar-capture.md) for the full workflow.
+
 Every render produces:
 
 ```text
@@ -208,22 +236,22 @@ The Pydantic-modeled manifest keeps source selection, render settings, statistic
 
 ## Architecture and safety
 
-Video processing, rendering, manifest IO, Calendar planning, and browser capture have separate boundaries. Calibration, single-frame plans, and multi-frame plans are API-independent. `GoogleCalendarGateway` is enabled only after `--execute`; `PlaywrightCaptureGateway` remains disabled.
+Video processing, rendering, manifest IO, Calendar planning, and browser capture have separate boundaries. Calibration, single-frame plans, multi-frame plans, and capture plans are API-independent. `GoogleCalendarGateway` is enabled only for explicit Calendar execution; the Playwright adapter only navigates, waits, and captures.
 
 Calibration access uses local OAuth and a separate calendar. Calibration events carry private `generated_by`, `animation_id`, `run_id`, `pattern`, and `event_index` metadata. Cleanup requires `animation_id` plus `run_id`. The project never automates login or stores passwords. OAuth files, local calendar configuration, browser profiles, input videos, and generated output are ignored by Git.
 
-Playwright will eventually use a separate persistent profile after manual authentication, select weekly view, capture only the calendar region, move one week per frame, and compose screenshots. Individual screenshots are preferred to recording UI transitions.
+Playwright uses a separate persistent profile after manual authentication, opens the exact persisted week for each frame, validates and stabilizes the Calendar region, and writes individual screenshots before local GIF/MP4 composition.
 
 ## Limitations and roadmap
 
-The summary-based ordering strategy was validated on the first real full-grid frame, but Google still does not document overlap layout as an API contract. Multi-frame planning and frame-level checkpoint/resume are implemented. There is no event-level resume, batch API, hybrid mapping, Playwright selector implementation, vertical block merge, or final screenshot composition.
+The summary-based ordering strategy was validated on the first real full-grid frame, but Google still does not document overlap layout or its web DOM as an API contract. Multi-frame upload and resumable week capture/composition are implemented. There is no event-level upload resume, batch API, hybrid mapping, vertical block merge, or selector stability guarantee from Google.
 
 1. **Phase 0 – calibration:** a few static events, useful resolution, event duration, zoom, and window size.
 2. **Phase 1 – local MVP:** video, frames, pixelization, GIF, manifest, and estimate (implemented).
 3. **Phase 2 – planning:** sparse/full-grid mapper, dry-run, separate calendar, metadata, and safe cleanup (implemented).
 4. **Phase 3 – fidelity:** real full-grid frame and summary ordering validation (implemented).
 5. **Phase 4 – live upload:** multi-frame planning and frame-level checkpoint/resume (implemented); batch, backoff, and event-level resume remain future work.
-6. **Phase 5 – capture:** persistent Playwright profile, weekly navigation, stable waits, screenshots, composition.
+6. **Phase 5 – capture:** persistent Playwright profile, weekly navigation, stable waits, screenshots, and composition (implemented; real-browser selector validation remains operational work).
 7. **Phase 6 – longer clips:** around 10 seconds, configurable FPS, scenes, stronger compression and resume.
 
 Clips of 2–5 seconds and 4–8 FPS are initial recommendations, not architectural limits. Cost scales roughly as selected frames × blocks per frame; events do not animate on their own—the final animation is an illusion produced by switching weekly frames.

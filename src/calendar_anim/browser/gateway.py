@@ -4,13 +4,8 @@ from typing import Protocol
 
 
 class BrowserCaptureGateway(Protocol):
-    def capture_frames(
-        self, start_week: date, frame_count: int, output_dir: Path
-    ) -> list[Path]: ...
+    def open_week(self, week_start: date) -> None: ...
 
+    def wait_until_ready(self, week_start: date, minimum_event_count: int) -> None: ...
 
-class PlaywrightCaptureGateway:
-    """Disabled until selectors and visual calibration have been validated."""
-
-    def capture_frames(self, start_week: date, frame_count: int, output_dir: Path) -> list[Path]:
-        raise NotImplementedError("Playwright capture is planned but not implemented")
+    def capture(self, output_path: Path) -> None: ...
