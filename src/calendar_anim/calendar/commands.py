@@ -39,8 +39,13 @@ from calendar_anim.calendar.frame_mapping.artifacts import (
     write_frame_execution_result,
     write_frame_mapping_artifacts,
 )
-from calendar_anim.calendar.frame_mapping.mapper import build_single_frame_plan, select_frame
+from calendar_anim.calendar.frame_mapping.mapper import (
+    build_single_frame_plan,
+    select_frame,
+    synchronized_horizontal_bands_ready,
+)
 from calendar_anim.calendar.frame_mapping.models import (
+    EventCompressionMode,
     FitMode,
     FrameMappingMode,
     SingleFrameExecutionResult,
@@ -705,6 +710,13 @@ def map_frame_command(
             help="Cell generation mode: sparse or full-grid.",
         ),
     ] = FrameMappingMode.SPARSE,
+    event_compression: Annotated[
+        EventCompressionMode,
+        typer.Option(
+            "--event-compression",
+            help="Calendar event compression: none or synchronized-horizontal-bands.",
+        ),
+    ] = EventCompressionMode.NONE,
     calendar_background_color_id: Annotated[
         str | None,
         typer.Option(
@@ -741,6 +753,8 @@ def map_frame_command(
             raise CalendarAnimError("--start-date is required with --execute")
         anchor_date = date.fromisoformat(start_date_value) if start_date_value else date.today()
         mode_suffix = "" if mapping_mode is FrameMappingMode.SPARSE else "-full-grid"
+        if event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS:
+            mode_suffix += "-bands"
         default_run_id = f"frame-{frame_index:03d}-{manifest.animation_id}{mode_suffix}"[:64]
         resolved_run_id = _valid_identifier(run_id or default_run_id, "run-id")
         plan = build_single_frame_plan(
@@ -753,6 +767,7 @@ def map_frame_command(
             fit=fit_mode,
             calendar_name=calendar_name,
             mapping_mode=mapping_mode,
+            event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
         )
         output_dir = output or Path("output/frame-mapping") / plan.run_id
@@ -766,6 +781,7 @@ def map_frame_command(
     typer.echo(f"Run ID: {plan.run_id}")
     typer.echo(f"Frame: {plan.frame_index}")
     typer.echo(f"Mapping mode: {plan.mapping_mode.value}")
+    typer.echo(f"Event compression: {plan.event_compression.value}")
     typer.echo(f"Week start: {plan.week_start_date}")
     typer.echo(f"Source grid: {plan.source_grid_width}x{plan.source_grid_height}")
     typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
@@ -775,6 +791,14 @@ def map_frame_command(
     typer.echo(f"Background structural cells: {stats.background_structural_cells}")
     typer.echo(f"Mapped cells: {stats.total_logical_cells}")
     typer.echo(f"Calendar events: {stats.calendar_events} / {plan.max_execute_events}")
+    typer.echo(f"Baseline Calendar events: {stats.baseline_calendar_events}")
+    typer.echo(f"Saved Calendar events: {stats.saved_calendar_events}")
+    reduction_percent = (
+        (stats.saved_calendar_events / stats.baseline_calendar_events) * 100
+        if stats.baseline_calendar_events
+        else 0
+    )
+    typer.echo(f"Compression reduction: {reduction_percent:.1f}%")
     typer.echo(f"Foreground events: {stats.foreground_events}")
     typer.echo(f"Background events: {stats.background_events}")
     typer.echo(f"Foreground Calendar colors: {stats.foreground_calendar_colors}")
@@ -800,6 +824,11 @@ def map_frame_command(
             and not profile.subcolumn_order_mapping.strategy_ready(plan.subcolumn_order_strategy)
         ):
             blockers.append(f"confirmed {plan.subcolumn_order_strategy.value} mapper strategy")
+        if (
+            plan.event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS
+            and not synchronized_horizontal_bands_ready(profile)
+        ):
+            blockers.append("synchronized horizontal-bands calibration")
         missing = ", ".join(blockers)
         _fail(CalendarAnimError(f"Calibration profile is NOT READY; missing: {missing}"))
     if plan.event_count > plan.max_execute_events:
@@ -811,6 +840,7 @@ def map_frame_command(
         )
     if not yes:
         typer.echo(f"\nMapping mode: {plan.mapping_mode.value.upper()}")
+        typer.echo(f"Event compression: {plan.event_compression.value}")
         typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
         typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
         typer.echo(f"Foreground events: {stats.foreground_events}")

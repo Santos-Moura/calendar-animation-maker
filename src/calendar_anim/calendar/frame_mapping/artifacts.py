@@ -8,12 +8,18 @@ from calendar_anim.calendar.frame_mapping.models import (
     SingleFrameCalendarPlan,
     SingleFrameExecutionResult,
 )
+from calendar_anim.calendar.models import CalendarEventDraft
 from calendar_anim.exceptions import CalendarAnimError
 
 
 def build_mapping_report(plan: SingleFrameCalendarPlan) -> str:
     stats = plan.statistics
     difference = stats.full_grid_event_estimate - stats.sparse_event_estimate
+    reduction_percent = (
+        (stats.saved_calendar_events / stats.baseline_calendar_events) * 100
+        if stats.baseline_calendar_events
+        else 0
+    )
     background_color = plan.background_color_id or "not used"
     lines = [
         "Single Frame Calendar Mapping",
@@ -23,6 +29,7 @@ def build_mapping_report(plan: SingleFrameCalendarPlan) -> str:
         f"Run ID: {plan.run_id}",
         f"Frame index: {plan.frame_index}",
         f"Mapping mode: {plan.mapping_mode.value}",
+        f"Event compression: {plan.event_compression.value}",
         f"Week start: {plan.week_start_date}",
         f"Timezone: {plan.timezone}",
         f"Source grid: {plan.source_grid_width}x{plan.source_grid_height}",
@@ -55,6 +62,11 @@ def build_mapping_report(plan: SingleFrameCalendarPlan) -> str:
         f"Background structural cells: {stats.background_structural_cells}",
         f"Total logical cells: {stats.total_logical_cells}",
         f"Calendar events: {stats.calendar_events}",
+        f"Calendar events before compression: {stats.baseline_calendar_events}",
+        f"Calendar events after compression: {stats.calendar_events}",
+        f"Saved Calendar events: {stats.saved_calendar_events}",
+        f"Compression reduction: {reduction_percent:.1f}%",
+        f"Synchronized bands: {stats.synchronized_horizontal_bands}",
         f"Foreground events: {stats.foreground_events}",
         f"Background events: {stats.background_events}",
         f"Calendar colors used for foreground: {stats.foreground_calendar_colors}",
@@ -83,7 +95,12 @@ def build_mapping_report(plan: SingleFrameCalendarPlan) -> str:
             "",
             "The preview is a logical pixel canvas, not a simulation of Google Calendar CSS.",
             "Calendar renders event colors differently in light and dark themes.",
-            "One mapped cell equals one event in this baseline experiment.",
+            (
+                "Mapped cells remain the complete logical canvas; Calendar events may span "
+                "multiple rows when synchronized-band compression is enabled."
+                if stats.saved_calendar_events
+                else "One mapped cell equals one event in this uncompressed mapping."
+            ),
             "",
         ]
     )
@@ -107,21 +124,24 @@ def _row_ordering_sample(plan: SingleFrameCalendarPlan) -> list[str]:
     cells = grouped[selected_key]
     day_offset, row = selected_key
     lines = [f"day_offset={day_offset} row={row}"]
-    events_by_position = {
-        (
-            int(event.private_metadata["day_offset"]),
-            int(event.private_metadata["logical_y"]),
-            int(event.private_metadata["subcolumn_index"]),
-        ): event
-        for event in plan.events
-    }
     for cell in cells:
-        event = events_by_position[(cell.day_offset, cell.logical_y, cell.subcolumn)]
+        event = next(event for event in plan.events if _event_covers_cell(event, cell))
         lines.append(
             f'subcolumn={cell.subcolumn} summary="{event.summary}" '
             f"colorId={cell.color_id} role={cell.cell_role.value}"
         )
     return lines
+
+
+def _event_covers_cell(event: CalendarEventDraft, cell: CalendarMappedCell) -> bool:
+    metadata = event.private_metadata
+    start_y = int(metadata.get("band_start_y", metadata["logical_y"]))
+    end_y = int(metadata.get("band_end_y_exclusive", start_y + 1))
+    return (
+        int(metadata["day_offset"]) == cell.day_offset
+        and int(metadata["subcolumn_index"]) == cell.subcolumn
+        and start_y <= cell.logical_y < end_y
+    )
 
 
 def _slot_key_lines(plan: SingleFrameCalendarPlan) -> list[str]:

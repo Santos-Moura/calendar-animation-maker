@@ -15,6 +15,11 @@ class FrameMappingMode(StrEnum):
     FULL_GRID = "full-grid"
 
 
+class EventCompressionMode(StrEnum):
+    NONE = "none"
+    SYNCHRONIZED_HORIZONTAL_BANDS = "synchronized-horizontal-bands"
+
+
 class CellRole(StrEnum):
     FOREGROUND = "foreground"
     BACKGROUND = "background"
@@ -74,10 +79,13 @@ class FrameMappingStatistics(BaseModel):
     foreground_calendar_colors: int = Field(default=0, ge=0)
     sparse_event_estimate: int = Field(default=0, ge=0)
     full_grid_event_estimate: int = Field(default=0, ge=0)
+    baseline_calendar_events: int = Field(default=0, ge=0)
+    saved_calendar_events: int = Field(default=0, ge=0)
+    synchronized_horizontal_bands: int = Field(default=0, ge=0)
 
 
 class SingleFrameCalendarPlan(BaseModel):
-    schema_version: str = "1.1"
+    schema_version: str = "1.2"
     animation_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     calendar_name: str = "Calendar Animation Lab"
@@ -92,6 +100,7 @@ class SingleFrameCalendarPlan(BaseModel):
     days_used: int = Field(default=7, ge=1, le=7)
     fit: FitMode = "contain"
     mapping_mode: FrameMappingMode = FrameMappingMode.SPARSE
+    event_compression: EventCompressionMode = EventCompressionMode.NONE
     background_color_id: str | None = None
     profile_ready: bool
     horizontal_strategy: str

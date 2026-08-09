@@ -10,11 +10,15 @@ from calendar_anim.calendar.frame_mapping.colors import (
 from calendar_anim.calendar.frame_mapping.models import (
     CalendarMappedCell,
     CellRole,
+    EventCompressionMode,
     FitMode,
     FrameMappingMode,
     FrameMappingStatistics,
     LogicalCell,
     SingleFrameCalendarPlan,
+)
+from calendar_anim.calendar.horizontal_band_compression.bands import (
+    build_synchronized_horizontal_bands,
 )
 from calendar_anim.calendar.models import CalendarEventDraft
 from calendar_anim.calendar.subcolumn_ordering import (
@@ -327,6 +331,97 @@ def map_cells_to_calendar(
     return mapped, events
 
 
+def synchronized_horizontal_bands_ready(profile: CalibrationProfile) -> bool:
+    observations = profile.synchronized_horizontal_bands
+    if observations is None:
+        return False
+    return all(
+        value is True
+        for value in (
+            observations.equal_widths_preserved,
+            observations.slot_order_preserved,
+            observations.color_vectors_preserved,
+            observations.adjacent_boundaries_stable,
+            observations.stable_after_refresh,
+            observations.stable_after_navigation,
+            observations.visually_acceptable,
+            observations.safe_for_mapper,
+        )
+    )
+
+
+def compress_events_into_synchronized_horizontal_bands(
+    mapped_cells: list[CalendarMappedCell],
+    events: list[CalendarEventDraft],
+    target_width: int,
+    target_height: int,
+    columns_per_day: int,
+    days_used: int,
+) -> tuple[list[CalendarEventDraft], int]:
+    """Merge equal consecutive row vectors while retaining six events per band."""
+
+    if len(mapped_cells) != len(events):
+        raise CalendarAnimError("Baseline mapped cells and Calendar events do not match")
+    bands, _ = build_synchronized_horizontal_bands(
+        mapped_cells,
+        target_width,
+        target_height,
+        columns_per_day,
+        days_used,
+    )
+    cells_by_coordinate = {(cell.logical_x, cell.logical_y): cell for cell in mapped_cells}
+    events_by_coordinate = {
+        (
+            int(event.private_metadata["logical_x"]),
+            int(event.private_metadata["logical_y"]),
+        ): event
+        for event in events
+    }
+    compressed: list[CalendarEventDraft] = []
+    for band_index, band in enumerate(bands):
+        for slot in band.slots:
+            logical_x = band.day_offset * columns_per_day + slot.subcolumn
+            coordinates = [
+                (logical_x, logical_y)
+                for logical_y in range(band.start_y, band.start_y + band.length)
+            ]
+            first = events_by_coordinate[coordinates[0]]
+            last = events_by_coordinate[coordinates[-1]]
+            source_indexes = {
+                cell.source_block_index
+                for coordinate in coordinates
+                if (cell := cells_by_coordinate[coordinate]).source_block_index is not None
+            }
+            source_block_index = next(iter(source_indexes)) if len(source_indexes) == 1 else None
+            metadata = dict(first.private_metadata)
+            metadata.update(
+                {
+                    "event_compression": (EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS.value),
+                    "band_index": str(band_index),
+                    "band_start_y": str(band.start_y),
+                    "band_end_y_exclusive": str(band.start_y + band.length),
+                    "band_length_rows": str(band.length),
+                }
+            )
+            if source_block_index is None:
+                metadata.pop("source_block_index", None)
+            else:
+                metadata["source_block_index"] = str(source_block_index)
+            compressed.append(
+                CalendarEventDraft(
+                    frame_index=first.frame_index,
+                    block_index=source_block_index,
+                    start=first.start,
+                    end=last.end,
+                    color_id=first.color_id,
+                    color_hex=first.color_hex,
+                    summary=first.summary,
+                    private_metadata=metadata,
+                )
+            )
+    return compressed, len(bands)
+
+
 def build_single_frame_plan(
     manifest: AnimationManifest,
     profile: CalibrationProfile,
@@ -337,6 +432,7 @@ def build_single_frame_plan(
     fit: FitMode = "contain",
     calendar_name: str = "Calendar Animation Lab",
     mapping_mode: FrameMappingMode = FrameMappingMode.SPARSE,
+    event_compression: EventCompressionMode = EventCompressionMode.NONE,
     calendar_background_color_id: str | None = None,
     subcolumn_order_strategy: str | SubcolumnOrderStrategy | None = None,
 ) -> SingleFrameCalendarPlan:
@@ -344,6 +440,13 @@ def build_single_frame_plan(
         raise CalendarAnimError(f"Unsupported frame fit: {fit}")
     if max_execute_events <= 0:
         raise CalendarAnimError("max execute events must be positive")
+    if (
+        event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS
+        and mapping_mode is not FrameMappingMode.FULL_GRID
+    ):
+        raise CalendarAnimError(
+            "Synchronized horizontal-band compression requires full-grid mapping"
+        )
     frame = select_frame(manifest, frame_index)
     target_width = profile.candidate_grid.width
     target_height = profile.candidate_grid.height
@@ -409,11 +512,27 @@ def build_single_frame_plan(
         background_color.id if mapping_mode is FrameMappingMode.FULL_GRID else None,
         ordering_strategy,
     )
+    baseline_event_count = len(events)
+    synchronized_band_count = 0
+    if event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS:
+        events, synchronized_band_count = compress_events_into_synchronized_horizontal_bands(
+            mapped,
+            events,
+            target_width,
+            target_height,
+            profile.horizontal_mapping.usable_overlap_columns_per_day or 1,
+            profile.horizontal_mapping.days_used,
+        )
 
     profile_ready = profile.mapper_ready
     strategy_matches_profile = profile.subcolumn_order_mapping.strategy_ready(ordering_strategy)
+    compression_matches_profile = (
+        event_compression is EventCompressionMode.NONE
+        or synchronized_horizontal_bands_ready(profile)
+    )
     if mapping_mode is FrameMappingMode.FULL_GRID:
         profile_ready = profile_ready and strategy_matches_profile
+    profile_ready = profile_ready and compression_matches_profile
 
     warnings: list[str] = []
     normalized_source_background = (
@@ -432,8 +551,8 @@ def build_single_frame_plan(
         )
     if mapping_mode is FrameMappingMode.FULL_GRID:
         warnings.append(
-            "Full-grid creates every calibrated cell in deterministic day/row/subcolumn "
-            "order, but final visual ordering still depends on Google Calendar."
+            "Full-grid keeps every calibrated logical cell in deterministic "
+            "day/row/subcolumn order, but final visual ordering still depends on Google Calendar."
         )
         if not strategy_matches_profile:
             recommended = profile.subcolumn_order_mapping.recommended_slot_order_strategy or "none"
@@ -448,10 +567,22 @@ def build_single_frame_plan(
         )
         if calendar_background_color_id is not None:
             warnings.append("Calendar background color is ignored in sparse mode.")
+    if event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS:
+        warnings.append(
+            "Calendar events are compressed into vertically synchronized six-slot bands; "
+            "the logical preview remains a complete full-grid canvas."
+        )
+        if not compression_matches_profile:
+            warnings.append(
+                "Synchronized horizontal-band compression is not approved by the loaded "
+                "calibration profile."
+            )
     if not profile_ready:
         blockers = list(profile.missing_mapper_calibrations)
         if mapping_mode is FrameMappingMode.FULL_GRID and not strategy_matches_profile:
             blockers.append(f"confirmed {ordering_strategy.value} mapper strategy")
+        if not compression_matches_profile:
+            blockers.append("synchronized horizontal-bands calibration")
         missing = ", ".join(blockers)
         warnings.append(
             "Calibration profile is NOT READY; dry-run is allowed but real upload is blocked. "
@@ -467,6 +598,12 @@ def build_single_frame_plan(
     foreground_mapped = [cell for cell in mapped if cell.cell_role is CellRole.FOREGROUND]
     background_count = len(mapped) - len(foreground_mapped)
     event_count = len(events)
+    foreground_event_count = sum(
+        event.private_metadata.get("cell_role") == CellRole.FOREGROUND.value for event in events
+    )
+    background_event_count = sum(
+        event.private_metadata.get("cell_role") == CellRole.BACKGROUND.value for event in events
+    )
     mapped_count = len(mapped)
     return SingleFrameCalendarPlan(
         animation_id=manifest.animation_id,
@@ -483,6 +620,7 @@ def build_single_frame_plan(
         days_used=profile.horizontal_mapping.days_used,
         fit=fit,
         mapping_mode=mapping_mode,
+        event_compression=event_compression,
         background_color_id=(
             background_color.id if mapping_mode is FrameMappingMode.FULL_GRID else None
         ),
@@ -507,11 +645,14 @@ def build_single_frame_plan(
             foreground_cells_after_fitting=len(foreground_mapped),
             background_structural_cells=background_count,
             total_logical_cells=mapped_count,
-            foreground_events=len(foreground_mapped),
-            background_events=background_count,
+            foreground_events=foreground_event_count,
+            background_events=background_event_count,
             foreground_calendar_colors=len({cell.color_id for cell in foreground_mapped}),
             sparse_event_estimate=len(fitted),
             full_grid_event_estimate=target_width * target_height,
+            baseline_calendar_events=baseline_event_count,
+            saved_calendar_events=baseline_event_count - event_count,
+            synchronized_horizontal_bands=synchronized_band_count,
         ),
         mapped_cells=mapped,
         events=events,
