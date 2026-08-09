@@ -56,6 +56,9 @@ from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
 from calendar_anim.calendar.lab import LAB_CALENDAR_DESCRIPTION, LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.commands import register_multi_frame_commands
+from calendar_anim.calendar.vertical_compression.commands import (
+    register_vertical_compression_commands,
+)
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.renderer.manifest import read_manifest, validate_manifest_files
 
@@ -813,3 +816,4 @@ def register_calendar_commands(app: typer.Typer) -> None:
     app.command("map-frame")(map_frame_command)
     register_multi_frame_commands(app)
     register_capture_commands(app)
+    register_vertical_compression_commands(app)
