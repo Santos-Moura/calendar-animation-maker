@@ -275,6 +275,9 @@ the installed Chrome with `.calendar-anim/browser-profile`, positions the time g
 at 18:00, waits for stability, and skips completed screenshots on resume. Use `--recapture
 --execute` to back up and replace visually invalid screenshots. Add `--mp4` to composition only when
 `ffmpeg` is installed. See [Calendar capture](docs/calendar-capture.md) for the full workflow.
+The explicit 126x72 candidate is documented separately in
+[high-detail animation validation](docs/high-detail-animation-validation.md); it does not change the
+42x24 production default.
 
 Every render produces:
 
