@@ -43,6 +43,7 @@ def build_multi_frame_plan(
     event_compression: EventCompressionMode = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: str | None = None,
     subcolumn_order_strategy: str | SubcolumnOrderStrategy | None = None,
+    grid_profile: str = "production",
 ) -> tuple[MultiFramePlan, list[SingleFrameCalendarPlan]]:
     if frame_start < 0:
         raise CalendarAnimError("frame start must be non-negative")
@@ -108,6 +109,13 @@ def build_multi_frame_plan(
             event_compression=event_compression,
             target_grid_width=first.target_grid_width,
             target_grid_height=first.target_grid_height,
+            grid_profile=grid_profile,
+            slots_per_day=profile.horizontal_mapping.usable_overlap_columns_per_day,
+            vertical_step_minutes=(
+                profile.vertical_mapping.minimum_distinguishable_height_minutes
+            ),
+            visible_start_hour=profile.calendar_ui.visible_start_hour,
+            visible_end_hour=profile.calendar_ui.visible_end_hour,
             subcolumn_order_strategy=first.subcolumn_order_strategy,
             subcolumn_order_keys=first.subcolumn_order_keys,
             max_events_per_frame=max_events_per_frame,

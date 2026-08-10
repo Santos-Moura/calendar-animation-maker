@@ -24,7 +24,7 @@ class FrameUploadPlan(BaseModel):
 
 
 class MultiFramePlan(BaseModel):
-    schema_version: str = "1.1"
+    schema_version: str = "1.2"
     animation_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     calendar_name: str = "Calendar Animation Lab"
@@ -37,6 +37,11 @@ class MultiFramePlan(BaseModel):
     event_compression: EventCompressionMode = EventCompressionMode.NONE
     target_grid_width: int = Field(gt=0)
     target_grid_height: int = Field(gt=0)
+    grid_profile: str = "legacy"
+    slots_per_day: int | None = Field(default=None, gt=0)
+    vertical_step_minutes: int | None = Field(default=None, gt=0)
+    visible_start_hour: int | None = Field(default=None, ge=0, le=23)
+    visible_end_hour: int | None = Field(default=None, ge=1, le=24)
     subcolumn_order_strategy: SubcolumnOrderStrategy
     subcolumn_order_keys: list[str] = Field(default_factory=list)
     max_events_per_frame: int = Field(gt=0)
@@ -55,6 +60,26 @@ class MultiFramePlan(BaseModel):
             raise ValueError("total_events does not match events_per_frame")
         if [frame.planned_events for frame in self.frames] != self.events_per_frame:
             raise ValueError("frame planned event counts do not match events_per_frame")
+        geometry = (
+            self.slots_per_day,
+            self.vertical_step_minutes,
+            self.visible_start_hour,
+            self.visible_end_hour,
+        )
+        if any(value is not None for value in geometry):
+            if any(value is None for value in geometry):
+                raise ValueError("persisted grid geometry must be complete")
+            assert self.slots_per_day is not None
+            assert self.vertical_step_minutes is not None
+            assert self.visible_start_hour is not None
+            assert self.visible_end_hour is not None
+            if self.target_grid_width != self.slots_per_day * 7:
+                raise ValueError("target grid width does not match slots_per_day")
+            visible_minutes = (self.visible_end_hour - self.visible_start_hour) * 60
+            if visible_minutes % self.vertical_step_minutes:
+                raise ValueError("visible window is not divisible by vertical_step_minutes")
+            if self.target_grid_height != visible_minutes // self.vertical_step_minutes:
+                raise ValueError("target grid height does not match persisted time geometry")
         return self
 
 

@@ -20,6 +20,7 @@ from calendar_anim.calendar.frame_mapping.service import (
 )
 from calendar_anim.calendar.google_auth import GoogleOAuthClient
 from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
+from calendar_anim.calendar.high_detail import HIGH_DETAIL_GRID, apply_high_detail_grid
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.artifacts import (
@@ -69,6 +70,13 @@ def plan_animation_command(
     calibration_profile: Annotated[
         Path, typer.Option("--calibration-profile", "--profile")
     ] = DEFAULT_PROFILE_PATH,
+    experimental_grid: Annotated[
+        str | None,
+        typer.Option(
+            "--experimental-grid",
+            help="Explicit high-detail grid override; production defaults remain unchanged.",
+        ),
+    ] = None,
     output_root: Annotated[Path, typer.Option("--output-root")] = Path("output/animation-runs"),
     mapping_mode: Annotated[
         FrameMappingMode, typer.Option("--mapping-mode")
@@ -114,6 +122,8 @@ def plan_animation_command(
         if errors:
             raise CalendarAnimError("Manifest validation failed: " + "; ".join(errors))
         profile = load_profile(calibration_profile)
+        if experimental_grid is not None:
+            profile = apply_high_detail_grid(profile, experimental_grid)
         fit: FitMode = "contain"
         plan, frame_plans = build_multi_frame_plan(
             manifest,
@@ -129,6 +139,11 @@ def plan_animation_command(
             event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
             subcolumn_order_strategy=subcolumn_ordering,
+            grid_profile=(
+                f"high-detail-{HIGH_DETAIL_GRID}"
+                if experimental_grid is not None
+                else "production"
+            ),
         )
         store = AnimationRunStore(output_root)
         state = initialize_animation_run(plan, frame_plans, manifest, manifest_path, store)
@@ -141,6 +156,13 @@ def plan_animation_command(
     typer.echo(f"Mapping mode: {plan.mapping_mode.value}")
     typer.echo(f"Event compression: {plan.event_compression.value}")
     typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
+    typer.echo(f"Grid profile: {plan.grid_profile}")
+    typer.echo(f"Slots/day: {plan.slots_per_day}")
+    typer.echo(f"Vertical step: {plan.vertical_step_minutes} minutes")
+    typer.echo(
+        f"Visible window: {plan.visible_start_hour:02d}:00-"
+        f"{'00:00' if plan.visible_end_hour == 24 else f'{plan.visible_end_hour:02d}:00'}"
+    )
     typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
     typer.echo(
         "Slot keys: "
@@ -312,12 +334,14 @@ def cleanup_animation_command(
 
 
 def _print_upload_summary(plan: MultiFramePlan, state: AnimationUploadState, execute: bool) -> None:
+    typer.echo(f"Calendar: {plan.calendar_name}")
     typer.echo(f"Animation: {plan.run_id}")
     typer.echo(f"Frames: {plan.frame_count}")
     typer.echo(f"Weeks: {plan.frame_count}")
+    typer.echo(f"Grid: {plan.target_grid_width}x{plan.target_grid_height}")
     typer.echo(f"Mapping mode: {plan.mapping_mode.value}")
     typer.echo(f"Event compression: {plan.event_compression.value}")
-    typer.echo(f"Ordering: {plan.subcolumn_order_strategy.value}")
+    typer.echo(f"Summary ordering: {plan.subcolumn_order_strategy.value}")
     typer.echo(f"Events/frame: {', '.join(str(value) for value in plan.events_per_frame)}")
     typer.echo(f"Total planned events: {plan.total_events}")
     typer.echo(f"Current state: {_status_counts(state)}")
