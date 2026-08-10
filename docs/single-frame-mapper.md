@@ -68,30 +68,40 @@ The mapper still emits events deterministically with the submission key:
 (day_offset, logical_y, subcolumn_index)
 ```
 
-Creation order was not reliable in the real Calendar UI, and `colorId` must remain free to represent the video. The full-grid mapper therefore derives a second key from the logical subcolumn:
+Creation order was not reliable in the real Calendar UI, and `colorId` must remain free to
+represent the video. The full-grid mapper therefore derives a second key from the logical
+subcolumn. New plans use the validated `zero-width` sequence; reports display its codepoints
+rather than printing invisible characters:
 
 ```text
-subcolumn 0 -> summary "00"
-subcolumn 1 -> summary "01"
-subcolumn 2 -> summary "02"
-subcolumn 3 -> summary "03"
-subcolumn 4 -> summary "04"
-subcolumn 5 -> summary "05"
+subcolumn 0 -> U+200B U+200B
+subcolumn 1 -> U+200B U+200C
+subcolumn 2 -> U+200B U+200D
+subcolumn 3 -> U+200B U+2060
+subcolumn 4 -> U+200B U+2063
+subcolumn 5 -> U+200C U+200B
 ```
 
-Foreground and structural background cells use exactly the same key for a given subcolumn. The key does not depend on color, row, role, source block, or frame content. `frame-plan.json` records `summary-prefix` and all six keys; `mapping-report.txt` prints an auditable row sample such as:
+Foreground and structural background cells use exactly the same key for a given subcolumn. The key
+does not depend on color, row, role, source block, or frame content. `frame-plan.json` records the
+strategy and raw keys; `mapping-report.txt` prints codepoints in an auditable row sample such as:
 
 ```text
 day_offset=1 row=4
-subcolumn=0 summary="00" colorId=8 role=background
-subcolumn=1 summary="01" colorId=8 role=background
-subcolumn=2 summary="02" colorId=5 role=foreground
-subcolumn=3 summary="03" colorId=8 role=background
-subcolumn=4 summary="04" colorId=3 role=foreground
-subcolumn=5 summary="05" colorId=8 role=background
+subcolumn=0 summary=U+200B U+200B colorId=8 role=background
+subcolumn=1 summary=U+200B U+200C colorId=8 role=background
+subcolumn=2 summary=U+200B U+200D colorId=5 role=foreground
 ```
 
-Google Calendar has no `subcolumn` API field and does not document summary-based overlap ordering as a layout contract. The strategy is based on stable behavior observed in this project and is isolated so it can be replaced. Short technical titles may appear over the event blocks; invisible Unicode, CSS, and DOM workarounds are not used in this baseline.
+The numeric fallback remains available with `--subcolumn-ordering numeric` and produces `00..05`.
+Persisted legacy plans with `summary-prefix` retain those same numeric summaries. A saved plan is
+never reinterpreted using the current default. Empty or equal summaries are intentionally avoided:
+they would remove the distinct evidence used for deterministic ordering.
+
+Google Calendar has no `subcolumn` API field and does not document summary-based overlap ordering
+as a layout contract. The zero-width strategy is based on stable empirical behavior observed by
+this project, not an API guarantee. It does not use CSS injection, DOM modification, or screenshot
+post-processing.
 
 Sparse mode deliberately keeps the legacy blank summary. Without structural fillers it still cannot promise absolute positions, even if a summary key were added.
 
@@ -102,9 +112,14 @@ These are different concepts:
 - source background is content removed from the video before the manifest is written;
 - Calendar structural background is an intentional event that occupies a full-grid cell.
 
-Structural events carry `cell_role=background`; visible pixels carry `cell_role=foreground`. Both carry private `generated_by`, `animation_id`, `run_id`, `frame_index`, `logical_x`, `logical_y`, `day_offset`, `subcolumn`, `subcolumn_index`, and `subcolumn_order_strategy` metadata. Summary ordering additionally records `subcolumn_order_key`. Foreground events retain `source_block_index`.
+Structural events carry `cell_role=background`; visible pixels carry `cell_role=foreground`. Both
+carry private `generated_by`, `animation_id`, `run_id`, `frame_index`, `logical_x`, `logical_y`,
+`day_offset`, `subcolumn`, `subcolumn_index`, and `subcolumn_order_strategy` metadata. Summary
+ordering additionally records `subcolumn_order_key` and its auditable
+`subcolumn_order_key_codepoints`. Foreground events retain `source_block_index`.
 
-Full-grid event summaries contain `00..05`; sparse summaries retain one blank space.
+New full-grid event summaries use distinct zero-width keys; numeric and legacy plans contain
+`00..05`; sparse summaries retain one blank space.
 
 ## Aspect ratio and background color
 
@@ -191,7 +206,8 @@ New plans use the strategy automatically. It may also be selected explicitly wit
 
 For each day, consecutive rows merge only when their complete six-slot vectors have identical
 Calendar colors and foreground/background roles. Each band still creates six simultaneous events
-with summaries `00..05`; all six share the same start and end. Day boundaries are never crossed.
+with the plan's persisted summary keys; all six share the same start and end. Day boundaries are
+never crossed.
 The `42x24` mapped canvas and its previews remain unchanged while the persisted event drafts and
 upload counts become smaller. `--event-compression none` preserves the original one-event-per-cell
 behavior.
@@ -234,7 +250,10 @@ python -m calendar_anim calendar cleanup --animation-id primeiro-teste --run-id 
 
 ## Multi-frame orchestration
 
-The single-frame mapper remains the only source of truth for fit, full-grid background, color mapping, `summary-prefix`, metadata, and event generation. The multi-frame layer calls it once per selected manifest frame, assigns consecutive weeks, and persists an immutable animation plan plus mutable frame checkpoints.
+The single-frame mapper remains the only source of truth for fit, full-grid background, color
+mapping, summary ordering, metadata, and event generation. The multi-frame layer calls it once per
+selected manifest frame, assigns consecutive weeks, and persists an immutable animation plan plus
+mutable frame checkpoints.
 
 It does not copy or replace the mapper. See [multi-frame upload](multi-frame-upload.md) for `plan-animation`, resumable serial upload, partial-frame recovery, and animation cleanup.
 
@@ -247,7 +266,7 @@ Calendar API writes are not visually atomic. Multi-frame upload now pre-creates 
 ```text
 full-grid single frame
     -> record stable summary ordering evidence
-    -> generate summary-prefix keys 00..05
+    -> generate distinct zero-width summary keys
     -> compare one full-grid frame with real Calendar
     -> validate shape fidelity
     -> multi-frame planner and frame-level resume

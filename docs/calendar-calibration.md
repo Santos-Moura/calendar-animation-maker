@@ -230,7 +230,11 @@ The production mapper therefore treats `summary` as the technical slot-order key
 python -m calendar_anim calendar record-calibration --run-id summary-ordering-evidence --pattern subcolumn-order --ordering-factor-tested --ordering-controlling-property summary --ordering-factor-stable --recommended-slot-order-strategy summary-prefix --notes "Summary controlled ordering in the real Calendar factor test."
 ```
 
-Readiness requires all three pieces of evidence: `controlling_property=summary`, stable factor results, and the mapper capability `summary-prefix`. Merely writing the strategy string does not unlock real execution.
+Readiness requires all three pieces of evidence: `controlling_property=summary`, stable factor
+results, and a mapper strategy that uses distinct summaries. The historical profile value
+`summary-prefix` records this factor-level evidence; production may apply it through `zero-width`,
+`numeric`, or a persisted legacy `summary-prefix` plan. Merely writing a strategy string does not
+unlock real execution.
 
 ## `vertical-compression`
 
@@ -270,7 +274,12 @@ The profile schema keeps older YAML compatible while adding optional `color_mapp
 - `NOT READY`: at least one required experiment has no recorded measurements;
 - `READY FOR SINGLE-FRAME EXPERIMENT`: vertical, overlap, colors, position, horizontal bars, and a stable subcolumn strategy supported by the mapper all have recorded measurements.
 
-Readiness does not block local mapping and does not mark `42x24` as final. It does block a real single-frame upload. Position readiness includes `week_starts_on`; horizontal-bar readiness includes continuity, gaps, same-color merging, maximum useful width, and the recommended strategy. Subcolumn readiness accepts the legacy creation-order path only when that behavior was positively observed, or `summary-prefix` when stable summary control was recorded and the mapper supports it. Unknown, color-dependent, unstable, or unsupported strategies remain blocked.
+Readiness does not block local mapping and does not mark `42x24` as final. It does block a real
+single-frame upload. Position readiness includes `week_starts_on`; horizontal-bar readiness
+includes continuity, gaps, same-color merging, maximum useful width, and the recommended strategy.
+Subcolumn readiness accepts the legacy creation-order path only when that behavior was positively
+observed, or a supported summary-key strategy when stable summary control was recorded. Unknown,
+color-dependent, unstable, or unsupported strategies remain blocked.
 
 ## Cleanup
 
@@ -291,4 +300,7 @@ Cleanup matches only `generated_by`, `animation_id`, and `run_id` in the recogni
 
 The **Single Frame Calendar Mapper** supports `sparse` and `full-grid`. Sparse is efficient but horizontally unstable; full-grid is the recommended first visual baseline because every calibrated slot exists. Dry-run can be used before readiness, while real upload waits for a complete profile. See [single-frame mapper](single-frame-mapper.md).
 
-The next step is a local full-grid dry-run with `summary-prefix`, followed by review of `frame-plan.json`, `mapping-report.txt`, `source-frame.png`, and `mapped-preview.png`. Only after that review should one explicitly confirmed frame be uploaded. Multiple frames, hybrid optimization, Playwright, browser capture, batching, retry, and resume remain outside this phase.
+The production path now defaults new full-grid plans to `zero-width`; `numeric` remains the visible
+baseline and persisted `summary-prefix` plans retain their numeric semantics. Review
+`frame-plan.json`, `mapping-report.txt`, `source-frame.png`, and `mapped-preview.png` before any
+explicitly confirmed upload. See [invisible summary ordering](invisible-summary-ordering.md).

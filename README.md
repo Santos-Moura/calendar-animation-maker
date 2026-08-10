@@ -139,7 +139,7 @@ visually stable. See [vertical compression experiment](docs/vertical-compression
 
 Because independent mixed-duration columns caused Calendar overlap reflow and unequal slot widths,
 the production strategy merges only complete six-slot row vectors. Equal start/end boundaries for
-all six slots preserved widths, `00..05` order, colors, refresh, and navigation in the real UI.
+all six slots preserved widths, logical slot order, colors, refresh, and navigation in the real UI.
 `synchronized-horizontal-bands` is now the default for new plans; `none` remains an explicit
 fallback, baseline, and debug mode. In the validated six-frame sample, the event count fell from
 6,048 to 792 (86.9%); actual reduction depends on frame content. The real upload created 792/792
@@ -156,9 +156,22 @@ The pattern contains two forward groups, one reverse group, and one shuffled gro
 
 ### Summary-based subcolumn ordering
 
-The real ordering investigation found that creation order did not control the final layout and `colorId` was not a reliable positioning key. Distinct event summaries remained ordered, and the title-versus-color case favored the summary. For the MVP, full-grid therefore assigns the deterministic summaries `00..05` from the logical subcolumn while `colorId` remains exclusively visual data.
+The real ordering investigation found that creation order did not control the final layout and
+`colorId` was not a reliable positioning key. Distinct event summaries remained ordered, and the
+title-versus-color case favored the summary. Full-grid therefore uses `summary` as its ordering key
+while `colorId` remains exclusively visual data.
 
-This behavior is empirically validated for this project, not part of a documented Google Calendar layout API. The strategy is isolated behind `summary-prefix` so it can be replaced later. Technical titles may be visible in Calendar; invisible Unicode and UI hacks are intentionally outside this phase.
+New plans use deterministic `zero-width` summaries, which preserve ordering evidence without
+painting numeric technical titles over the frame. Use `--subcolumn-ordering numeric` for the
+visible `00..05` fallback, baseline, or debugging. Persisted plans keep their recorded strategy;
+legacy `summary-prefix` plans remain numeric. Empty or equal summaries are not used because they
+would remove the distinct ordering keys.
+
+The invisible strategy is empirically validated for this project: 18 distinct values survived an
+18/18 API round-trip without normalization, remained present in the DOM, and preserved ordering
+through refresh and week navigation. A real-frame comparison also preserved geometry. This is
+observed Google Calendar behavior, not a documented API or layout contract. See
+[invisible summary ordering](docs/invisible-summary-ordering.md).
 
 ## Single-frame Calendar mapper
 
@@ -172,14 +185,20 @@ The command reads `output/calibration/calibration-profile.yaml` by default and w
 
 The production defaults are `full-grid` plus `synchronized-horizontal-bands`: the logical canvas
 keeps all calibrated positions, while only the persisted `CalendarEventDraft` representation is
-compressed. Structural background events keep every subcolumn occupied and `summary-prefix`
-supplies the keys `00..05`. The background is a configurable Calendar `colorId`, not an attempt to
+compressed. Structural background events keep every subcolumn occupied and `zero-width` supplies
+distinct invisible keys. The background is a configurable Calendar `colorId`, not an attempt to
 match the browser theme.
 
 The uncompressed baseline remains explicit:
 
 ```powershell
 python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --mapping-mode full-grid --event-compression none --start-date 2026-09-07 --run-id frame-baseline-001
+```
+
+The visible numeric ordering fallback is also explicit:
+
+```powershell
+python -m calendar_anim calendar map-frame .\output\primeiro-teste\animation.json --frame 0 --subcolumn-ordering numeric --start-date 2026-11-22 --run-id frame-numeric-debug-001
 ```
 
 Sparse diagnostics remain available with `--mapping-mode sparse --event-compression none`; they

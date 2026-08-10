@@ -57,7 +57,7 @@ python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animat
 The equivalent explicit production command is:
 
 ```powershell
-python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --event-compression synchronized-horizontal-bands --start-date 2026-11-22 --run-id animation-bands-01
+python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --event-compression synchronized-horizontal-bands --subcolumn-ordering zero-width --start-date 2026-11-22 --run-id animation-bands-01
 ```
 
 Use the uncompressed fallback explicitly with:
@@ -66,8 +66,10 @@ Use the uncompressed fallback explicitly with:
 python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animation.json --frame-start 0 --frame-count 6 --mapping-mode full-grid --event-compression none --start-date 2027-03-07 --run-id animation-baseline-01
 ```
 
-The chosen compression mode and compressed event drafts are persisted in the immutable global and
-per-frame plans, so resume uploads exactly what was reviewed locally.
+The chosen compression mode, ordering strategy, and compressed event drafts are persisted in the
+immutable global and per-frame plans, so resume uploads exactly what was reviewed locally. New
+plans default to `zero-width`; `--subcolumn-ordering numeric` retains visible keys for debugging.
+Legacy persisted `summary-prefix` plans remain numeric and are never reinterpreted.
 
 The production default is consulted only while creating a new plan. Upload, resume, recovery, and
 cleanup always use the strategy persisted in the immutable plan. Legacy plan JSON without an
