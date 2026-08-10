@@ -111,9 +111,7 @@ def build_multi_frame_plan(
             target_grid_height=first.target_grid_height,
             grid_profile=grid_profile,
             slots_per_day=profile.horizontal_mapping.usable_overlap_columns_per_day,
-            vertical_step_minutes=(
-                profile.vertical_mapping.minimum_distinguishable_height_minutes
-            ),
+            vertical_step_minutes=(profile.vertical_mapping.minimum_distinguishable_height_minutes),
             visible_start_hour=profile.calendar_ui.visible_start_hour,
             visible_end_hour=profile.calendar_ui.visible_end_hour,
             subcolumn_order_strategy=first.subcolumn_order_strategy,

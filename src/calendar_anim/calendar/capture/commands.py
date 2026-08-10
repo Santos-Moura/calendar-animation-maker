@@ -138,13 +138,9 @@ def capture_animation_command(
     typer.echo(f"Capture profile: {capture_profile.value}")
     typer.echo(f"Browser zoom: {plan.config.browser_zoom_percent}%")
     visible_end = (
-        "00:00"
-        if plan.config.visible_end_hour == 24
-        else f"{plan.config.visible_end_hour:02d}:00"
+        "00:00" if plan.config.visible_end_hour == 24 else f"{plan.config.visible_end_hour:02d}:00"
     )
-    typer.echo(
-        f"Visible window: {plan.config.visible_start_hour:02d}:00-{visible_end}"
-    )
+    typer.echo(f"Visible window: {plan.config.visible_start_hour:02d}:00-{visible_end}")
     typer.echo("Week header: visible")
     typer.echo(f"Execution: {'REAL BROWSER' if execute else 'DRY RUN'}")
     typer.echo(f"Artifacts: {store.run_directory(plan.run_id)}")

@@ -357,9 +357,7 @@ class PlaywrightCalendarCaptureGateway:
             self._applied_zoom_percent = 100.0
         else:
             page.bring_to_front()
-            self._applied_zoom_percent = self._verify_browser_zoom(
-                self.config.browser_zoom_percent
-            )
+            self._applied_zoom_percent = self._verify_browser_zoom(self.config.browser_zoom_percent)
         self._capture_clip = None
         self._header_clip = None
         self._time_window_clip = None
@@ -400,9 +398,7 @@ class PlaywrightCalendarCaptureGateway:
         if self._header_clip is None or self._time_window_clip is None:
             raise CalendarAnimError("Calendar header and time window are not ready for capture")
         page = self._require_page()
-        header_bytes = page.screenshot(
-            animations="disabled", scale="css", clip=self._header_clip
-        )
+        header_bytes = page.screenshot(animations="disabled", scale="css", clip=self._header_clip)
         window_bytes = page.screenshot(
             animations="disabled", scale="css", clip=self._time_window_clip
         )
@@ -436,9 +432,7 @@ class PlaywrightCalendarCaptureGateway:
                     return candidate
         raise CalendarAnimError("Could not find a visible Google Calendar week grid")
 
-    def _position_visible_window(
-        self, region: Any
-    ) -> tuple[dict[str, float], dict[str, float]]:
+    def _position_visible_window(self, region: Any) -> tuple[dict[str, float], dict[str, float]]:
         raw = region.evaluate(
             POSITION_VISIBLE_WINDOW_SCRIPT,
             {

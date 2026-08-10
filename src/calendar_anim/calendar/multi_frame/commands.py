@@ -140,9 +140,7 @@ def plan_animation_command(
             calendar_background_color_id=calendar_background_color_id,
             subcolumn_order_strategy=subcolumn_ordering,
             grid_profile=(
-                f"high-detail-{HIGH_DETAIL_GRID}"
-                if experimental_grid is not None
-                else "production"
+                f"high-detail-{HIGH_DETAIL_GRID}" if experimental_grid is not None else "production"
             ),
         )
         store = AnimationRunStore(output_root)

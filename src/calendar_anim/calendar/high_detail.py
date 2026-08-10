@@ -21,12 +21,8 @@ def apply_high_detail_grid(
             f"Unsupported experimental grid {grid!r}; supported: {HIGH_DETAIL_GRID}"
         )
     data = base_profile.model_dump()
-    data["horizontal_mapping"]["maximum_tested_overlap_columns"] = (
-        HIGH_DETAIL_SLOTS_PER_DAY
-    )
-    data["horizontal_mapping"]["usable_overlap_columns_per_day"] = (
-        HIGH_DETAIL_SLOTS_PER_DAY
-    )
+    data["horizontal_mapping"]["maximum_tested_overlap_columns"] = HIGH_DETAIL_SLOTS_PER_DAY
+    data["horizontal_mapping"]["usable_overlap_columns_per_day"] = HIGH_DETAIL_SLOTS_PER_DAY
     data["vertical_mapping"]["minimum_distinguishable_height_minutes"] = (
         HIGH_DETAIL_VERTICAL_STEP_MINUTES
     )
