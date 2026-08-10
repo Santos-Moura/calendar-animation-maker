@@ -202,6 +202,11 @@ class CaptureStore:
 
 def build_capture_report(plan: CapturePlan, state: CaptureState) -> str:
     completed = sum(frame.status is FrameCaptureStatus.COMPLETED for frame in state.frames)
+    visible_end = (
+        "00:00"
+        if plan.config.visible_end_hour == 24
+        else f"{plan.config.visible_end_hour:02d}:00"
+    )
     lines = [
         "Google Calendar Week Capture",
         "============================",
@@ -216,9 +221,9 @@ def build_capture_report(plan: CapturePlan, state: CaptureState) -> str:
         f"Theme: {plan.config.color_scheme}",
         f"Browser channel: {plan.config.browser_channel.value}",
         f"View: {plan.config.calendar_view}",
+        f"Week header visible: {plan.config.week_header_visible}",
         f"Sidebar hidden: {plan.config.sidebar_hidden}",
-        f"Visible hours: {plan.config.visible_start_hour:02d}:00-"
-        f"{plan.config.visible_end_hour:02d}:00",
+        f"Visible hours: {plan.config.visible_start_hour:02d}:00-{visible_end}",
         "",
         "Frames",
         "------",

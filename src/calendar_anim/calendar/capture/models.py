@@ -19,6 +19,11 @@ class BrowserChannel(StrEnum):
     BUNDLED_CHROMIUM = "bundled-chromium"
 
 
+class CaptureProfile(StrEnum):
+    PRODUCTION = "production"
+    HIGH_DETAIL_126X72 = "high-detail-126x72"
+
+
 class CalendarCaptureConfig(BaseModel):
     viewport_width: int = Field(default=1920, gt=0)
     viewport_height: int = Field(default=1080, gt=0)
@@ -26,6 +31,7 @@ class CalendarCaptureConfig(BaseModel):
     browser_zoom_percent: int = Field(default=100, ge=25, le=500)
     color_scheme: Literal["dark", "light"] = "dark"
     calendar_view: Literal["week"] = "week"
+    week_header_visible: Literal[True] = True
     sidebar_hidden: bool = True
     visible_start_hour: int = Field(default=6, ge=0, le=23)
     visible_end_hour: int = Field(default=18, ge=1, le=24)
