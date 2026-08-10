@@ -152,7 +152,12 @@ def initialize_animation_run(
                 )
             continue
         source = manifest_path.resolve().parent / manifest.frames[frame_plan.frame_index].image
-        write_frame_mapping_artifacts(frame_plan, source, frame_directory)
+        write_frame_mapping_artifacts(
+            frame_plan,
+            source,
+            frame_directory,
+            source_background=manifest.render.background,
+        )
         store.save_frame_result(
             plan,
             FrameUploadExecutionResult(
