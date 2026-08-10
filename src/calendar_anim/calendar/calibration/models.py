@@ -7,6 +7,7 @@ from calendar_anim.calendar.models import CalendarEventDraft
 from calendar_anim.calendar.subcolumn_ordering import (
     SUPPORTED_SUBCOLUMN_ORDER_STRATEGIES,
     SubcolumnOrderStrategy,
+    uses_summary_ordering,
 )
 
 CalibrationPattern = Literal[
@@ -347,19 +348,19 @@ class SubcolumnOrderMappingProfile(BaseModel):
         )
 
     def strategy_ready(self, strategy: SubcolumnOrderStrategy) -> bool:
-        if self.recommended_slot_order_strategy != strategy.value:
-            return False
         if strategy is SubcolumnOrderStrategy.CREATION_ORDER:
             return (
-                self.status == "recorded"
+                self.recommended_slot_order_strategy == strategy.value
+                and self.status == "recorded"
                 and self.stable_after_refresh is True
                 and self.stable_after_navigation is True
                 and self.stable_after_reopen is True
                 and self.creation_order_controls_layout is True
             )
-        if strategy is SubcolumnOrderStrategy.SUMMARY_PREFIX:
+        if uses_summary_ordering(strategy):
             return (
-                self.status == "recorded"
+                self.recommended_slot_order_strategy == "summary-prefix"
+                and self.status == "recorded"
                 and self.factor_tested
                 and self.controlling_property == "summary"
                 and self.factor_stable is True

@@ -22,7 +22,10 @@ from calendar_anim.calendar.frame_mapping.models import (
     FrameMappingMode,
     LogicalCell,
 )
-from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
+from calendar_anim.calendar.subcolumn_ordering import (
+    SubcolumnOrderStrategy,
+    summary_order_keys,
+)
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.frame import Block
 from tests.factories import make_manifest, make_ready_calibration_profile
@@ -242,11 +245,13 @@ def test_full_grid_plan_has_fillers_metadata_and_exact_canvas_size() -> None:
     assert plan.events[0].private_metadata["cell_role"] == "background"
     assert plan.events[3].private_metadata["cell_role"] == "foreground"
     assert plan.events[0].color_id == "8"
-    assert [event.summary for event in plan.events] == ["00", "01", "02", "03", "04", "05"]
-    assert plan.events[3].summary == "03"
+    expected_summaries = summary_order_keys(6, SubcolumnOrderStrategy.ZERO_WIDTH)
+    assert [event.summary for event in plan.events] == expected_summaries
+    assert plan.events[3].summary == "\u200b\u2060"
     assert plan.events[3].private_metadata["day_offset"] == "0"
-    assert plan.events[3].private_metadata["subcolumn_order_strategy"] == "summary-prefix"
-    assert plan.events[3].private_metadata["subcolumn_order_key"] == "03"
+    assert plan.events[3].private_metadata["subcolumn_order_strategy"] == "zero-width"
+    assert plan.events[3].private_metadata["subcolumn_order_key"] == "\u200b\u2060"
+    assert plan.events[3].private_metadata["subcolumn_order_key_codepoints"] == ("U+200B U+2060")
 
 
 def test_synchronized_band_compression_keeps_canvas_and_merges_equal_row_vectors() -> None:
@@ -275,14 +280,9 @@ def test_synchronized_band_compression_keeps_canvas_and_merges_equal_row_vectors
     assert plan.statistics.cells_per_event == 2
     assert plan.statistics.compression_ratio == 0.5
     assert {event.end - event.start for event in plan.events} == {timedelta(hours=2)}
-    assert [event.summary for event in plan.events[:6]] == [
-        "00",
-        "01",
-        "02",
-        "03",
-        "04",
-        "05",
-    ]
+    assert [event.summary for event in plan.events[:6]] == summary_order_keys(
+        6, SubcolumnOrderStrategy.ZERO_WIDTH
+    )
     assert plan.events[0].private_metadata["band_start_y"] == "0"
     assert plan.events[0].private_metadata["band_end_y_exclusive"] == "2"
     assert plan.events[0].private_metadata["band_length_rows"] == "2"
@@ -412,8 +412,8 @@ def test_full_grid_order_and_six_columns_are_deterministic_for_every_day_row() -
         for event in plan.events
     ]
     assert event_order == order
-    assert plan.subcolumn_order_strategy is SubcolumnOrderStrategy.SUMMARY_PREFIX
-    assert plan.subcolumn_order_keys == ["00", "01", "02", "03", "04", "05"]
+    assert plan.subcolumn_order_strategy is SubcolumnOrderStrategy.ZERO_WIDTH
+    assert plan.subcolumn_order_keys == summary_order_keys(6, SubcolumnOrderStrategy.ZERO_WIDTH)
     groups: dict[tuple[int, int], list[int]] = {}
     for cell in plan.mapped_cells:
         groups.setdefault((cell.day_offset, cell.logical_y), []).append(cell.subcolumn)
@@ -430,7 +430,7 @@ def test_full_grid_order_and_six_columns_are_deterministic_for_every_day_row() -
             int(event.private_metadata["logical_y"]),
         )
         event_groups.setdefault(key, []).append(event.summary)
-    expected_summaries = ["00", "01", "02", "03", "04", "05"]
+    expected_summaries = summary_order_keys(6, SubcolumnOrderStrategy.ZERO_WIDTH)
     assert all(summaries == expected_summaries for summaries in event_groups.values())
 
 
@@ -450,12 +450,88 @@ def test_full_grid_summary_depends_only_on_subcolumn() -> None:
 
     first_row = plan.events[:6]
     second_row = plan.events[6:12]
-    assert [event.summary for event in first_row] == ["00", "01", "02", "03", "04", "05"]
-    assert [event.summary for event in second_row] == ["00", "01", "02", "03", "04", "05"]
+    expected_summaries = summary_order_keys(6, SubcolumnOrderStrategy.ZERO_WIDTH)
+    assert [event.summary for event in first_row] == expected_summaries
+    assert [event.summary for event in second_row] == expected_summaries
     assert first_row[2].private_metadata["cell_role"] == "foreground"
     assert second_row[2].private_metadata["cell_role"] == "background"
     assert first_row[2].color_id != second_row[2].color_id
-    assert first_row[2].summary == second_row[2].summary == "02"
+    assert first_row[2].summary == second_row[2].summary == "\u200b\u200d"
+
+
+def test_numeric_fallback_and_legacy_plan_remain_numeric() -> None:
+    kwargs = {
+        "manifest": make_manifest(),
+        "profile": make_ready_calibration_profile(),
+        "frame_index": 0,
+        "anchor_date": date(2026, 9, 6),
+        "max_execute_events": 1200,
+        "mapping_mode": FrameMappingMode.FULL_GRID,
+        "event_compression": EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
+    }
+    numeric = build_single_frame_plan(
+        **kwargs,
+        run_id="numeric-fallback",
+        subcolumn_order_strategy=SubcolumnOrderStrategy.NUMERIC,
+    )
+    legacy = build_single_frame_plan(
+        **kwargs,
+        run_id="legacy-summary-prefix",
+        subcolumn_order_strategy=SubcolumnOrderStrategy.SUMMARY_PREFIX,
+    )
+
+    expected = ["00", "01", "02", "03", "04", "05"]
+    assert numeric.subcolumn_order_strategy is SubcolumnOrderStrategy.NUMERIC
+    assert legacy.subcolumn_order_strategy is SubcolumnOrderStrategy.SUMMARY_PREFIX
+    assert numeric.subcolumn_order_keys == legacy.subcolumn_order_keys == expected
+    assert [event.summary for event in numeric.events[:6]] == expected
+    assert [event.summary for event in legacy.events[:6]] == expected
+    restored = type(legacy).model_validate_json(legacy.model_dump_json())
+    assert restored.subcolumn_order_strategy is SubcolumnOrderStrategy.SUMMARY_PREFIX
+    assert [event.summary for event in restored.events] == [
+        event.summary for event in legacy.events
+    ]
+
+
+def test_numeric_and_zero_width_change_only_summary_ordering_fields() -> None:
+    kwargs = {
+        "manifest": make_manifest(),
+        "profile": make_ready_calibration_profile(),
+        "frame_index": 0,
+        "anchor_date": date(2026, 9, 6),
+        "max_execute_events": 1200,
+        "mapping_mode": FrameMappingMode.FULL_GRID,
+        "event_compression": EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
+    }
+    numeric = build_single_frame_plan(
+        **kwargs,
+        run_id="same-plan",
+        subcolumn_order_strategy=SubcolumnOrderStrategy.NUMERIC,
+    )
+    invisible = build_single_frame_plan(
+        **kwargs,
+        run_id="same-plan",
+        subcolumn_order_strategy=SubcolumnOrderStrategy.ZERO_WIDTH,
+    )
+
+    assert numeric.mapped_cells == invisible.mapped_cells
+    assert numeric.statistics == invisible.statistics
+    assert numeric.event_count == invisible.event_count
+    for numeric_event, invisible_event in zip(numeric.events, invisible.events, strict=True):
+        assert numeric_event.start == invisible_event.start
+        assert numeric_event.end == invisible_event.end
+        assert numeric_event.color_id == invisible_event.color_id
+        assert numeric_event.summary != invisible_event.summary
+        numeric_metadata = dict(numeric_event.private_metadata)
+        invisible_metadata = dict(invisible_event.private_metadata)
+        for key in (
+            "subcolumn_order_strategy",
+            "subcolumn_order_key",
+            "subcolumn_order_key_codepoints",
+        ):
+            numeric_metadata.pop(key)
+            invisible_metadata.pop(key)
+        assert numeric_metadata == invisible_metadata
 
 
 def test_explicit_none_strategy_preserves_blank_full_grid_summaries() -> None:

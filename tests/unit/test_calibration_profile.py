@@ -14,6 +14,7 @@ from calendar_anim.calendar.calibration.profile import (
     profile_summary,
     save_profile,
 )
+from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 from tests.factories import make_ready_calibration_profile
 
 pytestmark = pytest.mark.unit
@@ -289,6 +290,12 @@ def test_stable_summary_ordering_and_mapper_capability_make_profile_ready() -> N
     assert profile.subcolumn_order_mapping.controlling_property == "summary"
     assert profile.subcolumn_order_mapping.recommended_strategy_supported is True
     assert profile.subcolumn_order_mapping.recommended_strategy_ready is True
+    assert profile.subcolumn_order_mapping.strategy_ready(SubcolumnOrderStrategy.NUMERIC) is True
+    assert profile.subcolumn_order_mapping.strategy_ready(SubcolumnOrderStrategy.ZERO_WIDTH) is True
+    assert (
+        profile.subcolumn_order_mapping.strategy_ready(SubcolumnOrderStrategy.SUMMARY_PREFIX)
+        is True
+    )
     assert profile.mapper_ready is True
 
 

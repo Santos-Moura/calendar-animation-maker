@@ -9,6 +9,7 @@ from calendar_anim.calendar.frame_mapping.models import (
     SingleFrameExecutionResult,
 )
 from calendar_anim.calendar.models import CalendarEventDraft
+from calendar_anim.calendar.subcolumn_ordering import format_summary_key
 from calendar_anim.exceptions import CalendarAnimError
 
 
@@ -127,7 +128,7 @@ def _row_ordering_sample(plan: SingleFrameCalendarPlan) -> list[str]:
     for cell in cells:
         event = next(event for event in plan.events if _event_covers_cell(event, cell))
         lines.append(
-            f'subcolumn={cell.subcolumn} summary="{event.summary}" '
+            f"subcolumn={cell.subcolumn} summary={format_summary_key(event.summary)} "
             f"colorId={cell.color_id} role={cell.cell_role.value}"
         )
     return lines
@@ -147,7 +148,10 @@ def _event_covers_cell(event: CalendarEventDraft, cell: CalendarMappedCell) -> b
 def _slot_key_lines(plan: SingleFrameCalendarPlan) -> list[str]:
     if not plan.subcolumn_order_keys:
         return ["- not used"]
-    return [f"{subcolumn} -> {key}" for subcolumn, key in enumerate(plan.subcolumn_order_keys)]
+    return [
+        f"{subcolumn:02d} -> {format_summary_key(key)}"
+        for subcolumn, key in enumerate(plan.subcolumn_order_keys)
+    ]
 
 
 def write_frame_mapping_artifacts(

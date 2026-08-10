@@ -65,6 +65,10 @@ from calendar_anim.calendar.horizontal_band_compression.commands import (
 from calendar_anim.calendar.lab import LAB_CALENDAR_DESCRIPTION, LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.commands import register_multi_frame_commands
+from calendar_anim.calendar.subcolumn_ordering import (
+    SubcolumnOrderStrategy,
+    format_summary_key,
+)
 from calendar_anim.calendar.vertical_compression.commands import (
     register_vertical_compression_commands,
 )
@@ -728,6 +732,16 @@ def map_frame_command(
             help="Calendar colorId used by full-grid structural background cells (default: 8).",
         ),
     ] = None,
+    subcolumn_ordering: Annotated[
+        SubcolumnOrderStrategy | None,
+        typer.Option(
+            "--subcolumn-ordering",
+            help=(
+                "Summary ordering for full-grid plans. Default: zero-width; "
+                "use numeric for a visible debug/baseline key."
+            ),
+        ),
+    ] = None,
     max_events: Annotated[int, typer.Option("--max-events", min=1)] = (
         DEFAULT_SINGLE_FRAME_MAX_EVENTS
     ),
@@ -773,6 +787,7 @@ def map_frame_command(
             mapping_mode=mapping_mode,
             event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
+            subcolumn_order_strategy=subcolumn_ordering,
         )
         output_dir = output or Path("output/frame-mapping") / plan.run_id
         source_image = manifest_path.resolve().parent / selected_frame.image
@@ -810,7 +825,11 @@ def map_frame_command(
     typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
     typer.echo(
         "Subcolumn slot keys: "
-        + (", ".join(plan.subcolumn_order_keys) if plan.subcolumn_order_keys else "not used")
+        + (
+            ", ".join(format_summary_key(key) for key in plan.subcolumn_order_keys)
+            if plan.subcolumn_order_keys
+            else "not used"
+        )
     )
     typer.echo(f"Mapper readiness: {'READY' if plan.profile_ready else 'NOT READY'}")
     typer.echo(f"Execution: {'REAL' if execute else 'DRY RUN'}")

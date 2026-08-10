@@ -13,6 +13,7 @@ from calendar_anim.calendar.multi_frame.models import (
     FrameUploadStatus,
     MultiFramePlan,
 )
+from calendar_anim.calendar.subcolumn_ordering import format_summary_key
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.animation import AnimationManifest
 
@@ -189,7 +190,12 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
         f"Mapping: {plan.mapping_mode.value}",
         f"Event compression: {plan.event_compression.value}",
         f"Ordering: {plan.subcolumn_order_strategy.value}",
-        f"Slot keys: {', '.join(plan.subcolumn_order_keys) or 'not used'}",
+        "Slot keys: "
+        + (
+            ", ".join(format_summary_key(key) for key in plan.subcolumn_order_keys)
+            if plan.subcolumn_order_keys
+            else "not used"
+        ),
         f"Events/frame: {', '.join(str(value) for value in plan.events_per_frame)}",
         f"Total events: {plan.total_events}",
         f"Per-frame safety limit: {plan.max_events_per_frame}",

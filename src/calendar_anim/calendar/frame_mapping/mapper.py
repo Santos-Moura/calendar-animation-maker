@@ -23,10 +23,13 @@ from calendar_anim.calendar.horizontal_band_compression.bands import (
 )
 from calendar_anim.calendar.models import CalendarEventDraft
 from calendar_anim.calendar.subcolumn_ordering import (
+    DEFAULT_SUBCOLUMN_ORDER_STRATEGY,
     SubcolumnOrderStrategy,
     parse_subcolumn_order_strategy,
+    serialize_summary_key,
     summary_for_subcolumn,
     summary_order_keys,
+    uses_summary_ordering,
 )
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.animation import AnimationManifest
@@ -312,8 +315,9 @@ def map_cells_to_calendar(
             "cell_role": cell.cell_role.value,
         }
         summary = summary_for_subcolumn(subcolumn, columns_per_day, ordering_strategy)
-        if ordering_strategy is SubcolumnOrderStrategy.SUMMARY_PREFIX:
+        if uses_summary_ordering(ordering_strategy):
             metadata["subcolumn_order_key"] = summary
+            metadata["subcolumn_order_key_codepoints"] = serialize_summary_key(summary)
         if cell.source_block_index is not None:
             metadata["source_block_index"] = str(cell.source_block_index)
         mapped.append(mapped_cell)
@@ -484,7 +488,7 @@ def build_single_frame_plan(
     ordering_strategy = parse_subcolumn_order_strategy(
         subcolumn_order_strategy
         or (
-            SubcolumnOrderStrategy.SUMMARY_PREFIX
+            DEFAULT_SUBCOLUMN_ORDER_STRATEGY
             if mapping_mode is FrameMappingMode.FULL_GRID
             else SubcolumnOrderStrategy.NONE
         )

@@ -35,6 +35,10 @@ from calendar_anim.calendar.multi_frame.models import (
 )
 from calendar_anim.calendar.multi_frame.planner import build_multi_frame_plan
 from calendar_anim.calendar.multi_frame.service import MultiFrameUploadService
+from calendar_anim.calendar.subcolumn_ordering import (
+    SubcolumnOrderStrategy,
+    format_summary_key,
+)
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.renderer.manifest import read_manifest, validate_manifest_files
 
@@ -82,6 +86,16 @@ def plan_animation_command(
     calendar_background_color_id: Annotated[
         str | None, typer.Option("--calendar-background-color-id")
     ] = None,
+    subcolumn_ordering: Annotated[
+        SubcolumnOrderStrategy | None,
+        typer.Option(
+            "--subcolumn-ordering",
+            help=(
+                "Summary ordering for new full-grid plans. Default: zero-width; "
+                "use numeric for visible debug/baseline summaries."
+            ),
+        ),
+    ] = None,
     max_events: Annotated[int, typer.Option("--max-events", min=1)] = (
         DEFAULT_SINGLE_FRAME_MAX_EVENTS
     ),
@@ -114,6 +128,7 @@ def plan_animation_command(
             mapping_mode=mapping_mode,
             event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
+            subcolumn_order_strategy=subcolumn_ordering,
         )
         store = AnimationRunStore(output_root)
         state = initialize_animation_run(plan, frame_plans, manifest, manifest_path, store)
@@ -127,7 +142,14 @@ def plan_animation_command(
     typer.echo(f"Event compression: {plan.event_compression.value}")
     typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
     typer.echo(f"Subcolumn ordering: {plan.subcolumn_order_strategy.value}")
-    typer.echo(f"Slot keys: {', '.join(plan.subcolumn_order_keys) or 'not used'}")
+    typer.echo(
+        "Slot keys: "
+        + (
+            ", ".join(format_summary_key(key) for key in plan.subcolumn_order_keys)
+            if plan.subcolumn_order_keys
+            else "not used"
+        )
+    )
     typer.echo(f"Events/frame: {', '.join(str(value) for value in plan.events_per_frame)}")
     typer.echo(f"Total events: {plan.total_events}")
     typer.echo(f"Mapper readiness: {'READY' if plan.profile_ready else 'NOT READY'}")
