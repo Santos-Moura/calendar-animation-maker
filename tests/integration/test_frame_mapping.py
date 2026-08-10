@@ -13,6 +13,10 @@ from calendar_anim.calendar.frame_mapping.service import SingleFrameMappingServi
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.models import CalendarEventDraft, CalendarWriteResult
+from calendar_anim.calendar.subcolumn_ordering import (
+    SubcolumnOrderStrategy,
+    summary_order_keys,
+)
 from calendar_anim.exceptions import CalendarAnimError
 from tests.factories import make_manifest, make_ready_calibration_profile
 
@@ -76,14 +80,14 @@ def test_full_grid_artifacts_serialize_background_and_solid_canvas(tmp_path: Pat
     assert "Background colorId: 8" in report
     assert "Total logical cells: 1008" in report
     assert "Calendar events: 1008" in report
-    assert "Subcolumn ordering\n------------------\nStrategy: summary-prefix" in report
-    assert "0 -> 00" in report
-    assert "5 -> 05" in report
-    assert 'subcolumn=0 summary="00"' in report
+    assert "Subcolumn ordering\n------------------\nStrategy: zero-width" in report
+    assert "00 -> U+200B U+200B" in report
+    assert "05 -> U+200C U+200B" in report
+    assert "subcolumn=0 summary=U+200B U+200B" in report
     assert "not part of a documented API contract" in report
     assert '"mapping_mode": "full-grid"' in serialized
     assert '"background_color_id": "8"' in serialized
-    assert '"subcolumn_order_strategy": "summary-prefix"' in serialized
+    assert '"subcolumn_order_strategy": "zero-width"' in serialized
     assert '"subcolumn_order_keys": [' in serialized
     assert Image.open(output / "mapped-preview.png").getpixel((0, 0)) == (97, 97, 97)
 
@@ -183,7 +187,9 @@ def test_full_grid_execute_reports_foreground_and_background_created(tmp_path: P
     )
     assert len(matches) == 42 * 24
     first_row = gateway.events[result.calendar_id or ""][:6]
-    assert [event.summary for event in first_row] == ["00", "01", "02", "03", "04", "05"]
+    assert [event.summary for event in first_row] == summary_order_keys(
+        6, SubcolumnOrderStrategy.ZERO_WIDTH
+    )
     assert len({event.color_id for event in plan.events}) > 1
     deleted = gateway.delete_events(result.calendar_id or "", [event.id for event in matches])
     assert deleted.deleted_events == 42 * 24

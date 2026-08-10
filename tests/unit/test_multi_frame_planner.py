@@ -4,6 +4,10 @@ import pytest
 
 from calendar_anim.calendar.frame_mapping.models import EventCompressionMode, FrameMappingMode
 from calendar_anim.calendar.multi_frame.planner import build_multi_frame_plan, frame_run_id
+from calendar_anim.calendar.subcolumn_ordering import (
+    SubcolumnOrderStrategy,
+    summary_order_keys,
+)
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.frame import AnimationFrame, Block
 from tests.factories import make_manifest, make_ready_calibration_profile
@@ -73,8 +77,26 @@ def test_explicit_none_plans_six_uncompressed_frames_in_consecutive_weeks() -> N
     assert plan.total_events == 6048
     assert all(frame.event_count == 1008 for frame in frames)
     assert all(
-        frame.subcolumn_order_keys == ["00", "01", "02", "03", "04", "05"] for frame in frames
+        frame.subcolumn_order_keys == summary_order_keys(6, SubcolumnOrderStrategy.ZERO_WIDTH)
+        for frame in frames
     )
+
+
+def test_multi_frame_plan_propagates_explicit_numeric_fallback() -> None:
+    plan, frames = build_multi_frame_plan(
+        _manifest_with_frames(2),
+        make_ready_calibration_profile(),
+        frame_start=0,
+        frame_count=2,
+        anchor_date=date(2026, 10, 4),
+        run_id="numeric-frames",
+        max_events_per_frame=1200,
+        subcolumn_order_strategy=SubcolumnOrderStrategy.NUMERIC,
+    )
+
+    assert plan.subcolumn_order_strategy is SubcolumnOrderStrategy.NUMERIC
+    assert plan.subcolumn_order_keys == ["00", "01", "02", "03", "04", "05"]
+    assert all(frame.subcolumn_order_strategy is SubcolumnOrderStrategy.NUMERIC for frame in frames)
 
 
 def test_multi_frame_plan_defaults_to_compressed_event_drafts_for_real_upload() -> None:

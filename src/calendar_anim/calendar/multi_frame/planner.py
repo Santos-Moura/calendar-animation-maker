@@ -14,6 +14,7 @@ from calendar_anim.calendar.frame_mapping.models import (
     SingleFrameCalendarPlan,
 )
 from calendar_anim.calendar.multi_frame.models import FrameUploadPlan, MultiFramePlan
+from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.animation import AnimationManifest
 
@@ -41,6 +42,7 @@ def build_multi_frame_plan(
     mapping_mode: FrameMappingMode = FrameMappingMode.FULL_GRID,
     event_compression: EventCompressionMode = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: str | None = None,
+    subcolumn_order_strategy: str | SubcolumnOrderStrategy | None = None,
 ) -> tuple[MultiFramePlan, list[SingleFrameCalendarPlan]]:
     if frame_start < 0:
         raise CalendarAnimError("frame start must be non-negative")
@@ -74,6 +76,7 @@ def build_multi_frame_plan(
             mapping_mode=mapping_mode,
             event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
+            subcolumn_order_strategy=subcolumn_order_strategy,
         )
         if single.event_count > max_events_per_frame:
             raise CalendarAnimError(

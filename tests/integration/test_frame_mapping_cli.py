@@ -116,8 +116,8 @@ def test_map_frame_full_grid_and_background_flag_are_fully_local(
     assert "Background structural cells:" in result.output
     assert "Calendar events: 1008 / 1200" in result.output
     assert "Background colorId: 5" in result.output
-    assert "Subcolumn ordering: summary-prefix" in result.output
-    assert "Subcolumn slot keys: 00, 01, 02, 03, 04, 05" in result.output
+    assert "Subcolumn ordering: zero-width" in result.output
+    assert "Subcolumn slot keys: U+200B U+200B" in result.output
     plan = json.loads((output / "frame-plan.json").read_text(encoding="utf-8"))
     assert plan["mapping_mode"] == "full-grid"
     assert plan["event_compression"] == "none"
@@ -174,6 +174,35 @@ def test_map_frame_can_plan_real_synchronized_band_events_locally(
     assert "Synchronized bands:" in report
 
 
+def test_map_frame_accepts_explicit_numeric_summary_fallback(tmp_path: Path) -> None:
+    manifest, profile = _mapping_inputs(tmp_path)
+    output = tmp_path / "numeric"
+
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "map-frame",
+            str(manifest),
+            "--profile",
+            str(profile),
+            "--subcolumn-ordering",
+            "numeric",
+            "--run-id",
+            "numeric-fallback",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Subcolumn ordering: numeric" in result.output
+    assert "'00' (U+0030 U+0030)" in result.output
+    plan = json.loads((output / "frame-plan.json").read_text(encoding="utf-8"))
+    assert plan["subcolumn_order_strategy"] == "numeric"
+    assert plan["subcolumn_order_keys"] == ["00", "01", "02", "03", "04", "05"]
+
+
 def test_map_frame_rejects_invalid_mode_and_background_color(tmp_path: Path) -> None:
     manifest, profile = _mapping_inputs(tmp_path)
     invalid_mode = runner.invoke(
@@ -216,6 +245,9 @@ def test_map_frame_help_lists_both_mapping_modes_and_background_option() -> None
     assert "sparse" in result.output
     assert "full-grid" in result.output
     assert "Calendar colorId used" in result.output
+    assert "--subcolumn-ordering" in result.output
+    assert "zero-width" in result.output
+    assert "numeric" in result.output
 
 
 def test_map_frame_reports_invalid_frame_range(tmp_path: Path) -> None:
@@ -409,7 +441,7 @@ def test_full_grid_confirmation_discloses_cost_and_limit_blocks_before_api(
     assert "Foreground events:" in aborted.output
     assert "Background events:" in aborted.output
     assert "This will create 1008 real Google Calendar events" in aborted.output
-    assert "Subcolumn ordering: summary-prefix" in aborted.output
+    assert "Subcolumn ordering: zero-width" in aborted.output
 
     blocked = runner.invoke(
         app,

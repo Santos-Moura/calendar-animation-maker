@@ -91,6 +91,7 @@ def test_plan_animation_is_local_and_writes_global_and_frame_artifacts(
     serialized = json.loads((run_dir / "animation-plan.json").read_text(encoding="utf-8"))
     assert serialized["frames"][1]["week_start"] == "2026-10-11"
     assert serialized["event_compression"] == "synchronized-horizontal-bands"
+    assert serialized["subcolumn_order_strategy"] == "zero-width"
     assert all(value < 1008 for value in serialized["events_per_frame"])
     assert serialized["total_events"] == sum(serialized["events_per_frame"])
 
@@ -119,6 +120,28 @@ def test_plan_animation_persists_explicit_none_baseline(
     assert frame_plan.event_compression.value == "none"
     assert len(frame_plan.mapped_cells) == 1008
     assert len(frame_plan.events) == 1008
+
+
+def test_plan_animation_persists_explicit_numeric_ordering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    output_root = tmp_path / "numeric-runs"
+    monkeypatch.setattr(
+        multi_commands,
+        "_google_gateway",
+        lambda: pytest.fail("planning must remain local"),
+    )
+    command = _plan_command(manifest, profile, output_root, 1)
+    command.extend(["--subcolumn-ordering", "numeric"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    assert "Subcolumn ordering: numeric" in result.output
+    plan = AnimationRunStore(output_root).load_plan("cli-animation")
+    assert plan.subcolumn_order_strategy.value == "numeric"
+    assert plan.subcolumn_order_keys == ["00", "01", "02", "03", "04", "05"]
 
 
 def test_upload_animation_dry_run_skips_api_and_lists_actions(
