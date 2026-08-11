@@ -6,6 +6,9 @@ from PIL import Image
 
 from calendar_anim.calendar.capture.artifacts import CaptureStore, initial_capture_state
 from calendar_anim.calendar.capture.composition import (
+    PIXEL_ART_H264_CRF,
+    PIXEL_ART_H264_PRESET,
+    build_mp4_command,
     compose_gif,
     validate_completed_capture,
 )
@@ -84,3 +87,29 @@ def test_composition_rejects_incomplete_or_inconsistent_frames(tmp_path: Path) -
     Image.new("RGB", (41, 20), "#000000").save(paths[2])
     with pytest.raises(CalendarAnimError, match="consistent dimensions"):
         compose_gif(paths, tmp_path / "bad.gif", fps=3)
+
+
+@pytest.mark.parametrize("fps", [2.0, 3.0])
+def test_pixel_art_mp4_uses_integer_nearest_neighbor_scaling(tmp_path: Path, fps: float) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    paths = [frames / f"frame-{index:04d}.png" for index in range(2)]
+    for path in paths:
+        Image.new("RGB", (126, 72), "#7986CB").save(path)
+
+    command = build_mp4_command("ffmpeg", paths, tmp_path / "pixel-perfect.mp4", fps, pixel_scale=4)
+
+    assert command[command.index("-framerate") + 1] == str(fps)
+    assert command[command.index("-vf") + 1] == ("scale=504:288:flags=neighbor,setsar=1")
+    assert command[command.index("-crf") + 1] == str(PIXEL_ART_H264_CRF)
+    assert command[command.index("-preset") + 1] == PIXEL_ART_H264_PRESET
+    assert "pad=" not in " ".join(command)
+    assert "crop=" not in " ".join(command)
+
+
+def test_pixel_art_mp4_rejects_non_even_yuv420p_output(tmp_path: Path) -> None:
+    path = tmp_path / "frame-0000.png"
+    Image.new("RGB", (125, 71), "#7986CB").save(path)
+
+    with pytest.raises(CalendarAnimError, match="requires even dimensions"):
+        build_mp4_command("ffmpeg", [path], tmp_path / "bad.mp4", 3.0)
