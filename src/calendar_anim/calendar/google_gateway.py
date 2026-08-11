@@ -14,6 +14,7 @@ from calendar_anim.calendar.models import (
     CalendarWriteFailure,
     CalendarWriteResult,
 )
+from calendar_anim.calendar.multi_frame.retry import is_retryable_exception
 
 
 class GoogleCalendarGateway:
@@ -120,7 +121,7 @@ class GoogleCalendarGateway:
                     CalendarWriteFailure(
                         event_index=index,
                         message=message,
-                        retryable=status == 429 or 500 <= status <= 599,
+                        retryable=is_retryable_exception(error),
                         status_code=status or None,
                     )
                 )

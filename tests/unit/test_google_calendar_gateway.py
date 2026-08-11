@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -35,26 +36,40 @@ class RecordingGoogleService:
 
 
 class FailingInsert:
-    def __init__(self, status: int) -> None:
+    def __init__(self, status: int, reason: str | None = None) -> None:
         self.status = status
+        self.reason = reason
 
     def execute(self) -> dict[str, str]:
-        raise HttpError(Response({"status": str(self.status)}), b"simulated")
+        content = (
+            json.dumps(
+                {
+                    "error": {
+                        "code": self.status,
+                        "errors": [{"reason": self.reason}],
+                    }
+                }
+            ).encode()
+            if self.reason is not None
+            else b"simulated"
+        )
+        raise HttpError(Response({"status": str(self.status)}), content)
 
 
 class FailingEventsResource(RecordingEventsResource):
-    def __init__(self, status: int) -> None:
+    def __init__(self, status: int, reason: str | None = None) -> None:
         super().__init__()
         self.status = status
+        self.reason = reason
 
     def insert(self, **kwargs: Any) -> FailingInsert:
         self.calls.append(kwargs)
-        return FailingInsert(self.status)
+        return FailingInsert(self.status, self.reason)
 
 
 class FailingGoogleService(RecordingGoogleService):
-    def __init__(self, status: int) -> None:
-        self.events_resource = FailingEventsResource(status)
+    def __init__(self, status: int, reason: str | None = None) -> None:
+        self.events_resource = FailingEventsResource(status, reason)
 
 
 def test_google_gateway_forwards_technical_summary_without_replacing_it() -> None:
@@ -101,6 +116,35 @@ def test_google_gateway_classifies_event_failures(status: int, retryable: bool) 
 
     assert result.failed_events == 1
     assert result.failures[0].status_code == status
+    assert result.failures[0].retryable is retryable
+
+
+@pytest.mark.parametrize(
+    ("reason", "retryable"),
+    [
+        ("rateLimitExceeded", True),
+        ("userRateLimitExceeded", True),
+        ("forbidden", False),
+        (None, False),
+    ],
+)
+def test_google_gateway_only_retries_temporary_403_reasons(
+    reason: str | None, retryable: bool
+) -> None:
+    service = FailingGoogleService(403, reason)
+    gateway = GoogleCalendarGateway(service)
+    start = datetime(2026, 9, 21, 6, 0, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    draft = CalendarEventDraft(
+        start=start,
+        end=start + timedelta(minutes=30),
+        summary="",
+        private_metadata={"run_id": "retry-403-test"},
+    )
+
+    result = gateway.create_events("calendar-id", [draft])
+
+    assert result.failed_events == 1
+    assert result.failures[0].status_code == 403
     assert result.failures[0].retryable is retryable
 
 

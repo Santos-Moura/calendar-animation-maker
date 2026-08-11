@@ -1,7 +1,8 @@
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from random import Random
-from typing import Final
+from typing import Any, Final
 
 from googleapiclient.errors import HttpError
 
@@ -26,6 +27,7 @@ class UploadRetryPolicy:
 
 
 DEFAULT_UPLOAD_RETRY_POLICY: Final = UploadRetryPolicy()
+RETRYABLE_FORBIDDEN_REASONS: Final = frozenset({"rateLimitExceeded", "userRateLimitExceeded"})
 type Jitter = Callable[[float], float]
 
 
@@ -49,7 +51,12 @@ def retry_delay(
 def is_retryable_exception(error: BaseException) -> bool:
     if isinstance(error, HttpError):
         status = int(getattr(error.resp, "status", 0) or 0)
-        return status == 429 or 500 <= status <= 599
+        return (
+            status == 429
+            or 500 <= status <= 599
+            or status == 403
+            and bool(_http_error_reasons(error) & RETRYABLE_FORBIDDEN_REASONS)
+        )
     if isinstance(error, (TimeoutError, ConnectionError)):
         return True
     module = type(error).__module__
@@ -57,3 +64,31 @@ def is_retryable_exception(error: BaseException) -> bool:
     return module.startswith(("httplib2", "http.client")) and any(
         marker in name for marker in ("timeout", "server", "connection", "socket")
     )
+
+
+def _http_error_reasons(error: HttpError) -> set[str]:
+    reasons: set[str] = set()
+    details = getattr(error, "error_details", None)
+    if isinstance(details, list):
+        reasons.update(_reasons_from_details(details))
+    content = getattr(error, "content", b"")
+    try:
+        payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    except (AttributeError, json.JSONDecodeError, TypeError, UnicodeDecodeError):
+        return reasons
+    if not isinstance(payload, Mapping):
+        return reasons
+    error_payload = payload.get("error")
+    if isinstance(error_payload, Mapping):
+        errors = error_payload.get("errors")
+        if isinstance(errors, list):
+            reasons.update(_reasons_from_details(errors))
+    return reasons
+
+
+def _reasons_from_details(details: list[Any]) -> set[str]:
+    return {
+        str(detail["reason"])
+        for detail in details
+        if isinstance(detail, Mapping) and detail.get("reason")
+    }

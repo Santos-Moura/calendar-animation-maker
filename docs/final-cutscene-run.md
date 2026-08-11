@@ -22,10 +22,11 @@ Animation uploads remain serial. Every event draft receives a deterministic Goog
 ID derived from its immutable contents. A lost response can therefore be retried without
 creating a duplicate; Google `409 Conflict` confirms that the intended event already exists.
 
-Retryable failures are limited to `429`, `5xx`, timeouts, and recognized temporary transport
-errors. The default policy is five event attempts with exponential backoff, jitter, and a
-30-second ceiling. A frame gets at most three automatic recovery cycles per invocation.
-Permanent errors do not loop.
+Retryable failures are limited to `429`, temporary `403 rateLimitExceeded` or
+`userRateLimitExceeded`, `5xx`, timeouts, and recognized temporary transport errors. Other
+`403` responses remain permanent. The default policy is five event attempts with exponential
+backoff, jitter, and a 30-second ceiling. A frame gets at most three automatic recovery cycles
+per invocation. Permanent errors do not loop.
 
 On resume, completed frames are skipped. Partial, interrupted, and failed frames are reconciled
 against their deterministic event IDs and only missing drafts are submitted. Unknown legacy
