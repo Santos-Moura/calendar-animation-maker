@@ -78,3 +78,8 @@ pixel edges.
 
 Do not raise `--max-events` automatically. Measure the real frames, report maximum, p95, and
 the count above the existing guard, then obtain explicit approval for any guard change.
+
+The approved final run is the sole exception: run ID
+`cayde-final-126x72-3fps-36s-01` may persist a per-frame ceiling of `5200`. The ordinary
+high-detail ceiling remains `2500`, and even the final run is rejected above `5200`. The
+exception is checked both while planning and immediately before upload.

@@ -21,10 +21,10 @@ from calendar_anim.calendar.frame_mapping.service import (
 from calendar_anim.calendar.google_auth import GoogleOAuthClient
 from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
 from calendar_anim.calendar.high_detail import (
-    HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS,
     HIGH_DETAIL_GRID,
     HIGH_DETAIL_GRID_PROFILE,
     apply_high_detail_grid,
+    high_detail_max_events_for_run,
 )
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
@@ -124,8 +124,9 @@ def plan_animation_command(
 ) -> None:
     """Build immutable multi-frame plans and pending state using local files only."""
     try:
+        resolved_run_id = _valid_run_id(run_id)
         allowed_max_events = (
-            HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS
+            high_detail_max_events_for_run(resolved_run_id)
             if experimental_grid is not None
             and experimental_grid.lower().strip() == HIGH_DETAIL_GRID
             else ABSOLUTE_SINGLE_FRAME_MAX_EVENTS
@@ -134,7 +135,6 @@ def plan_animation_command(
             raise CalendarAnimError(
                 f"--max-events cannot exceed the absolute safety limit of {allowed_max_events}"
             )
-        resolved_run_id = _valid_run_id(run_id)
         manifest = read_manifest(manifest_path)
         errors = validate_manifest_files(manifest, manifest_path.resolve())
         if errors:

@@ -11,7 +11,7 @@ from calendar_anim.calendar.frame_mapping.service import (
 )
 from calendar_anim.calendar.gateway import CalendarGateway
 from calendar_anim.calendar.high_detail import (
-    HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS,
+    high_detail_max_events_for_run,
     is_high_detail_geometry,
 )
 from calendar_anim.calendar.lab import LabCalendarService
@@ -461,7 +461,7 @@ class MultiFrameUploadService:
         if not plan.profile_ready:
             raise CalendarAnimError("Calibration profile is NOT READY; animation upload is blocked")
         allowed_max_events = (
-            HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS
+            high_detail_max_events_for_run(plan.run_id)
             if is_high_detail_geometry(
                 plan.grid_profile,
                 plan.target_grid_width,

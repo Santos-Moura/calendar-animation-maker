@@ -189,6 +189,35 @@ def test_high_detail_grid_rejects_more_than_2500_events_per_frame(tmp_path: Path
     assert "absolute safety limit of 2500" in result.output
 
 
+def test_final_cutscene_run_has_isolated_5200_event_safety_limit(
+    tmp_path: Path,
+) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    command = _plan_command(manifest, profile, tmp_path / "runs", 1)
+    run_id_position = command.index("cli-animation")
+    command[run_id_position] = "cayde-final-126x72-3fps-36s-01"
+    command.extend(["--experimental-grid", "126x72", "--max-events", "5200"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    plan = AnimationRunStore(tmp_path / "runs").load_plan("cayde-final-126x72-3fps-36s-01")
+    assert plan.max_events_per_frame == 5200
+
+
+def test_final_cutscene_run_rejects_more_than_5200_events_per_frame(tmp_path: Path) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    command = _plan_command(manifest, profile, tmp_path / "runs", 1)
+    run_id_position = command.index("cli-animation")
+    command[run_id_position] = "cayde-final-126x72-3fps-36s-01"
+    command.extend(["--experimental-grid", "126x72", "--max-events", "5201"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 1
+    assert "absolute safety limit of 5200" in result.output
+
+
 def test_upload_animation_dry_run_skips_api_and_lists_actions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

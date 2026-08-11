@@ -10,6 +10,16 @@ HIGH_DETAIL_VISIBLE_START_HOUR: Final = 6
 HIGH_DETAIL_VISIBLE_END_HOUR: Final = 24
 HIGH_DETAIL_GRID_PROFILE: Final = f"high-detail-{HIGH_DETAIL_GRID}"
 HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS: Final = 2500
+FINAL_CUTSCENE_RUN_ID: Final = "cayde-final-126x72-3fps-36s-01"
+FINAL_CUTSCENE_MAX_EVENTS: Final = 5200
+
+
+def high_detail_max_events_for_run(run_id: str) -> int:
+    """Return the explicit safety ceiling for one persisted high-detail run."""
+
+    if run_id == FINAL_CUTSCENE_RUN_ID:
+        return FINAL_CUTSCENE_MAX_EVENTS
+    return HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS
 
 
 def is_high_detail_geometry(
