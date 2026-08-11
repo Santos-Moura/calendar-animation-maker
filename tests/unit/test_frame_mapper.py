@@ -1,3 +1,4 @@
+import hashlib
 from datetime import date, timedelta
 
 import pytest
@@ -178,6 +179,43 @@ def test_color_mapper_handles_exact_nearest_contrast_and_determinism() -> None:
     first = map_calendar_color("#616161", ["7", "8"], "#616161", 3.0)
     second = map_calendar_color("#616161", ["7", "8"], "#616161", 3.0)
     assert first.id == second.id == "7"
+
+
+def test_cayde_final_palette_is_locked_and_deterministic() -> None:
+    manifest = make_manifest(Block(x=0, y=0, width=1, color_id="1", color_hex="#7986CB"))
+    manifest.frames[0].blocks.extend(
+        [
+            Block(x=1, y=0, width=1, color_id="3", color_hex="#8E24AA"),
+            Block(x=2, y=0, width=1, color_id="4", color_hex="#E67C73"),
+        ]
+    )
+    arguments = {
+        "manifest": manifest,
+        "profile": make_ready_calibration_profile(),
+        "frame_index": 0,
+        "anchor_date": date(2026, 9, 6),
+        "run_id": "cayde-palette-regression",
+        "max_execute_events": 2000,
+        "mapping_mode": FrameMappingMode.FULL_GRID,
+        "event_compression": EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
+        "palette_preset": "cayde-final",
+    }
+
+    first = build_single_frame_plan(**arguments)
+    second = build_single_frame_plan(**arguments)
+
+    assert first == second
+    assert first.palette_preset == "cayde-final"
+    assert first.background_color_id == "1"
+    assert first.foreground_color_ids == ["1", "2", "3", "4"]
+    foreground = [
+        cell.color_id for cell in first.mapped_cells if cell.cell_role is CellRole.FOREGROUND
+    ]
+    assert set(foreground) == {"1", "3", "4"}
+    signature = hashlib.sha256(
+        first.model_dump_json(exclude={"warnings"}).encode("utf-8")
+    ).hexdigest()
+    assert signature == "d5c733504066e118d013264a8586a4d26501457378f32012e905b3658c9b9644"
 
 
 def test_calendar_background_color_is_explicit_deterministic_and_validated() -> None:

@@ -77,6 +77,24 @@ def map_calendar_color(
     )
 
 
+def map_calendar_color_locked(
+    source_hex: str, allowed_color_ids: list[str]
+) -> CalendarPaletteColor:
+    """Map to the nearest frozen color without background-dependent contrast changes."""
+
+    allowed = [color for color in CALENDAR_EVENT_PALETTE if color.id in allowed_color_ids]
+    unknown = sorted(set(allowed_color_ids) - {color.id for color in CALENDAR_EVENT_PALETTE})
+    if unknown:
+        raise CalendarAnimError(f"Unsupported Calendar color IDs: {', '.join(unknown)}")
+    if not allowed:
+        raise CalendarAnimError("Palette preset has no foreground colors")
+    source = _parse_hex(source_hex)
+    return min(
+        allowed,
+        key=lambda color: (_squared_distance(source, _parse_hex(color.hex)), int(color.id)),
+    )
+
+
 def contrast_ratio(first_hex: str, second_hex: str) -> float:
     first = _relative_luminance(_parse_hex(first_hex))
     second = _relative_luminance(_parse_hex(second_hex))
