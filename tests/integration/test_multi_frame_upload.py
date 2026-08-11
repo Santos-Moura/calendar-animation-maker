@@ -153,6 +153,13 @@ def test_failure_stops_later_frames_and_resume_preserves_completed_frame(
     assert len(gateway.events[calendar_id]) == 3 * 1008
     assert gateway.delete_event_calls == 1
     assert progress[0] == (0, 0, 1008)
+    performance = store.load_performance(plan.run_id)
+    assert len(performance.invocations) == 2
+    assert performance.invocations[1].frames_previously_completed == [0]
+    assert performance.invocations[1].frames_uploaded_this_invocation == [1, 2]
+    assert [
+        frame.frame_index for invocation in performance.invocations for frame in invocation.frames
+    ].count(0) == 1
 
 
 def test_exception_after_completed_chunk_checkpoints_partial_count(tmp_path: Path) -> None:
@@ -168,6 +175,9 @@ def test_exception_after_completed_chunk_checkpoints_partial_count(tmp_path: Pat
     assert saved.frames[0].created_events == 10
     assert saved.frames[0].frame_completed_at is not None
     assert "connection lost" in saved.frames[0].errors
+    performance = store.load_performance(plan.run_id)
+    assert performance.invocations[0].frames[0].status is FrameUploadStatus.PARTIAL
+    assert performance.invocations[0].frames[0].created_events == 10
 
 
 def test_pending_state_with_remote_events_is_an_inconsistency(tmp_path: Path) -> None:

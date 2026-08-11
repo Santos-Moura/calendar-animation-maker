@@ -155,7 +155,7 @@ def test_plan_animation_accepts_explicit_high_detail_grid_without_changing_defau
         lambda: pytest.fail("high-detail planning must remain local"),
     )
     command = _plan_command(manifest, profile, output_root, 1)
-    command.extend(["--experimental-grid", "126x72"])
+    command.extend(["--experimental-grid", "126x72", "--max-events", "2500"])
 
     result = runner.invoke(app, command)
 
@@ -169,6 +169,24 @@ def test_plan_animation_accepts_explicit_high_detail_grid_without_changing_defau
     assert plan.subcolumn_order_strategy.value == "zero-width"
     assert plan.event_compression.value == "synchronized-horizontal-bands"
     assert plan.events_per_frame[0] <= 1200
+    assert plan.max_events_per_frame == 2500
+    assert plan.source_file == "tiny.avi"
+    assert plan.clip_start_seconds == 0
+    assert plan.clip_end_seconds == 1
+    assert plan.clip_duration_seconds == 1
+    assert plan.output_fps == 1
+    assert plan.frames[0].source_timestamp_seconds == 0
+
+
+def test_high_detail_grid_rejects_more_than_2500_events_per_frame(tmp_path: Path) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    command = _plan_command(manifest, profile, tmp_path / "runs", 1)
+    command.extend(["--experimental-grid", "126x72", "--max-events", "2501"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 1
+    assert "absolute safety limit of 2500" in result.output
 
 
 def test_upload_animation_dry_run_skips_api_and_lists_actions(
