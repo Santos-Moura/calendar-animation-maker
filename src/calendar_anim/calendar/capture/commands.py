@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 from typing import Annotated, Never
@@ -14,6 +15,15 @@ from calendar_anim.calendar.capture.composition import (
     compose_gif,
     compose_mp4,
     validate_completed_capture,
+)
+from calendar_anim.calendar.capture.final_media import (
+    detect_ffmpeg,
+    extract_audio,
+    frame_sequence_duration,
+    mux_audio,
+    probe_audio_codec,
+    probe_duration,
+    validate_timing,
 )
 from calendar_anim.calendar.capture.models import (
     BrowserChannel,
@@ -208,6 +218,89 @@ def compose_capture_command(
     typer.echo("Repeated consecutive screenshots keep their full playback duration.")
 
 
+def compose_final_command(
+    run_id: Annotated[str, typer.Option("--run-id")],
+    source_video: Annotated[Path, typer.Option("--source-video")],
+    clip_start: Annotated[float, typer.Option("--clip-start", min=0.0)],
+    clip_end: Annotated[float, typer.Option("--clip-end", min=0.001)],
+    fps: Annotated[float, typer.Option("--fps", min=0.01)],
+    capture_output_root: Annotated[Path, typer.Option("--capture-output-root")] = Path(
+        "output/captures"
+    ),
+    animation_output_root: Annotated[Path, typer.Option("--animation-output-root")] = Path(
+        "output/animation-runs"
+    ),
+) -> None:
+    """Compose Calendar captures directly to MP4, then mux the exact source audio clip."""
+
+    try:
+        if clip_end <= clip_start:
+            raise CalendarAnimError("--clip-end must be greater than --clip-start")
+        resolved_run_id = _valid_run_id(run_id)
+        capture_store = CaptureStore(capture_output_root)
+        plan = capture_store.load_plan(resolved_run_id)
+        state = capture_store.load_state(resolved_run_id)
+        frame_paths = validate_completed_capture(plan, state, capture_store)
+        visual_duration = frame_sequence_duration(len(frame_paths), fps)
+        requested_duration = clip_end - clip_start
+        if abs(visual_duration - requested_duration) > 1e-9:
+            raise CalendarAnimError(
+                f"Frame sequence is {visual_duration:.6f}s but requested audio is "
+                f"{requested_duration:.6f}s"
+            )
+        tools = detect_ffmpeg()
+        final_directory = animation_output_root / resolved_run_id / "final"
+        gif_path = compose_gif(frame_paths, final_directory / "preview.gif", fps)
+        visual_path = compose_mp4(frame_paths, final_directory / "calendar-animation.mp4", fps)
+        audio_codec = probe_audio_codec(tools, source_video)
+        audio_path = extract_audio(
+            tools,
+            source_video,
+            final_directory / "cutscene-audio.m4a",
+            clip_start,
+            clip_end,
+            source_audio_codec=audio_codec,
+        )
+        final_path = mux_audio(
+            tools, visual_path, audio_path, final_directory / "final-with-audio.mp4"
+        )
+        measured_visual = probe_duration(tools, visual_path)
+        measured_audio = probe_duration(tools, audio_path)
+        measured_final = probe_duration(tools, final_path)
+        timing = validate_timing(measured_visual, measured_audio, measured_final)
+        report = {
+            "schema_version": "1.0",
+            "run_id": resolved_run_id,
+            "frames": len(frame_paths),
+            "fps": fps,
+            "clip_start_seconds": clip_start,
+            "clip_end_seconds": clip_end,
+            "source_audio_codec": audio_codec,
+            "visual_duration_seconds": timing.visual_seconds,
+            "audio_duration_seconds": timing.audio_seconds,
+            "final_duration_seconds": timing.final_seconds,
+            "difference_milliseconds": timing.difference_seconds * 1000,
+            "ffmpeg_version": tools.version,
+            "preview_gif": str(gif_path),
+            "visual_mp4": str(visual_path),
+            "audio": str(audio_path),
+            "final_with_audio": str(final_path),
+        }
+        (final_directory / "composition-report.json").write_text(
+            json.dumps(report, indent=2) + "\n", encoding="utf-8"
+        )
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Preview GIF: {gif_path}")
+    typer.echo(f"Visual MP4: {visual_path}")
+    typer.echo(f"Audio: {audio_path}")
+    typer.echo(f"Final with audio: {final_path}")
+    typer.echo(f"Visual duration: {timing.visual_seconds:.6f}s")
+    typer.echo(f"Audio duration: {timing.audio_seconds:.6f}s")
+    typer.echo(f"Final duration: {timing.final_seconds:.6f}s")
+    typer.echo(f"Difference: {timing.difference_seconds * 1000:.1f}ms")
+
+
 def _status_counts(state: CaptureState) -> str:
     frames = state.frames
     completed = sum(frame.status is FrameCaptureStatus.COMPLETED for frame in frames)
@@ -224,3 +317,4 @@ def register_capture_commands(app: typer.Typer) -> None:
     app.command("browser-login")(browser_login_command)
     app.command("capture-animation")(capture_animation_command)
     app.command("compose-capture")(compose_capture_command)
+    app.command("compose-final")(compose_final_command)

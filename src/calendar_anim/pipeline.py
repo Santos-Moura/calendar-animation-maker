@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -70,6 +71,7 @@ def render_video(
         animation_id=config.animation_id,
         source=SourceInfo(
             file_name=info.path.name,
+            sha256=_sha256(info.path),
             start_seconds=start,
             duration_seconds=duration,
             source_fps=info.fps,
@@ -95,3 +97,11 @@ def render_video(
         json.dumps(info.model_dump(mode="json"), indent=2) + "\n", encoding="utf-8"
     )
     return manifest, info, [*info.warnings, *warnings]
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
