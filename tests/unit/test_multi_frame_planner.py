@@ -3,6 +3,8 @@ from datetime import date
 import pytest
 
 from calendar_anim.calendar.frame_mapping.models import EventCompressionMode, FrameMappingMode
+from calendar_anim.calendar.high_detail import HIGH_DETAIL_GRID, apply_high_detail_grid
+from calendar_anim.calendar.multi_frame.models import MultiFramePlan
 from calendar_anim.calendar.multi_frame.planner import build_multi_frame_plan, frame_run_id
 from calendar_anim.calendar.subcolumn_ordering import (
     SubcolumnOrderStrategy,
@@ -116,6 +118,59 @@ def test_multi_frame_plan_defaults_to_compressed_event_drafts_for_real_upload() 
     assert all(frame.event_count < 1008 for frame in frames)
     assert plan.events_per_frame == [frame.event_count for frame in frames]
     assert plan.total_events == sum(frame.event_count for frame in frames)
+
+
+def test_high_detail_plan_persists_complete_geometry_ordering_and_compression() -> None:
+    profile = apply_high_detail_grid(make_ready_calibration_profile(), HIGH_DETAIL_GRID)
+
+    plan, frames = build_multi_frame_plan(
+        _manifest_with_frames(1),
+        profile,
+        frame_start=0,
+        frame_count=1,
+        anchor_date=date(2027, 6, 6),
+        run_id="high-detail",
+        max_events_per_frame=1200,
+        grid_profile="high-detail-126x72",
+    )
+    restored = MultiFramePlan.model_validate_json(plan.model_dump_json())
+
+    assert (restored.target_grid_width, restored.target_grid_height) == (126, 72)
+    assert restored.slots_per_day == 18
+    assert restored.vertical_step_minutes == 15
+    assert (restored.visible_start_hour, restored.visible_end_hour) == (6, 24)
+    assert restored.subcolumn_order_strategy is SubcolumnOrderStrategy.ZERO_WIDTH
+    assert restored.event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS
+    assert len(restored.subcolumn_order_keys) == 18
+    assert frames[0].columns_per_day == 18
+    assert frames[0].target_grid_height == 72
+    assert frames[0].events[-1].end.date() > frames[0].events[-1].start.date()
+
+
+def test_pre_geometry_animation_plan_still_loads_with_legacy_semantics() -> None:
+    plan, _ = build_multi_frame_plan(
+        _manifest_with_frames(1),
+        make_ready_calibration_profile(),
+        frame_start=0,
+        frame_count=1,
+        anchor_date=date(2026, 10, 4),
+        run_id="legacy-plan",
+        max_events_per_frame=1200,
+    )
+    serialized = plan.model_dump(mode="json")
+    for field in (
+        "grid_profile",
+        "slots_per_day",
+        "vertical_step_minutes",
+        "visible_start_hour",
+        "visible_end_hour",
+    ):
+        serialized.pop(field)
+
+    restored = MultiFramePlan.model_validate(serialized)
+
+    assert restored.grid_profile == "legacy"
+    assert restored.slots_per_day is None
 
 
 def test_selected_frame_start_maps_to_first_requested_week() -> None:

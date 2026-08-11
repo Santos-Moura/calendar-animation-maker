@@ -158,13 +158,14 @@ def write_frame_mapping_artifacts(
     plan: SingleFrameCalendarPlan,
     source_image: Path,
     output_dir: Path,
+    source_background: str | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "frame-plan.json").write_text(
         plan.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
     (output_dir / "mapping-report.txt").write_text(build_mapping_report(plan), encoding="utf-8")
-    _write_source_frame(source_image, output_dir / "source-frame.png")
+    _write_source_frame(source_image, output_dir / "source-frame.png", source_background)
     _write_mapped_preview(plan, output_dir / "mapped-preview.png")
     _write_mapped_debug(plan, output_dir / "mapped-debug.png")
     write_frame_execution_result(
@@ -186,10 +187,16 @@ def write_frame_execution_result(result: SingleFrameExecutionResult, output_dir:
     return path
 
 
-def _write_source_frame(source: Path, destination: Path) -> None:
+def _write_source_frame(source: Path, destination: Path, background: str | None) -> None:
     try:
         with Image.open(source) as image:
-            image.convert("RGB").save(destination)
+            if background is None:
+                image.convert("RGB").save(destination)
+            else:
+                rgba = image.convert("RGBA")
+                composed = Image.new("RGBA", rgba.size, background)
+                composed.alpha_composite(rgba)
+                composed.convert("RGB").save(destination)
     except (OSError, ValueError) as error:
         raise CalendarAnimError(f"Unable to read source frame image: {source}") from error
 

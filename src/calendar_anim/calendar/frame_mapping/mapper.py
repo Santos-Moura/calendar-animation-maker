@@ -363,7 +363,7 @@ def compress_events_into_synchronized_horizontal_bands(
     columns_per_day: int,
     days_used: int,
 ) -> tuple[list[CalendarEventDraft], int]:
-    """Merge equal consecutive row vectors while retaining six events per band."""
+    """Merge equal consecutive row vectors while retaining one event per day slot."""
 
     if len(mapped_cells) != len(events):
         raise CalendarAnimError("Baseline mapped cells and Calendar events do not match")
@@ -574,7 +574,8 @@ def build_single_frame_plan(
             warnings.append("Calendar background color is ignored in sparse mode.")
     if event_compression is EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS:
         warnings.append(
-            "Calendar events are compressed into vertically synchronized six-slot bands; "
+            f"Calendar events are compressed into vertically synchronized "
+            f"{profile.horizontal_mapping.usable_overlap_columns_per_day}-slot bands; "
             "the logical preview remains a complete full-grid canvas."
         )
         if not compression_matches_profile:

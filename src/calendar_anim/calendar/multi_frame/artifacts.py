@@ -152,7 +152,12 @@ def initialize_animation_run(
                 )
             continue
         source = manifest_path.resolve().parent / manifest.frames[frame_plan.frame_index].image
-        write_frame_mapping_artifacts(frame_plan, source, frame_directory)
+        write_frame_mapping_artifacts(
+            frame_plan,
+            source,
+            frame_directory,
+            source_background=manifest.render.background,
+        )
         store.save_frame_result(
             plan,
             FrameUploadExecutionResult(
@@ -187,6 +192,16 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
         f"Run ID: {plan.run_id}",
         f"Frames: {plan.frame_count}",
         f"Grid: {plan.target_grid_width}x{plan.target_grid_height}",
+        f"Grid profile: {plan.grid_profile}",
+        f"Slots/day: {plan.slots_per_day or 'legacy/unspecified'}",
+        f"Vertical step: {plan.vertical_step_minutes or 'legacy/unspecified'} minutes",
+        "Visible window: "
+        + (
+            f"{plan.visible_start_hour:02d}:00-"
+            f"{'00:00' if plan.visible_end_hour == 24 else f'{plan.visible_end_hour:02d}:00'}"
+            if plan.visible_start_hour is not None and plan.visible_end_hour is not None
+            else "legacy/unspecified"
+        ),
         f"Mapping: {plan.mapping_mode.value}",
         f"Event compression: {plan.event_compression.value}",
         f"Ordering: {plan.subcolumn_order_strategy.value}",

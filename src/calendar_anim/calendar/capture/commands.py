@@ -18,6 +18,7 @@ from calendar_anim.calendar.capture.composition import (
 from calendar_anim.calendar.capture.models import (
     BrowserChannel,
     CalendarCaptureConfig,
+    CaptureProfile,
     CaptureState,
     FrameCaptureStatus,
 )
@@ -42,12 +43,21 @@ def _capture_config(
     stabilization_seconds: float,
     ready_timeout_seconds: float,
     browser_channel: BrowserChannel,
+    capture_profile: CaptureProfile,
 ) -> CalendarCaptureConfig:
+    values: dict[str, object] = {}
+    if capture_profile is CaptureProfile.HIGH_DETAIL_126X72:
+        values.update(
+            browser_zoom_percent=33,
+            visible_start_hour=6,
+            visible_end_hour=24,
+        )
     return CalendarCaptureConfig(
         profile_directory=profile_directory,
         stabilization_seconds=stabilization_seconds,
         ready_timeout_seconds=ready_timeout_seconds,
         browser_channel=browser_channel,
+        **values,
     )
 
 
@@ -87,6 +97,13 @@ def capture_animation_command(
     browser_channel: Annotated[
         BrowserChannel, typer.Option("--browser-channel")
     ] = BrowserChannel.CHROME,
+    capture_profile: Annotated[
+        CaptureProfile,
+        typer.Option(
+            "--capture-profile",
+            help="Use the explicit 33% 06:00-00:00 high-detail capture profile.",
+        ),
+    ] = CaptureProfile.PRODUCTION,
     recapture: Annotated[
         bool,
         typer.Option(
@@ -106,6 +123,7 @@ def capture_animation_command(
             stabilization_seconds,
             ready_timeout_seconds,
             browser_channel,
+            capture_profile,
         )
         animation_store = AnimationRunStore(animation_output_root)
         plan = build_capture_plan(resolved_run_id, animation_store, config)
@@ -117,6 +135,13 @@ def capture_animation_command(
     typer.echo(f"Frames: {plan.frame_count}")
     typer.echo(f"Weeks: {plan.frames[0].week_start} through {plan.frames[-1].week_start}")
     typer.echo(f"Current state: {_status_counts(state)}")
+    typer.echo(f"Capture profile: {capture_profile.value}")
+    typer.echo(f"Browser zoom: {plan.config.browser_zoom_percent}%")
+    visible_end = (
+        "00:00" if plan.config.visible_end_hour == 24 else f"{plan.config.visible_end_hour:02d}:00"
+    )
+    typer.echo(f"Visible window: {plan.config.visible_start_hour:02d}:00-{visible_end}")
+    typer.echo("Week header: visible")
     typer.echo(f"Execution: {'REAL BROWSER' if execute else 'DRY RUN'}")
     typer.echo(f"Artifacts: {store.run_directory(plan.run_id)}")
     if not execute:

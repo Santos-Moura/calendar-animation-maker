@@ -144,6 +144,33 @@ def test_plan_animation_persists_explicit_numeric_ordering(
     assert plan.subcolumn_order_keys == ["00", "01", "02", "03", "04", "05"]
 
 
+def test_plan_animation_accepts_explicit_high_detail_grid_without_changing_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    output_root = tmp_path / "high-detail-runs"
+    monkeypatch.setattr(
+        multi_commands,
+        "_google_gateway",
+        lambda: pytest.fail("high-detail planning must remain local"),
+    )
+    command = _plan_command(manifest, profile, output_root, 1)
+    command.extend(["--experimental-grid", "126x72"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    assert "Target grid: 126x72" in result.output
+    plan = AnimationRunStore(output_root).load_plan("cli-animation")
+    assert plan.grid_profile == "high-detail-126x72"
+    assert plan.slots_per_day == 18
+    assert plan.vertical_step_minutes == 15
+    assert (plan.visible_start_hour, plan.visible_end_hour) == (6, 24)
+    assert plan.subcolumn_order_strategy.value == "zero-width"
+    assert plan.event_compression.value == "synchronized-horizontal-bands"
+    assert plan.events_per_frame[0] <= 1200
+
+
 def test_upload_animation_dry_run_skips_api_and_lists_actions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
