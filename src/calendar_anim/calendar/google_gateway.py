@@ -4,12 +4,14 @@ from typing import Any
 
 from googleapiclient.errors import HttpError
 
+from calendar_anim.calendar.event_identity import deterministic_event_id
 from calendar_anim.calendar.models import (
     CalendarColor,
     CalendarDeleteResult,
     CalendarEventDraft,
     CalendarEventInfo,
     CalendarInfo,
+    CalendarWriteFailure,
     CalendarWriteResult,
 )
 
@@ -82,8 +84,11 @@ class GoogleCalendarGateway:
         created: list[str] = []
         created_indexes: list[int] = []
         errors: list[str] = []
+        failures: list[CalendarWriteFailure] = []
         for index, event in enumerate(events):
+            expected_id = deterministic_event_id(event)
             body: dict[str, Any] = {
+                "id": expected_id,
                 "summary": event.summary,
                 "start": {"dateTime": event.start.isoformat()},
                 "end": {"dateTime": event.end.isoformat()},
@@ -104,12 +109,27 @@ class GoogleCalendarGateway:
                 else:
                     errors.append(f"Event {index} was created without a returned ID")
             except HttpError as error:
-                errors.append(f"Event {index}: {error}")
+                status = int(getattr(error.resp, "status", 0) or 0)
+                if status == 409:
+                    created.append(expected_id)
+                    created_indexes.append(index)
+                    continue
+                message = f"Event {index}: {error}"
+                errors.append(message)
+                failures.append(
+                    CalendarWriteFailure(
+                        event_index=index,
+                        message=message,
+                        retryable=status == 429 or 500 <= status <= 599,
+                        status_code=status or None,
+                    )
+                )
         return CalendarWriteResult(
             created_event_ids=created,
             created_event_indexes=created_indexes,
             failed_events=len(errors),
             errors=errors,
+            failures=failures,
         )
 
     def find_events_by_private_metadata(

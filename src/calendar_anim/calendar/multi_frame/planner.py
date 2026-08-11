@@ -42,6 +42,7 @@ def build_multi_frame_plan(
     mapping_mode: FrameMappingMode = FrameMappingMode.FULL_GRID,
     event_compression: EventCompressionMode = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: str | None = None,
+    palette_preset: str | None = None,
     subcolumn_order_strategy: str | SubcolumnOrderStrategy | None = None,
     grid_profile: str = "production",
 ) -> tuple[MultiFramePlan, list[SingleFrameCalendarPlan]]:
@@ -77,6 +78,7 @@ def build_multi_frame_plan(
             mapping_mode=mapping_mode,
             event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
+            palette_preset=palette_preset,
             subcolumn_order_strategy=subcolumn_order_strategy,
         )
         if single.event_count > max_events_per_frame:
@@ -113,6 +115,9 @@ def build_multi_frame_plan(
             frame_count=frame_count,
             mapping_mode=mapping_mode,
             event_compression=event_compression,
+            palette_preset=first.palette_preset,
+            background_color_id=first.background_color_id,
+            foreground_color_ids=first.foreground_color_ids,
             target_grid_width=first.target_grid_width,
             target_grid_height=first.target_grid_height,
             grid_profile=grid_profile,

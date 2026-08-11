@@ -51,11 +51,19 @@ class CalendarEventInfo(BaseModel):
     private_metadata: dict[str, str]
 
 
+class CalendarWriteFailure(BaseModel):
+    event_index: int = Field(ge=0)
+    message: str
+    retryable: bool = False
+    status_code: int | None = None
+
+
 class CalendarWriteResult(BaseModel):
     created_event_ids: list[str] = Field(default_factory=list)
     created_event_indexes: list[int] = Field(default_factory=list)
     failed_events: int = Field(default=0, ge=0)
     errors: list[str] = Field(default_factory=list)
+    failures: list[CalendarWriteFailure] = Field(default_factory=list)
 
     @property
     def created_events(self) -> int:

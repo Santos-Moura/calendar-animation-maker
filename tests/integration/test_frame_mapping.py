@@ -149,7 +149,8 @@ def test_partial_failure_preserves_created_ids_and_counts(tmp_path: Path) -> Non
     result = service.execute(_plan("partial"))
     assert result.created_events == 1
     assert result.failed_events == result.planned_events - 1
-    assert result.created_event_ids == ["fake-event-1"]
+    assert len(result.created_event_ids) == 1
+    assert result.created_event_ids[0].startswith("ca")
     assert result.foreground_created == 1
     assert result.background_created == 0
     assert result.errors == ["simulated partial failure"]

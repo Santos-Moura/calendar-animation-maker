@@ -25,6 +25,9 @@ class FrameUploadPerformance(BaseModel):
     finished_at: datetime | None = None
     elapsed_seconds: float | None = Field(default=None, ge=0)
     events_per_second: float | None = Field(default=None, ge=0)
+    event_retry_count: int = Field(default=0, ge=0)
+    recovery_cycles: int = Field(default=0, ge=0)
+    last_failure_retryable: bool | None = None
 
 
 class UploadInvocationPerformance(BaseModel):
@@ -130,6 +133,9 @@ def record_frame_performance(
         events_per_second=calculate_events_per_second(
             frame_state.created_events, frame_state.duration_seconds
         ),
+        event_retry_count=frame_state.event_retry_count,
+        recovery_cycles=frame_state.recovery_cycles,
+        last_failure_retryable=frame_state.last_failure_retryable,
     )
     invocation.frames = [
         existing
@@ -216,6 +222,9 @@ def build_performance_text(report: UploadPerformanceReport) -> str:
                 f"  Finished: {_datetime(frame.finished_at)}",
                 f"  Elapsed seconds: {_number(frame.elapsed_seconds)}",
                 f"  Events/second: {_number(frame.events_per_second)}",
+                f"  Event retries: {frame.event_retry_count}",
+                f"  Recovery cycles: {frame.recovery_cycles}",
+                "  Last failure retryable: " + _optional_bool(frame.last_failure_retryable),
             ]
         )
     lines.extend(["", "Invocations", "-----------"])
@@ -269,6 +278,9 @@ def _frame_from_state(
         events_per_second=calculate_events_per_second(
             frame_state.created_events, frame_state.duration_seconds
         ),
+        event_retry_count=frame_state.event_retry_count,
+        recovery_cycles=frame_state.recovery_cycles,
+        last_failure_retryable=frame_state.last_failure_retryable,
     )
 
 
@@ -288,3 +300,9 @@ def _datetime(value: datetime | None) -> str:
 
 def _indexes(values: list[int]) -> str:
     return ", ".join(str(value) for value in values) if values else "none"
+
+
+def _optional_bool(value: bool | None) -> str:
+    if value is None:
+        return "none"
+    return "yes" if value else "no"

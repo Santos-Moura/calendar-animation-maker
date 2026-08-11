@@ -247,6 +247,10 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
         ),
         f"Mapping: {plan.mapping_mode.value}",
         f"Event compression: {plan.event_compression.value}",
+        f"Palette preset: {plan.palette_preset or 'none'}",
+        f"Background colorId: {plan.background_color_id or 'automatic'}",
+        "Foreground colorIds: "
+        + (", ".join(plan.foreground_color_ids) if plan.foreground_color_ids else "profile"),
         f"Ordering: {plan.subcolumn_order_strategy.value}",
         "Slot keys: "
         + (
@@ -278,6 +282,8 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
                 f"  Status: {frame_state.status.value}",
                 f"  Events: {frame_state.created_events}/{frame_state.planned_events}",
                 f"  Failed events: {frame_state.failed_events}",
+                f"  Event retries: {frame_state.event_retry_count}",
+                f"  Recovery cycles: {frame_state.recovery_cycles}",
                 f"  Duration seconds: {_duration(frame_state.duration_seconds)}",
             ]
         )
@@ -287,7 +293,9 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
             "Upload policy",
             "-------------",
             "Frames are uploaded serially and completed frames are skipped on resume.",
-            "A partial frame must be cleaned and recreated; completed frames are preserved.",
+            "Partial frames are reconciled by deterministic event ID and only missing events "
+            "are recreated; legacy/inconsistent frames use metadata-scoped cleanup as fallback.",
+            "Retryable event failures use bounded exponential backoff with jitter.",
             "The upload stops on the first frame failure.",
             "",
         ]

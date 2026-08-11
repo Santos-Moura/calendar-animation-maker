@@ -41,6 +41,9 @@ class MultiFramePlan(BaseModel):
     mapping_mode: FrameMappingMode
     # Missing fields in persisted pre-compression plans retain their historical semantics.
     event_compression: EventCompressionMode = EventCompressionMode.NONE
+    palette_preset: str | None = None
+    background_color_id: str | None = None
+    foreground_color_ids: list[str] = Field(default_factory=list)
     target_grid_width: int = Field(gt=0)
     target_grid_height: int = Field(gt=0)
     grid_profile: str = "legacy"
@@ -114,6 +117,10 @@ class FrameUploadState(BaseModel):
     created_events: int = Field(default=0, ge=0)
     failed_events: int = Field(default=0, ge=0)
     errors: list[str] = Field(default_factory=list)
+    created_event_ids: list[str] = Field(default_factory=list)
+    event_retry_count: int = Field(default=0, ge=0)
+    recovery_cycles: int = Field(default=0, ge=0)
+    last_failure_retryable: bool | None = None
     frame_started_at: datetime | None = None
     frame_completed_at: datetime | None = None
     duration_seconds: float | None = Field(default=None, ge=0)
@@ -163,6 +170,9 @@ class FrameUploadExecutionResult(BaseModel):
     failed_events: int = Field(default=0, ge=0)
     created_event_ids: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    event_retry_count: int = Field(default=0, ge=0)
+    recovery_cycles: int = Field(default=0, ge=0)
+    last_failure_retryable: bool | None = None
 
 
 class AnimationCleanupResult(BaseModel):

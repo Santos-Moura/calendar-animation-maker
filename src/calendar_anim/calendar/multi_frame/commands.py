@@ -100,6 +100,13 @@ def plan_animation_command(
     calendar_background_color_id: Annotated[
         str | None, typer.Option("--calendar-background-color-id")
     ] = None,
+    palette_preset: Annotated[
+        str | None,
+        typer.Option(
+            "--palette-preset",
+            help="Lock an approved artistic Calendar color mapping (for example cayde-final).",
+        ),
+    ] = None,
     subcolumn_ordering: Annotated[
         SubcolumnOrderStrategy | None,
         typer.Option(
@@ -149,6 +156,7 @@ def plan_animation_command(
             mapping_mode=mapping_mode,
             event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
+            palette_preset=palette_preset,
             subcolumn_order_strategy=subcolumn_ordering,
             grid_profile=(
                 HIGH_DETAIL_GRID_PROFILE if experimental_grid is not None else "production"
@@ -169,6 +177,12 @@ def plan_animation_command(
     typer.echo(f"Weeks: {plan.frame_count} ({plan.start_week} onward)")
     typer.echo(f"Mapping mode: {plan.mapping_mode.value}")
     typer.echo(f"Event compression: {plan.event_compression.value}")
+    typer.echo(f"Palette preset: {plan.palette_preset or 'none'}")
+    typer.echo(f"Background colorId: {plan.background_color_id or 'automatic'}")
+    typer.echo(
+        "Foreground colorIds: "
+        + (", ".join(plan.foreground_color_ids) if plan.foreground_color_ids else "profile")
+    )
     typer.echo(f"Target grid: {plan.target_grid_width}x{plan.target_grid_height}")
     typer.echo(f"Grid profile: {plan.grid_profile}")
     typer.echo(f"Slots/day: {plan.slots_per_day}")
@@ -206,7 +220,10 @@ def upload_animation_command(
         bool,
         typer.Option(
             "--recover-partial",
-            help="Delete and recreate only partial frames before resuming.",
+            help=(
+                "Compatibility flag; partial frames now recover automatically by deterministic "
+                "event identity, with scoped cleanup only as a legacy fallback."
+            ),
         ),
     ] = False,
     execute: Annotated[
@@ -240,19 +257,12 @@ def upload_animation_command(
         for frame in state.frames
         if frame.status in {FrameUploadStatus.PARTIAL, FrameUploadStatus.UPLOADING}
     ]
-    if partial and not recover_partial:
-        _fail(
-            CalendarAnimError(
-                "Partial frame recovery is required for: "
-                + ", ".join(str(index) for index in partial)
-            )
-        )
     if not yes:
         typer.echo("\nThis operation may take a long time.")
         typer.echo("Completed frames will be checkpointed and skipped on resume.")
         if partial:
             typer.echo(
-                "Recovery will delete and recreate only partial frame(s): "
+                "Automatic recovery will reconcile partial frame(s): "
                 + ", ".join(str(index) for index in partial)
             )
         typer.confirm("Continue?", default=False, abort=True)
@@ -277,6 +287,8 @@ def upload_animation_command(
         typer.echo(f"Failed: {performance.failed_events}")
         typer.echo(f"Elapsed: {_seconds(performance.elapsed_seconds)}")
         typer.echo(f"Rate: {_rate(performance.events_per_second)}")
+        typer.echo(f"Event retries: {performance.event_retry_count}")
+        typer.echo(f"Recovery cycles: {performance.recovery_cycles}")
 
     try:
         gateway = _google_gateway()
@@ -401,7 +413,9 @@ def _print_dry_run_actions(state: AnimationUploadState) -> None:
         if frame.status is FrameUploadStatus.COMPLETED:
             action = "SKIP (completed)"
         elif frame.status in {FrameUploadStatus.PARTIAL, FrameUploadStatus.UPLOADING}:
-            action = "RECOVERY REQUIRED"
+            action = "AUTO-RECOVER MISSING EVENTS"
+        elif frame.status is FrameUploadStatus.FAILED:
+            action = "AUTO-RECOVER, STOP SAFELY IF PERSISTENT"
         else:
             action = "UPLOAD"
         typer.echo(f"Frame {frame.frame_index}: {action}")
