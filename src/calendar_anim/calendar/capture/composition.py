@@ -10,6 +10,9 @@ from calendar_anim.calendar.capture.models import CapturePlan, CaptureState, Fra
 from calendar_anim.calendar.capture.service import captured_paths
 from calendar_anim.exceptions import CalendarAnimError
 
+PIXEL_ART_H264_CRF = 10
+PIXEL_ART_H264_PRESET = "slow"
+
 
 def validate_completed_capture(
     plan: CapturePlan, state: CaptureState, store: CaptureStore
@@ -76,7 +79,9 @@ def _gif_frame(source: Image.Image, sequence: int) -> Image.Image:
     return frame
 
 
-def compose_mp4(frame_paths: list[Path], output_path: Path, fps: float) -> Path:
+def compose_mp4(
+    frame_paths: list[Path], output_path: Path, fps: float, *, pixel_scale: int = 1
+) -> Path:
     if not frame_paths:
         raise CalendarAnimError("Cannot compose an empty capture")
     if fps <= 0:
@@ -84,14 +89,48 @@ def compose_mp4(frame_paths: list[Path], output_path: Path, fps: float) -> Path:
     executable = shutil.which("ffmpeg")
     if executable is None:
         raise CalendarAnimError("ffmpeg was not found; install it or compose only the GIF")
+    command = build_mp4_command(executable, frame_paths, output_path, fps, pixel_scale=pixel_scale)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() or str(error)
+        raise CalendarAnimError(f"ffmpeg failed: {detail}") from error
+    return output_path
+
+
+def build_mp4_command(
+    executable: str,
+    frame_paths: list[Path],
+    output_path: Path,
+    fps: float,
+    *,
+    pixel_scale: int = 1,
+) -> list[str]:
+    if not frame_paths:
+        raise CalendarAnimError("Cannot compose an empty capture")
+    if fps <= 0:
+        raise CalendarAnimError("Composition FPS must be positive")
+    if pixel_scale < 1:
+        raise CalendarAnimError("Pixel scale must be a positive integer")
     first_index = _frame_index(frame_paths[0])
     expected = list(range(first_index, first_index + len(frame_paths)))
     actual = [_frame_index(path) for path in frame_paths]
     if actual != expected:
         raise CalendarAnimError("MP4 composition requires consecutive capture frame filenames")
+    dimensions = {_image_dimensions(path) for path in frame_paths}
+    if len(dimensions) != 1:
+        raise CalendarAnimError("Captured screenshots do not have consistent dimensions")
+    source_width, source_height = next(iter(dimensions))
+    output_width = source_width * pixel_scale
+    output_height = source_height * pixel_scale
+    if output_width % 2 or output_height % 2:
+        raise CalendarAnimError(
+            "Pixel-perfect H.264 yuv420p output requires even dimensions; "
+            f"resolved output is {output_width}x{output_height}"
+        )
     input_pattern = frame_paths[0].parent / "frame-%04d.png"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
+    return [
         executable,
         "-y",
         "-loglevel",
@@ -106,18 +145,24 @@ def compose_mp4(frame_paths: list[Path], output_path: Path, fps: float) -> Path:
         str(len(frame_paths)),
         "-c:v",
         "libx264",
+        "-preset",
+        PIXEL_ART_H264_PRESET,
+        "-crf",
+        str(PIXEL_ART_H264_CRF),
         "-pix_fmt",
         "yuv420p",
         "-vf",
-        "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        f"scale={output_width}:{output_height}:flags=neighbor,setsar=1",
         str(output_path),
     ]
+
+
+def _image_dimensions(path: Path) -> tuple[int, int]:
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr.strip() or str(error)
-        raise CalendarAnimError(f"ffmpeg failed: {detail}") from error
-    return output_path
+        with Image.open(path) as image:
+            return image.size
+    except OSError as error:
+        raise CalendarAnimError(f"Unable to read capture frame: {path}") from error
 
 
 def _frame_index(path: Path) -> int:
