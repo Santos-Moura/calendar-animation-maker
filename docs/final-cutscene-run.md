@@ -42,7 +42,7 @@ After every Calendar week has been captured, compose directly from the PNG scree
   --source-video .\input.mp4 `
   --clip-start 114 `
   --clip-end 150 `
-  --fps 2
+  --fps 3
 ```
 
 The command requires both `ffmpeg` and `ffprobe`. It writes under
