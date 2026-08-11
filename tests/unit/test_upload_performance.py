@@ -92,7 +92,9 @@ def test_failed_frame_is_recorded_and_aggregated(tmp_path: Path) -> None:
     frame.frame_completed_at = started + timedelta(seconds=2)
     frame.duration_seconds = 2
 
-    recorded = record_frame_performance(invocation, plan, frame)
+    recorded = record_frame_performance(
+        invocation, plan, frame, attempt_elapsed_seconds=frame.duration_seconds or 0.0
+    )
     finish_upload_invocation(
         report,
         plan,
@@ -124,7 +126,9 @@ def test_resume_does_not_double_count_completed_frame(tmp_path: Path) -> None:
     uploaded.status = FrameUploadStatus.COMPLETED
     uploaded.created_events = uploaded.planned_events
     uploaded.duration_seconds = 20
-    record_frame_performance(invocation, plan, uploaded)
+    record_frame_performance(
+        invocation, plan, uploaded, attempt_elapsed_seconds=uploaded.duration_seconds or 0.0
+    )
 
     finish_upload_invocation(
         report,

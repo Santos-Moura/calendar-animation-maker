@@ -186,6 +186,10 @@ def test_retryable_partial_chunk_retries_only_missing_events_without_duplicates(
     assert progress[0] == (0, 0, 1008)
     performance = store.load_performance(plan.run_id)
     assert performance.frames[0].event_retry_count == 1
+    attempt = performance.invocations[0].frames[0]
+    assert attempt.initial_attempt_seconds is not None
+    assert attempt.total_frame_elapsed_seconds is not None
+    assert len(attempt.attempts) == 1
 
 
 def test_response_loss_after_persistence_is_idempotent(tmp_path: Path) -> None:
@@ -240,6 +244,11 @@ def test_retryable_failure_exhaustion_stops_with_persisted_failed_state(tmp_path
     assert saved.frames[0].event_retry_count == 2
     assert saved.frames[0].recovery_cycles == 1
     assert saved.frames[0].last_failure_retryable is True
+    performance = store.load_performance(plan.run_id)
+    measured = performance.invocations[0].frames[0]
+    assert len(measured.attempts) == 2
+    assert measured.initial_attempt_seconds == measured.attempts[0].elapsed_seconds
+    assert measured.total_frame_elapsed_seconds == saved.frames[0].duration_seconds
 
 
 def test_non_retryable_failure_does_not_loop(tmp_path: Path) -> None:

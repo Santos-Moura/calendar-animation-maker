@@ -183,7 +183,9 @@ class MultiFrameUploadService:
                 recovery_cycle += 1
                 frame_state.recovery_cycles += 1
                 self._checkpoint(plan, state)
-                self.sleeper(retry_delay(self.retry_policy, recovery_cycle, self.jitter))
+                cooldown = retry_delay(self.retry_policy, recovery_cycle, self.jitter)
+                self.sleeper(cooldown)
+                frame_state.duration_seconds = (frame_state.duration_seconds or 0.0) + cooldown
                 self._reconcile_frame(plan, state, frame_plan, frame_state, calendar.id)
         return state
 
@@ -200,9 +202,9 @@ class MultiFrameUploadService:
         frame_state.status = FrameUploadStatus.UPLOADING
         frame_state.created_events = len(frame_state.created_event_ids)
         frame_state.failed_events = 0
-        frame_state.frame_started_at = started
+        if frame_state.frame_started_at is None:
+            frame_state.frame_started_at = started
         frame_state.frame_completed_at = None
-        frame_state.duration_seconds = None
         self._checkpoint(animation_plan, state)
         self._notify(frame_plan.frame_index, frame_state.created_events, frame_plan.event_count)
         known_ids = set(frame_state.created_event_ids)
@@ -289,7 +291,8 @@ class MultiFrameUploadService:
     ) -> None:
         completed = self.now()
         frame_state.frame_completed_at = completed
-        frame_state.duration_seconds = max(0.0, self.clock() - started_counter)
+        attempt_elapsed = max(0.0, self.clock() - started_counter)
+        frame_state.duration_seconds = (frame_state.duration_seconds or 0.0) + attempt_elapsed
         self.store.save_frame_result(
             animation_plan,
             FrameUploadExecutionResult(
@@ -312,7 +315,10 @@ class MultiFrameUploadService:
         self._checkpoint(animation_plan, state)
         if self._performance_report is not None and self._current_invocation is not None:
             frame_performance = record_frame_performance(
-                self._current_invocation, animation_plan, frame_state
+                self._current_invocation,
+                animation_plan,
+                frame_state,
+                attempt_elapsed_seconds=attempt_elapsed,
             )
             refresh_performance_report(self._performance_report, animation_plan, state)
             self.store.save_performance(self._performance_report)

@@ -13,6 +13,14 @@ from calendar_anim.calendar.multi_frame.models import (
 InvocationStatus = Literal["running", "completed", "stopped", "failed", "interrupted"]
 
 
+class FrameUploadAttemptPerformance(BaseModel):
+    attempt_index: int = Field(ge=1)
+    status: FrameUploadStatus
+    created_events: int = Field(ge=0)
+    failed_events: int = Field(ge=0)
+    elapsed_seconds: float = Field(ge=0)
+
+
 class FrameUploadPerformance(BaseModel):
     frame_index: int = Field(ge=0)
     source_timestamp: float | None = Field(default=None, ge=0)
@@ -28,6 +36,9 @@ class FrameUploadPerformance(BaseModel):
     event_retry_count: int = Field(default=0, ge=0)
     recovery_cycles: int = Field(default=0, ge=0)
     last_failure_retryable: bool | None = None
+    initial_attempt_seconds: float | None = Field(default=None, ge=0)
+    total_frame_elapsed_seconds: float | None = Field(default=None, ge=0)
+    attempts: list[FrameUploadAttemptPerformance] = Field(default_factory=list)
 
 
 class UploadInvocationPerformance(BaseModel):
@@ -115,9 +126,25 @@ def record_frame_performance(
     invocation: UploadInvocationPerformance,
     plan: MultiFramePlan,
     frame_state: FrameUploadState,
+    *,
+    attempt_elapsed_seconds: float,
 ) -> FrameUploadPerformance:
     frame_plan = next(
         frame for frame in plan.frames if frame.frame_index == frame_state.frame_index
+    )
+    existing = next(
+        (frame for frame in invocation.frames if frame.frame_index == frame_state.frame_index),
+        None,
+    )
+    attempts = list(existing.attempts) if existing is not None else []
+    attempts.append(
+        FrameUploadAttemptPerformance(
+            attempt_index=len(attempts) + 1,
+            status=frame_state.status,
+            created_events=frame_state.created_events,
+            failed_events=frame_state.failed_events,
+            elapsed_seconds=attempt_elapsed_seconds,
+        )
     )
     performance = FrameUploadPerformance(
         frame_index=frame_state.frame_index,
@@ -136,6 +163,9 @@ def record_frame_performance(
         event_retry_count=frame_state.event_retry_count,
         recovery_cycles=frame_state.recovery_cycles,
         last_failure_retryable=frame_state.last_failure_retryable,
+        initial_attempt_seconds=attempts[0].elapsed_seconds,
+        total_frame_elapsed_seconds=frame_state.duration_seconds,
+        attempts=attempts,
     )
     invocation.frames = [
         existing
@@ -225,8 +255,16 @@ def build_performance_text(report: UploadPerformanceReport) -> str:
                 f"  Event retries: {frame.event_retry_count}",
                 f"  Recovery cycles: {frame.recovery_cycles}",
                 "  Last failure retryable: " + _optional_bool(frame.last_failure_retryable),
+                f"  Initial attempt seconds: {_number(frame.initial_attempt_seconds)}",
+                f"  Total frame elapsed seconds: {_number(frame.total_frame_elapsed_seconds)}",
             ]
         )
+        for attempt in frame.attempts:
+            lines.append(
+                f"    Attempt {attempt.attempt_index}: {attempt.status.value}, "
+                f"{attempt.created_events}/{frame.planned_events}, "
+                f"failed={attempt.failed_events}, elapsed={attempt.elapsed_seconds:.3f}s"
+            )
     lines.extend(["", "Invocations", "-----------"])
     for invocation in report.invocations:
         lines.extend(
@@ -281,6 +319,7 @@ def _frame_from_state(
         event_retry_count=frame_state.event_retry_count,
         recovery_cycles=frame_state.recovery_cycles,
         last_failure_retryable=frame_state.last_failure_retryable,
+        total_frame_elapsed_seconds=frame_state.duration_seconds,
     )
 
 
