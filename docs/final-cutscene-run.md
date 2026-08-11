@@ -57,6 +57,23 @@ The command requires both `ffmpeg` and `ffprobe`. It writes under
 The command rejects a frame count/FPS duration that differs from the requested audio interval.
 It does not contact Google Calendar.
 
+### Pixel-art MP4 quality
+
+MP4 video is encoded directly from the PNG sequence, never from the GIF. The compositor uses
+integer dimensions, nearest-neighbor scaling, square pixels (`SAR 1:1`), H.264 High profile,
+`yuv420p`, `preset=slow`, and `CRF=10`. The compatibility-oriented `yuv420p` conversion is not
+mathematically lossless, but the low CRF substantially reduces edge/color error while remaining
+widely playable.
+
+GIF timing is stored in centiseconds. At 3 FPS, the requested 333.333 ms frame interval becomes
+330 ms, so 108 GIF frames report approximately 35.64 seconds. MP4 retains the exact 3 FPS and
+36.00-second timeline and is authoritative for audio sync.
+
+At native `504x288` size, the logical `126x72` preview is an exact 4x integer enlargement. A
+player may still blur either file when its window is resized to a non-integer multiple. Inspect
+at 100%/native size, or use a player configured for nearest-neighbor video scaling, when judging
+pixel edges.
+
 ## Safety gate
 
 Do not raise `--max-events` automatically. Measure the real frames, report maximum, p95, and
