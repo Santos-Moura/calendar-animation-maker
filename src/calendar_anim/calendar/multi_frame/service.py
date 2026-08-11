@@ -1,5 +1,6 @@
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Final
 
 from calendar_anim.calendar.frame_mapping.models import SingleFrameCalendarPlan
@@ -8,6 +9,10 @@ from calendar_anim.calendar.frame_mapping.service import (
     single_frame_metadata,
 )
 from calendar_anim.calendar.gateway import CalendarGateway
+from calendar_anim.calendar.high_detail import (
+    HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS,
+    is_high_detail_geometry,
+)
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.models import CalendarEventDraft
 from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
@@ -19,10 +24,28 @@ from calendar_anim.calendar.multi_frame.models import (
     FrameUploadStatus,
     MultiFramePlan,
 )
+from calendar_anim.calendar.multi_frame.performance import (
+    FrameUploadPerformance,
+    InvocationStatus,
+    UploadInvocationPerformance,
+    UploadPerformanceReport,
+    begin_upload_invocation,
+    finish_upload_invocation,
+    initial_performance_report,
+    record_frame_performance,
+    refresh_performance_report,
+)
 from calendar_anim.exceptions import CalendarAnimError
 
 DEFAULT_UPLOAD_CHUNK_SIZE: Final = 50
 ProgressCallback = Callable[[int, int, int], None]
+FrameCompleteCallback = Callable[[FrameUploadPerformance], None]
+Clock = Callable[[], float]
+Now = Callable[[], datetime]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class MultiFrameUploadService:
@@ -34,6 +57,9 @@ class MultiFrameUploadService:
         *,
         chunk_size: int = DEFAULT_UPLOAD_CHUNK_SIZE,
         progress: ProgressCallback | None = None,
+        frame_complete: FrameCompleteCallback | None = None,
+        clock: Clock = perf_counter,
+        now: Now = _utc_now,
     ) -> None:
         if chunk_size <= 0:
             raise ValueError("chunk size must be positive")
@@ -42,6 +68,11 @@ class MultiFrameUploadService:
         self.store = store
         self.chunk_size = chunk_size
         self.progress = progress
+        self.frame_complete = frame_complete
+        self.clock = clock
+        self.now = now
+        self._performance_report: UploadPerformanceReport | None = None
+        self._current_invocation: UploadInvocationPerformance | None = None
 
     def upload(
         self,
@@ -68,6 +99,50 @@ class MultiFrameUploadService:
                 f"Partial frame recovery required for frame(s): {indexes}. "
                 "Recovery deletes only those frames before recreating them."
             )
+
+        performance = (
+            self.store.load_performance(plan.run_id)
+            if self.store.performance_json_path(plan.run_id).exists()
+            else initial_performance_report(plan, state)
+        )
+        invocation = begin_upload_invocation(performance, state, self.now())
+        invocation_started = self.clock()
+        self._performance_report = performance
+        self._current_invocation = invocation
+        self.store.save_performance(performance)
+        invocation_status: InvocationStatus = "stopped"
+        try:
+            uploaded = self._upload_invocation(plan, state, recover_partial=recover_partial)
+            if all(frame.status is FrameUploadStatus.COMPLETED for frame in uploaded.frames):
+                invocation_status = "completed"
+            return uploaded
+        except KeyboardInterrupt:
+            invocation_status = "interrupted"
+            raise
+        except Exception:
+            invocation_status = "failed"
+            raise
+        finally:
+            finish_upload_invocation(
+                performance,
+                plan,
+                state,
+                invocation,
+                finished_at=self.now(),
+                elapsed_seconds=max(0.0, self.clock() - invocation_started),
+                status=invocation_status,
+            )
+            self.store.save_performance(performance)
+            self._performance_report = None
+            self._current_invocation = None
+
+    def _upload_invocation(
+        self,
+        plan: MultiFramePlan,
+        state: AnimationUploadState,
+        *,
+        recover_partial: bool,
+    ) -> AnimationUploadState:
 
         calendar, calendar_created = self.lab.resolve(plan.calendar_name, plan.timezone)
         if state.calendar_id is not None and state.calendar_id != calendar.id:
@@ -111,7 +186,8 @@ class MultiFrameUploadService:
         frame_state: FrameUploadState,
         calendar_id: str,
     ) -> bool:
-        started = datetime.now(UTC)
+        started = self.now()
+        started_counter = self.clock()
         frame_state.status = FrameUploadStatus.UPLOADING
         frame_state.created_events = 0
         frame_state.failed_events = 0
@@ -141,12 +217,26 @@ class MultiFrameUploadService:
                         if frame_state.created_events
                         else FrameUploadStatus.FAILED
                     )
-                    self._finish_frame(animation_plan, state, frame_plan, frame_state, created_ids)
+                    self._finish_frame(
+                        animation_plan,
+                        state,
+                        frame_plan,
+                        frame_state,
+                        created_ids,
+                        started_counter,
+                    )
                     return False
         except KeyboardInterrupt:
             frame_state.status = FrameUploadStatus.PARTIAL
             frame_state.errors.append("Upload interrupted by user")
-            self._finish_frame(animation_plan, state, frame_plan, frame_state, created_ids)
+            self._finish_frame(
+                animation_plan,
+                state,
+                frame_plan,
+                frame_state,
+                created_ids,
+                started_counter,
+            )
             raise
         except Exception as error:
             frame_state.status = (
@@ -155,10 +245,24 @@ class MultiFrameUploadService:
                 else FrameUploadStatus.FAILED
             )
             frame_state.errors.append(str(error))
-            self._finish_frame(animation_plan, state, frame_plan, frame_state, created_ids)
+            self._finish_frame(
+                animation_plan,
+                state,
+                frame_plan,
+                frame_state,
+                created_ids,
+                started_counter,
+            )
             raise
         frame_state.status = FrameUploadStatus.COMPLETED
-        self._finish_frame(animation_plan, state, frame_plan, frame_state, created_ids)
+        self._finish_frame(
+            animation_plan,
+            state,
+            frame_plan,
+            frame_state,
+            created_ids,
+            started_counter,
+        )
         return True
 
     def _finish_frame(
@@ -168,13 +272,11 @@ class MultiFrameUploadService:
         frame_plan: SingleFrameCalendarPlan,
         frame_state: FrameUploadState,
         created_ids: list[str],
+        started_counter: float,
     ) -> None:
-        completed = datetime.now(UTC)
+        completed = self.now()
         frame_state.frame_completed_at = completed
-        if frame_state.frame_started_at is not None:
-            frame_state.duration_seconds = max(
-                0.0, (completed - frame_state.frame_started_at).total_seconds()
-            )
+        frame_state.duration_seconds = max(0.0, self.clock() - started_counter)
         self.store.save_frame_result(
             animation_plan,
             FrameUploadExecutionResult(
@@ -192,6 +294,14 @@ class MultiFrameUploadService:
             ),
         )
         self._checkpoint(animation_plan, state)
+        if self._performance_report is not None and self._current_invocation is not None:
+            frame_performance = record_frame_performance(
+                self._current_invocation, animation_plan, frame_state
+            )
+            refresh_performance_report(self._performance_report, animation_plan, state)
+            self.store.save_performance(self._performance_report)
+            if self.frame_complete is not None:
+                self.frame_complete(frame_performance)
 
     def _recover_partial(
         self,
@@ -233,10 +343,22 @@ class MultiFrameUploadService:
     def _validate(plan: MultiFramePlan, state: AnimationUploadState) -> None:
         if not plan.profile_ready:
             raise CalendarAnimError("Calibration profile is NOT READY; animation upload is blocked")
-        if plan.max_events_per_frame > ABSOLUTE_SINGLE_FRAME_MAX_EVENTS:
+        allowed_max_events = (
+            HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS
+            if is_high_detail_geometry(
+                plan.grid_profile,
+                plan.target_grid_width,
+                plan.target_grid_height,
+                plan.slots_per_day,
+                plan.vertical_step_minutes,
+                plan.visible_start_hour,
+                plan.visible_end_hour,
+            )
+            else ABSOLUTE_SINGLE_FRAME_MAX_EVENTS
+        )
+        if plan.max_events_per_frame > allowed_max_events:
             raise CalendarAnimError(
-                f"Per-frame limit exceeds the absolute safety limit of "
-                f"{ABSOLUTE_SINGLE_FRAME_MAX_EVENTS}"
+                f"Per-frame limit exceeds the absolute safety limit of {allowed_max_events}"
             )
         expected = [(frame.frame_index, frame.planned_events) for frame in plan.frames]
         actual = [(frame.frame_index, frame.planned_events) for frame in state.frames]

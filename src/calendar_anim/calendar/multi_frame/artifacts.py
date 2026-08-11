@@ -13,6 +13,11 @@ from calendar_anim.calendar.multi_frame.models import (
     FrameUploadStatus,
     MultiFramePlan,
 )
+from calendar_anim.calendar.multi_frame.performance import (
+    UploadPerformanceReport,
+    build_performance_text,
+    initial_performance_report,
+)
 from calendar_anim.calendar.subcolumn_ordering import format_summary_key
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.animation import AnimationManifest
@@ -63,6 +68,12 @@ class AnimationRunStore:
     def report_path(self, run_id: str) -> Path:
         return self.run_directory(run_id) / "animation-report.txt"
 
+    def performance_json_path(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "upload-performance.json"
+
+    def performance_text_path(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "upload-performance.txt"
+
     def save_plan(self, plan: MultiFramePlan) -> Path:
         path = self.plan_path(plan.run_id)
         if path.exists():
@@ -105,6 +116,24 @@ class AnimationRunStore:
         path.write_text(build_animation_report(plan, state), encoding="utf-8")
         return path
 
+    def save_performance(self, report: UploadPerformanceReport) -> tuple[Path, Path]:
+        json_path = self.performance_json_path(report.run_id)
+        text_path = self.performance_text_path(report.run_id)
+        _write_json_atomic(json_path, report.model_dump_json(indent=2) + "\n")
+        text_path.write_text(build_performance_text(report), encoding="utf-8")
+        return json_path, text_path
+
+    def load_performance(self, run_id: str) -> UploadPerformanceReport:
+        path = self.performance_json_path(run_id)
+        try:
+            return UploadPerformanceReport.model_validate_json(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as error:
+            raise CalendarAnimError(
+                f"Upload performance report does not exist: {run_id}"
+            ) from error
+        except (OSError, ValidationError, ValueError) as error:
+            raise CalendarAnimError(f"Invalid upload performance report: {path}") from error
+
     def frame_directory(self, plan: MultiFramePlan, frame_index: int) -> Path:
         frame = next((item for item in plan.frames if item.frame_index == frame_index), None)
         if frame is None:
@@ -141,6 +170,9 @@ def initialize_animation_run(
     _validate_state_matches_plan(plan, state)
     if not state_path.exists():
         store.save_state(state)
+    performance_path = store.performance_json_path(plan.run_id)
+    if not performance_path.exists():
+        store.save_performance(initial_performance_report(plan, state))
     for frame_summary, frame_plan in zip(plan.frames, frame_plans, strict=True):
         frame_directory = store.frame_directory(plan, frame_summary.frame_index)
         frame_plan_path = frame_directory / "frame-plan.json"
@@ -190,6 +222,17 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
         "",
         f"Animation ID: {plan.animation_id}",
         f"Run ID: {plan.run_id}",
+        f"Source: {plan.source_file or 'legacy/unspecified'}",
+        "Clip: "
+        + (
+            f"{plan.clip_start_seconds:.3f}-{plan.clip_end_seconds:.3f} seconds "
+            f"({plan.clip_duration_seconds:.3f}s at {plan.output_fps:.3f} FPS)"
+            if plan.clip_start_seconds is not None
+            and plan.clip_end_seconds is not None
+            and plan.clip_duration_seconds is not None
+            and plan.output_fps is not None
+            else "legacy/unspecified"
+        ),
         f"Frames: {plan.frame_count}",
         f"Grid: {plan.target_grid_width}x{plan.target_grid_height}",
         f"Grid profile: {plan.grid_profile}",
@@ -224,6 +267,12 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
         lines.extend(
             [
                 f"Frame {frame_plan.frame_index}:",
+                "  Source timestamp: "
+                + (
+                    f"{frame_plan.source_timestamp_seconds:.6f}"
+                    if frame_plan.source_timestamp_seconds is not None
+                    else "legacy/unspecified"
+                ),
                 f"  Week: {frame_plan.week_start}",
                 f"  Run ID: {frame_plan.frame_run_id}",
                 f"  Status: {frame_state.status.value}",

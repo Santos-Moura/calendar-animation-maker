@@ -88,6 +88,7 @@ def build_multi_frame_plan(
         upload_frames.append(
             FrameUploadPlan(
                 frame_index=selected_index,
+                source_timestamp_seconds=manifest.frames[selected_index].timestamp_seconds,
                 week_start=single.week_start_date,
                 frame_run_id=single.run_id,
                 planned_events=single.event_count,
@@ -102,6 +103,11 @@ def build_multi_frame_plan(
             run_id=run_id,
             calendar_name=calendar_name,
             timezone=profile.calendar_ui.timezone,
+            source_file=manifest.source.file_name,
+            clip_start_seconds=manifest.source.start_seconds,
+            clip_end_seconds=manifest.source.start_seconds + manifest.source.duration_seconds,
+            clip_duration_seconds=manifest.source.duration_seconds,
+            output_fps=manifest.render.output_fps,
             start_week=start_week,
             frame_start=frame_start,
             frame_count=frame_count,

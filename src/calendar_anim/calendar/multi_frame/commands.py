@@ -20,7 +20,12 @@ from calendar_anim.calendar.frame_mapping.service import (
 )
 from calendar_anim.calendar.google_auth import GoogleOAuthClient
 from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
-from calendar_anim.calendar.high_detail import HIGH_DETAIL_GRID, apply_high_detail_grid
+from calendar_anim.calendar.high_detail import (
+    HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS,
+    HIGH_DETAIL_GRID,
+    HIGH_DETAIL_GRID_PROFILE,
+    apply_high_detail_grid,
+)
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.artifacts import (
@@ -34,6 +39,7 @@ from calendar_anim.calendar.multi_frame.models import (
     FrameUploadStatus,
     MultiFramePlan,
 )
+from calendar_anim.calendar.multi_frame.performance import FrameUploadPerformance
 from calendar_anim.calendar.multi_frame.planner import build_multi_frame_plan
 from calendar_anim.calendar.multi_frame.service import MultiFrameUploadService
 from calendar_anim.calendar.subcolumn_ordering import (
@@ -111,10 +117,15 @@ def plan_animation_command(
 ) -> None:
     """Build immutable multi-frame plans and pending state using local files only."""
     try:
-        if max_events > ABSOLUTE_SINGLE_FRAME_MAX_EVENTS:
+        allowed_max_events = (
+            HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS
+            if experimental_grid is not None
+            and experimental_grid.lower().strip() == HIGH_DETAIL_GRID
+            else ABSOLUTE_SINGLE_FRAME_MAX_EVENTS
+        )
+        if max_events > allowed_max_events:
             raise CalendarAnimError(
-                f"--max-events cannot exceed the absolute safety limit of "
-                f"{ABSOLUTE_SINGLE_FRAME_MAX_EVENTS}"
+                f"--max-events cannot exceed the absolute safety limit of {allowed_max_events}"
             )
         resolved_run_id = _valid_run_id(run_id)
         manifest = read_manifest(manifest_path)
@@ -140,7 +151,7 @@ def plan_animation_command(
             calendar_background_color_id=calendar_background_color_id,
             subcolumn_order_strategy=subcolumn_ordering,
             grid_profile=(
-                f"high-detail-{HIGH_DETAIL_GRID}" if experimental_grid is not None else "production"
+                HIGH_DETAIL_GRID_PROFILE if experimental_grid is not None else "production"
             ),
         )
         store = AnimationRunStore(output_root)
@@ -149,6 +160,11 @@ def plan_animation_command(
         _fail(error)
     typer.echo(f"Animation ID: {plan.animation_id}")
     typer.echo(f"Run ID: {plan.run_id}")
+    typer.echo(f"Source: {plan.source_file}")
+    typer.echo(
+        f"Clip: {plan.clip_start_seconds:.3f}-{plan.clip_end_seconds:.3f} seconds, "
+        f"{plan.clip_duration_seconds:.3f}s at {plan.output_fps:.3f} FPS"
+    )
     typer.echo(f"Frames: {plan.frame_count}")
     typer.echo(f"Weeks: {plan.frame_count} ({plan.start_week} onward)")
     typer.echo(f"Mapping mode: {plan.mapping_mode.value}")
@@ -171,6 +187,7 @@ def plan_animation_command(
         )
     )
     typer.echo(f"Events/frame: {', '.join(str(value) for value in plan.events_per_frame)}")
+    typer.echo(f"Max events/frame: {plan.max_events_per_frame}")
     typer.echo(f"Total events: {plan.total_events}")
     typer.echo(f"Mapper readiness: {'READY' if plan.profile_ready else 'NOT READY'}")
     typer.echo(f"Initial state: {_status_counts(state)}")
@@ -252,6 +269,15 @@ def upload_animation_command(
         else:
             typer.echo(f"Uploading: {created}/{planned}")
 
+    def frame_complete(performance: FrameUploadPerformance) -> None:
+        finished_at = performance.finished_at.isoformat() if performance.finished_at else "pending"
+        typer.echo(f"Completed: {finished_at}")
+        typer.echo(f"Status: {performance.status.value}")
+        typer.echo(f"Created: {performance.created_events}/{performance.planned_events}")
+        typer.echo(f"Failed: {performance.failed_events}")
+        typer.echo(f"Elapsed: {_seconds(performance.elapsed_seconds)}")
+        typer.echo(f"Rate: {_rate(performance.events_per_second)}")
+
     try:
         gateway = _google_gateway()
         service = MultiFrameUploadService(
@@ -259,12 +285,14 @@ def upload_animation_command(
             LabCalendarService(gateway, CalendarConfigStore()),
             store,
             progress=progress,
+            frame_complete=frame_complete,
         )
         state = service.upload(plan, state, recover_partial=recover_partial)
     except KeyboardInterrupt:
         typer.secho("Upload interrupted; the current frame was checkpointed as partial.", fg="red")
         raise typer.Exit(code=130) from None
     except (CalendarAnimError, HttpError, OSError) as error:
+        typer.echo(f"Performance report: {store.performance_json_path(plan.run_id)}")
         _fail(error)
     typer.echo(f"\nAnimation progress: {_status_counts(state)}")
     for frame in state.frames:
@@ -273,6 +301,21 @@ def upload_animation_command(
             f"Frame {frame.frame_index}: {frame.status.value}, "
             f"{frame.created_events}/{frame.planned_events}, duration {duration}"
         )
+    performance = store.load_performance(plan.run_id)
+    invocation = performance.invocations[-1]
+    typer.echo(
+        "Frames uploaded this invocation: "
+        + _frame_indexes(invocation.frames_uploaded_this_invocation)
+    )
+    typer.echo(
+        "Frames previously completed: " + _frame_indexes(invocation.frames_previously_completed)
+    )
+    typer.echo(f"Created: {performance.total_created_events}")
+    typer.echo(f"Failed: {performance.total_failed_events}")
+    typer.echo(f"Total elapsed: {_seconds(performance.total_elapsed_seconds)}")
+    typer.echo(f"Average/frame: {_seconds(performance.average_seconds_per_frame)}")
+    typer.echo(f"Overall events/sec: {_rate(performance.overall_events_per_second)}")
+    typer.echo(f"Performance report: {store.performance_json_path(plan.run_id)}")
     if any(
         frame.status in {FrameUploadStatus.PARTIAL, FrameUploadStatus.FAILED}
         for frame in state.frames
@@ -333,7 +376,11 @@ def cleanup_animation_command(
 
 def _print_upload_summary(plan: MultiFramePlan, state: AnimationUploadState, execute: bool) -> None:
     typer.echo(f"Calendar: {plan.calendar_name}")
-    typer.echo(f"Animation: {plan.run_id}")
+    typer.echo(f"Run: {plan.run_id}")
+    if plan.source_file is not None:
+        typer.echo(f"Source: {plan.source_file}")
+    if plan.clip_start_seconds is not None and plan.clip_end_seconds is not None:
+        typer.echo(f"Clip: {plan.clip_start_seconds:.3f}-{plan.clip_end_seconds:.3f} seconds")
     typer.echo(f"Frames: {plan.frame_count}")
     typer.echo(f"Weeks: {plan.frame_count}")
     typer.echo(f"Grid: {plan.target_grid_width}x{plan.target_grid_height}")
@@ -342,6 +389,8 @@ def _print_upload_summary(plan: MultiFramePlan, state: AnimationUploadState, exe
     typer.echo(f"Summary ordering: {plan.subcolumn_order_strategy.value}")
     typer.echo(f"Events/frame: {', '.join(str(value) for value in plan.events_per_frame)}")
     typer.echo(f"Total planned events: {plan.total_events}")
+    typer.echo(f"Max events/frame: {plan.max_events_per_frame}")
+    typer.echo(f"Largest frame: {max(plan.events_per_frame)}")
     typer.echo(f"Current state: {_status_counts(state)}")
     typer.echo(f"Execution: {'REAL' if execute else 'DRY RUN'}")
 
@@ -379,6 +428,18 @@ def _selected_states(
     if not any(frame.frame_index == frame_index for frame in plan.frames):
         raise CalendarAnimError(f"Animation plan has no frame {frame_index}")
     return [state.frame(frame_index)]
+
+
+def _seconds(value: float | None) -> str:
+    return "pending" if value is None else f"{value:.2f}s"
+
+
+def _rate(value: float | None) -> str:
+    return "pending" if value is None else f"{value:.2f} events/s"
+
+
+def _frame_indexes(values: list[int]) -> str:
+    return ", ".join(str(value) for value in values) if values else "none"
 
 
 def register_multi_frame_commands(app: typer.Typer) -> None:

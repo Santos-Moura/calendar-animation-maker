@@ -17,6 +17,7 @@ class FrameUploadStatus(StrEnum):
 
 class FrameUploadPlan(BaseModel):
     frame_index: int = Field(ge=0)
+    source_timestamp_seconds: float | None = Field(default=None, ge=0)
     week_start: date
     frame_run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     planned_events: int = Field(ge=0)
@@ -29,6 +30,11 @@ class MultiFramePlan(BaseModel):
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     calendar_name: str = "Calendar Animation Lab"
     timezone: str
+    source_file: str | None = None
+    clip_start_seconds: float | None = Field(default=None, ge=0)
+    clip_end_seconds: float | None = Field(default=None, gt=0)
+    clip_duration_seconds: float | None = Field(default=None, gt=0)
+    output_fps: float | None = Field(default=None, gt=0)
     start_week: date
     frame_start: int = Field(ge=0)
     frame_count: int = Field(gt=0)
@@ -60,6 +66,24 @@ class MultiFramePlan(BaseModel):
             raise ValueError("total_events does not match events_per_frame")
         if [frame.planned_events for frame in self.frames] != self.events_per_frame:
             raise ValueError("frame planned event counts do not match events_per_frame")
+        clip = (
+            self.source_file,
+            self.clip_start_seconds,
+            self.clip_end_seconds,
+            self.clip_duration_seconds,
+            self.output_fps,
+        )
+        if any(value is not None for value in clip):
+            if any(value is None for value in clip):
+                raise ValueError("persisted source clip metadata must be complete")
+            assert self.clip_start_seconds is not None
+            assert self.clip_end_seconds is not None
+            assert self.clip_duration_seconds is not None
+            expected_end = self.clip_start_seconds + self.clip_duration_seconds
+            if abs(self.clip_end_seconds - expected_end) > 1e-6:
+                raise ValueError("clip end does not match start plus duration")
+            if any(frame.source_timestamp_seconds is None for frame in self.frames):
+                raise ValueError("persisted source timestamps must be complete")
         geometry = (
             self.slots_per_day,
             self.vertical_step_minutes,
