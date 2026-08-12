@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,7 @@ from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.models import (
     CalendarEventDraft,
     CalendarWriteFailure,
+    CalendarWritePacingSnapshot,
     CalendarWriteResult,
 )
 from calendar_anim.calendar.multi_frame.artifacts import (
@@ -23,6 +24,7 @@ from calendar_anim.calendar.multi_frame.models import (
     UploadPauseReason,
 )
 from calendar_anim.calendar.multi_frame.planner import build_multi_frame_plan
+from calendar_anim.calendar.multi_frame.quota_wait import QuotaWaitPolicy
 from calendar_anim.calendar.multi_frame.retry import UploadRetryPolicy
 from calendar_anim.calendar.multi_frame.service import (
     CalendarUsageQuotaPause,
@@ -168,6 +170,86 @@ class QuotaAfterSuccessfulCreationsGateway(FakeCalendarGateway):
                 quota_circuit_breaker_count=1,
             )
         return super().create_events(calendar_id, events)
+
+
+class AutomaticQuotaGateway(FakeCalendarGateway):
+    def __init__(self, quota_failures: int, current_interval_seconds: float = 2.25) -> None:
+        super().__init__()
+        self.quota_failures = quota_failures
+        self.submitted_lengths: list[int] = []
+        self.pacing = CalendarWritePacingSnapshot(
+            minimum_interval_seconds=0.75,
+            current_interval_seconds=current_interval_seconds,
+            maximum_interval_seconds=3.0,
+            successful_writes_since_rate_limit=17,
+        )
+        self.restored_pacing: list[CalendarWritePacingSnapshot] = []
+
+    def create_events(
+        self, calendar_id: str, events: Sequence[CalendarEventDraft]
+    ) -> CalendarWriteResult:
+        self.submitted_lengths.append(len(events))
+        if self.quota_failures:
+            self.quota_failures -= 1
+            self.create_event_calls += 1
+            return CalendarWriteResult(
+                failed_events=len(events),
+                errors=["Calendar usage limits exceeded (quotaExceeded)"],
+                failures=[
+                    CalendarWriteFailure(
+                        event_index=index,
+                        message="Calendar usage limits exceeded",
+                        retryable=False,
+                        status_code=403,
+                        reason="quotaExceeded",
+                    )
+                    for index in range(len(events))
+                ],
+                quota_exceeded_count=1,
+                quota_circuit_breaker_count=1,
+            )
+        return super().create_events(calendar_id, events)
+
+    def write_pacing_snapshot(self) -> CalendarWritePacingSnapshot:
+        return self.pacing
+
+    def restore_write_pacing(self, snapshot: CalendarWritePacingSnapshot) -> None:
+        self.pacing = snapshot
+        self.restored_pacing.append(snapshot)
+
+
+class FakeUploadClock:
+    def __init__(self) -> None:
+        self.current = datetime(2026, 8, 12, tzinfo=UTC)
+        self.elapsed = 0.0
+        self.sleeps: list[float] = []
+        self.interrupt_next_sleep = False
+
+    def now(self) -> datetime:
+        return self.current
+
+    def monotonic(self) -> float:
+        return self.elapsed
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        if self.interrupt_next_sleep:
+            self.interrupt_next_sleep = False
+            raise KeyboardInterrupt
+        self.advance(seconds)
+
+    def advance(self, seconds: float) -> None:
+        self.elapsed += seconds
+        self.current += timedelta(seconds=seconds)
+
+
+def _quota_policy(*, max_auto_wait_seconds: float = 48 * 60 * 60) -> QuotaWaitPolicy:
+    return QuotaWaitPolicy(
+        cooldown_seconds=(900.0, 1800.0, 3600.0, 7200.0, 14400.0),
+        jitter_seconds=0.0,
+        max_auto_wait_seconds=max_auto_wait_seconds,
+        conservative_recovery_interval_seconds=1.5,
+    )
 
 
 class PersistThenCrashGateway(FakeCalendarGateway):
@@ -396,6 +478,209 @@ def test_legacy_quota_failure_is_normalized_to_partial_pause(tmp_path: Path) -> 
     assert state.pause is not None
     assert state.pause.frame_index == 0
     assert state.pause.created_before_pause == 12
+
+
+def test_automatic_quota_wait_progression_recovers_without_duplicates(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    gateway = AutomaticQuotaGateway(quota_failures=5)
+    clock = FakeUploadClock()
+    waits: list[tuple[int, float]] = []
+    service = _service(
+        gateway,
+        store,
+        tmp_path,
+        chunk_size=50,
+        now=clock.now,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        quota_wait_policy=_quota_policy(),
+        quota_wait_callback=lambda wait, remaining: waits.append((wait.stage_index, remaining)),
+    )
+
+    uploaded = service.upload(plan, state)
+
+    assert uploaded.frames[0].status is FrameUploadStatus.COMPLETED
+    assert clock.sleeps == [900.0, 1800.0, 3600.0, 7200.0, 14400.0]
+    assert waits == [
+        (0, 900.0),
+        (1, 1800.0),
+        (2, 3600.0),
+        (3, 7200.0),
+        (4, 14400.0),
+    ]
+    assert gateway.submitted_lengths[:6] == [50, 1, 1, 1, 1, 1]
+    assert uploaded.quota_wait is None
+    assert uploaded.pause is None
+    assert uploaded.quota_wait_entries == 1
+    assert uploaded.quota_wait_attempts == 5
+    assert uploaded.quota_recoveries == 1
+    assert uploaded.quota_wait_total_seconds == 27900.0
+    assert uploaded.largest_quota_cooldown_seconds == 14400.0
+    assert len(uploaded.pause_history) == 5
+    assert uploaded.write_pacing is not None
+    assert uploaded.write_pacing.current_interval_seconds == 2.25
+    calendar_id = uploaded.calendar_id or ""
+    assert len(gateway.events[calendar_id]) == 1008
+    assert len({event.id for event in gateway.events[calendar_id]}) == 1008
+    assert gateway.delete_event_calls == 0
+
+    performance = store.load_performance(plan.run_id)
+    assert performance.quota_wait_entries == 1
+    assert performance.quota_wait_attempts == 5
+    assert performance.quota_recoveries == 1
+    assert performance.quota_wait_total_seconds == 27900.0
+    assert performance.wall_clock_elapsed_seconds == 27900.0
+    assert performance.active_upload_elapsed_seconds == 0.0
+
+
+def test_ctrl_c_during_quota_wait_checkpoints_absolute_retry(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    gateway = AutomaticQuotaGateway(quota_failures=1)
+    clock = FakeUploadClock()
+    clock.interrupt_next_sleep = True
+    service = _service(
+        gateway,
+        store,
+        tmp_path,
+        now=clock.now,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        quota_wait_policy=_quota_policy(),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        service.upload(plan, state)
+
+    saved = store.load_state(plan.run_id)
+    assert saved.frames[0].status is FrameUploadStatus.PARTIAL
+    assert saved.quota_wait is not None
+    assert saved.quota_wait.next_retry_at == clock.current + timedelta(minutes=15)
+    assert saved.quota_wait_total_seconds == 0
+    assert gateway.create_event_calls == 1
+
+
+def test_quota_recovery_raises_low_pacing_to_conservative_interval(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    gateway = AutomaticQuotaGateway(quota_failures=1, current_interval_seconds=0.75)
+    clock = FakeUploadClock()
+    uploaded = _service(
+        gateway,
+        store,
+        tmp_path,
+        now=clock.now,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        quota_wait_policy=_quota_policy(),
+    ).upload(plan, state)
+
+    assert uploaded.write_pacing is not None
+    assert uploaded.write_pacing.current_interval_seconds == 1.5
+    assert uploaded.write_pacing.successful_writes_since_rate_limit == 0
+
+
+def test_restart_during_quota_cooldown_waits_then_probes_one_event(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    gateway = AutomaticQuotaGateway(quota_failures=1)
+    clock = FakeUploadClock()
+    clock.interrupt_next_sleep = True
+    first = _service(
+        gateway,
+        store,
+        tmp_path,
+        now=clock.now,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        quota_wait_policy=_quota_policy(),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        first.upload(plan, state)
+
+    clock.sleeps.clear()
+    resumed = _service(
+        gateway,
+        store,
+        tmp_path,
+        now=clock.now,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        quota_wait_policy=_quota_policy(),
+    ).upload(plan, store.load_state(plan.run_id))
+
+    assert clock.sleeps[0] == 900.0
+    assert gateway.submitted_lengths[:2] == [50, 1]
+    assert resumed.frames[0].status is FrameUploadStatus.COMPLETED
+    assert resumed.quota_recoveries == 1
+    assert gateway.restored_pacing
+    assert gateway.restored_pacing[0].current_interval_seconds == 2.25
+
+
+def test_restart_after_quota_cooldown_probes_immediately(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    gateway = AutomaticQuotaGateway(quota_failures=1)
+    clock = FakeUploadClock()
+    clock.interrupt_next_sleep = True
+    first = _service(
+        gateway,
+        store,
+        tmp_path,
+        now=clock.now,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        quota_wait_policy=_quota_policy(),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        first.upload(plan, state)
+
+    clock.advance(901.0)
+    clock.sleeps.clear()
+    resumed = _service(
+        gateway,
+        store,
+        tmp_path,
+        now=clock.now,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        quota_wait_policy=_quota_policy(),
+    ).upload(plan, store.load_state(plan.run_id))
+
+    assert clock.sleeps == []
+    assert gateway.submitted_lengths[:2] == [50, 1]
+    assert resumed.frames[0].status is FrameUploadStatus.COMPLETED
+
+
+def test_maximum_automatic_quota_wait_stops_safely(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    gateway = AutomaticQuotaGateway(quota_failures=100)
+    clock = FakeUploadClock()
+    policy = QuotaWaitPolicy(
+        cooldown_seconds=(60.0,),
+        jitter_seconds=0.0,
+        max_auto_wait_seconds=100.0,
+        conservative_recovery_interval_seconds=1.5,
+    )
+    service = _service(
+        gateway,
+        store,
+        tmp_path,
+        now=clock.now,
+        clock=clock.monotonic,
+        sleeper=clock.sleep,
+        quota_wait_policy=policy,
+    )
+
+    with pytest.raises(CalendarUsageQuotaPause) as raised:
+        service.upload(plan, state)
+
+    saved = store.load_state(plan.run_id)
+    assert raised.value.automatic_wait_exhausted is True
+    assert clock.sleeps == [60.0, 40.0]
+    assert gateway.create_event_calls == 3
+    assert saved.frames[0].status is FrameUploadStatus.PARTIAL
+    assert saved.quota_wait is not None
+    assert saved.quota_wait.exhausted is True
+    assert saved.quota_wait_total_seconds == 100.0
+    assert saved.quota_wait_attempts == 2
+    assert gateway.delete_event_calls == 0
 
 
 def test_response_loss_after_persistence_is_idempotent(tmp_path: Path) -> None:

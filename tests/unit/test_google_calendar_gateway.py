@@ -207,6 +207,23 @@ def test_google_gateway_opens_quota_circuit_without_request_storm() -> None:
     assert gateway.current_write_interval_seconds == pytest.approx(0.75)
 
 
+def test_google_gateway_pacing_snapshot_restores_adaptive_progress() -> None:
+    gateway = GoogleCalendarGateway(RecordingGoogleService())
+    gateway.configure_write_pacing(
+        0.75,
+        current_interval_seconds=2.25,
+        successful_writes_since_rate_limit=17,
+    )
+    snapshot = gateway.write_pacing_snapshot()
+    restored = GoogleCalendarGateway(RecordingGoogleService())
+
+    restored.restore_write_pacing(snapshot)
+
+    assert restored.minimum_write_interval_seconds == 0.75
+    assert restored.current_write_interval_seconds == 2.25
+    assert restored.write_pacing_snapshot().successful_writes_since_rate_limit == 17
+
+
 def test_google_gateway_spaces_write_starts_at_configured_interval() -> None:
     service = RecordingGoogleService()
     gateway = GoogleCalendarGateway(service)
