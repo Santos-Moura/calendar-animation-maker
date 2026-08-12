@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
+from typing import Protocol, cast
 
 from calendar_anim.calendar.event_identity import deterministic_event_id
 from calendar_anim.calendar.frame_mapping.models import SingleFrameCalendarPlan
@@ -72,10 +72,16 @@ class RecurrenceStudyResult:
     migration_plan: RecurrenceMigrationPlan
 
 
+class RecurrenceFramePlanStore(Protocol):
+    def load_frame_plan(
+        self, plan: MultiFramePlan, frame_index: int
+    ) -> SingleFrameCalendarPlan: ...
+
+
 def build_recurrence_study(
     plan: MultiFramePlan,
     state: AnimationUploadState,
-    store: AnimationRunStore,
+    store: AnimationRunStore | RecurrenceFramePlanStore,
     *,
     migration_chunk_size: int = 100,
     generated_at: datetime | None = None,
@@ -173,7 +179,9 @@ def expand_migration_plan(plan: RecurrenceMigrationPlan) -> set[str]:
     return {key for parent in plan.parents for key in parent.occurrence_keys}
 
 
-def _load_occurrences(plan: MultiFramePlan, store: AnimationRunStore) -> list[_Occurrence]:
+def _load_occurrences(
+    plan: MultiFramePlan, store: AnimationRunStore | RecurrenceFramePlanStore
+) -> list[_Occurrence]:
     occurrences: list[_Occurrence] = []
     for frame in plan.frames:
         frame_plan = store.load_frame_plan(plan, frame.frame_index)
