@@ -69,6 +69,9 @@ from calendar_anim.calendar.profiles.commands import register_profile_commands
 from calendar_anim.calendar.recurrence_compaction.commands import (
     register_recurrence_compaction_commands,
 )
+from calendar_anim.calendar.recurrence_upload.commands import (
+    register_recurrence_upload_commands,
+)
 from calendar_anim.calendar.recurrence_validation.commands import (
     register_recurrence_validation_commands,
 )
@@ -915,6 +918,7 @@ def register_calendar_commands(app: typer.Typer) -> None:
     register_profile_commands(app)
     register_recurrence_compaction_commands(app)
     register_recurrence_validation_commands(app)
+    register_recurrence_upload_commands(app)
     register_capture_commands(app)
     register_vertical_compression_commands(app)
     register_horizontal_band_compression_commands(app)
