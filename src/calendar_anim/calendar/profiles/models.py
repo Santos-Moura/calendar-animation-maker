@@ -14,6 +14,7 @@ class CalendarAccountProfile(BaseModel):
     description: str | None = None
     authenticated_google_account: str | None = None
     browser_profile_directory: Path
+    capture_zoom_percent: int = Field(default=33, ge=25, le=500)
     legacy_compatible: bool = False
 
     @field_validator("token_file", "browser_profile_directory")
@@ -39,3 +40,4 @@ class CalendarProfileInspection(BaseModel):
     calendar_exists: bool | None = None
     calendar_access_role: str | None = None
     browser_profile_directory: Path
+    capture_zoom_percent: int

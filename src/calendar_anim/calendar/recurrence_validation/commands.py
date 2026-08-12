@@ -16,6 +16,7 @@ from calendar_anim.calendar.capture.models import (
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.models import CalendarInfo
 from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
+from calendar_anim.calendar.profiles.models import CalendarAccountProfile
 from calendar_anim.calendar.profiles.service import CalendarProfileService
 from calendar_anim.calendar.profiles.store import (
     DEFAULT_PROFILE_NAME,
@@ -66,6 +67,19 @@ def _selected_profile(requested: str | None, planned: str) -> str:
             f"Validation belongs to profile {planned!r}, not requested profile {selected!r}"
         )
     return selected
+
+
+def _recurrence_capture_config(
+    profile: CalendarAccountProfile,
+    profile_directory: Path | None = None,
+) -> CalendarCaptureConfig:
+    return CalendarCaptureConfig(
+        profile_directory=profile_directory or profile.browser_profile_directory,
+        browser_channel=BrowserChannel.CHROME,
+        browser_zoom_percent=profile.capture_zoom_percent,
+        visible_start_hour=6,
+        visible_end_hour=24,
+    )
 
 
 def prepare_recurrence_validation_command(
@@ -207,6 +221,9 @@ def capture_recurrence_validation_command(
         _fail(error)
     typer.echo(f"Validation: {plan.validation_id}")
     typer.echo(f"Profile: {selected_profile}")
+    typer.echo(f"Browser zoom: {calendar_profile.capture_zoom_percent}%")
+    typer.echo("Positioning: required Calendar vertical scroller, 06:00-00:00")
+    typer.echo("No-scroll fallback: disabled")
     typer.echo("Screenshots: 6 (3 recurring/control pairs)")
     typer.echo(f"Execution: {'REAL BROWSER' if execute else 'DRY RUN'}")
     typer.echo(f"Output: {store.capture_directory(plan.validation_id)}")
@@ -215,13 +232,7 @@ def capture_recurrence_validation_command(
         return
     if state is None or state.status.value != "completed":
         _fail(CalendarAnimError("Validation upload must be completed before capture"))
-    config = CalendarCaptureConfig(
-        profile_directory=profile_directory or calendar_profile.browser_profile_directory,
-        browser_channel=BrowserChannel.CHROME,
-        browser_zoom_percent=33,
-        visible_start_hour=6,
-        visible_end_hour=24,
-    )
+    config = _recurrence_capture_config(calendar_profile, profile_directory)
     hashes: dict[str, str] = {}
     try:
         with PlaywrightCalendarCaptureGateway(config) as gateway:
@@ -244,8 +255,10 @@ def capture_recurrence_validation_command(
             "calendar_profile": plan.calendar_profile,
             "screenshots": hashes,
             "comparison": str(comparison),
-            "browser_zoom_percent": 33,
+            "browser_zoom_percent": calendar_profile.capture_zoom_percent,
             "visible_window": "06:00-00:00",
+            "positioning_mode": "required-vertical-scroller",
+            "no_scroll_fallback": False,
             "calendar_writes": False,
         }
         report_path = store.capture_directory(plan.validation_id) / "capture-report.json"

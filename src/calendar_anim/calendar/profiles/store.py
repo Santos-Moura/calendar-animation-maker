@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -12,6 +13,14 @@ DEFAULT_PROFILE_NAME = "account-a"
 DEFAULT_SECONDARY_PROFILE_NAME = "account-b"
 DEFAULT_CALENDAR_NAME = "Calendar Animation Lab"
 DEFAULT_SECONDARY_CALENDAR_NAME = "Calendar Animation Lab B"
+DEFAULT_ACCOUNT_A_CAPTURE_ZOOM = 33
+DEFAULT_ACCOUNT_B_CAPTURE_ZOOM = 90
+
+
+def default_capture_zoom(profile_name: str) -> int:
+    if profile_name == DEFAULT_SECONDARY_PROFILE_NAME:
+        return DEFAULT_ACCOUNT_B_CAPTURE_ZOOM
+    return DEFAULT_ACCOUNT_A_CAPTURE_ZOOM
 
 
 class CalendarProfileStore:
@@ -69,6 +78,7 @@ class CalendarProfileStore:
                 raise CalendarAnimError(
                     f"Profile {profile_name!r} already exists with different settings"
                 )
+            self.save(existing)
             return existing
         default_name = (
             DEFAULT_CALENDAR_NAME
@@ -84,6 +94,7 @@ class CalendarProfileStore:
             timezone=timezone,
             description=description,
             browser_profile_directory=self.browser_profile_directory(profile_name),
+            capture_zoom_percent=default_capture_zoom(profile_name),
             legacy_compatible=profile_name == DEFAULT_PROFILE_NAME,
         )
         self.save(profile)
@@ -101,7 +112,9 @@ class CalendarProfileStore:
         path = self.profile_path(profile_name)
         if path.is_file():
             try:
-                return CalendarAccountProfile.model_validate_json(path.read_text(encoding="utf-8"))
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload.setdefault("capture_zoom_percent", default_capture_zoom(profile_name))
+                return CalendarAccountProfile.model_validate(payload)
             except (OSError, ValidationError, ValueError) as error:
                 raise CalendarAnimError(f"Invalid Calendar profile: {path}") from error
         if profile_name != DEFAULT_PROFILE_NAME:
@@ -116,6 +129,7 @@ class CalendarProfileStore:
             calendar_name=legacy.lab_calendar_name or DEFAULT_CALENDAR_NAME,
             timezone="America/Sao_Paulo",
             browser_profile_directory=self.browser_profile_directory(DEFAULT_PROFILE_NAME),
+            capture_zoom_percent=DEFAULT_ACCOUNT_A_CAPTURE_ZOOM,
             legacy_compatible=True,
         )
 

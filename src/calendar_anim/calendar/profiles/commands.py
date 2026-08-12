@@ -35,6 +35,7 @@ def _print_inspection(inspection: CalendarProfileInspection) -> None:
     typer.echo(f"CALENDAR ID: {inspection.calendar_id or 'not selected'}")
     typer.echo(f"Timezone: {inspection.timezone}")
     typer.echo(f"Browser profile: {inspection.browser_profile_directory}")
+    typer.echo(f"Capture zoom: {inspection.capture_zoom_percent}%")
     if inspection.calendar_exists is not None:
         typer.echo(f"Calendar exists remotely: {'YES' if inspection.calendar_exists else 'NO'}")
     if inspection.calendar_access_role is not None:

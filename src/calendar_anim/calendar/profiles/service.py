@@ -93,6 +93,7 @@ class CalendarProfileService:
             calendar_name=profile.calendar_name,
             timezone=profile.timezone,
             browser_profile_directory=profile.browser_profile_directory,
+            capture_zoom_percent=profile.capture_zoom_percent,
         )
 
     def inspect_remote(self, profile_name: str) -> CalendarProfileInspection:
