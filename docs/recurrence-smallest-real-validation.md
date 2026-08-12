@@ -75,3 +75,7 @@ animation's `run_id` and cannot select its existing events.
 
 Interactive confirmation is mandatory. Without `--execute`, upload, capture, and cleanup are all
 local dry-runs.
+
+For the isolated secondary-account variant, see
+[Google Calendar account profiles](calendar-account-profiles.md). The B plan uses validation ID
+`recurrence-rdate-account-b-01`, new weeks, and profile-scoped private metadata.

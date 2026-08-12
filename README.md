@@ -253,6 +253,12 @@ six post-run weeks. Its real upload is separately confirmed, preflights clean we
 exact insert/error counts, captures paired Playwright screenshots, and cleans up only its own
 private validation metadata.
 
+OAuth tokens and selected lab calendars can also be isolated by named
+[Google Calendar account profiles](docs/calendar-account-profiles.md). Existing artifacts and the
+legacy token/calendar remain `account-a`; the prepared `account-b` recurrence gate uses its own
+token, calendar config, Chrome profile, preflight, and cleanup boundary. No bulk recurrence upload
+is enabled by profile setup alone.
+
 Cleanup is local by default and can target one frame or the whole run:
 
 ```powershell
