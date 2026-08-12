@@ -30,6 +30,17 @@ from calendar_anim.calendar.recurrence_validation.artifacts import (
 from calendar_anim.calendar.recurrence_validation.gateway import (
     GoogleRecurrenceValidationGateway,
 )
+from calendar_anim.calendar.recurrence_validation.ordering import (
+    ORDERING_START_WEEK,
+    ORDERING_VALIDATION_ID,
+    OrderingDomEvent,
+    OrderingDomSnapshot,
+    OrderingValidationStore,
+    RecurrenceOrderingValidationPlan,
+    analyze_snapshots,
+    build_ordering_validation_plan,
+    compose_ordering_comparison,
+)
 from calendar_anim.calendar.recurrence_validation.planner import (
     build_recurrence_validation_plan,
 )
@@ -332,8 +343,281 @@ def cleanup_recurrence_validation_command(
     typer.echo(f"Cleanup report: {store.cleanup_report_path(plan.validation_id)}")
 
 
+def prepare_recurrence_ordering_validation_command(
+    validation_id: Annotated[str, typer.Option("--validation-id")] = ORDERING_VALIDATION_ID,
+    source_run_id: Annotated[str, typer.Option("--source-run-id")] = DEFAULT_SOURCE_RUN_ID,
+    start_week_value: Annotated[str, typer.Option("--start-week")] = str(ORDERING_START_WEEK),
+    profile_name: Annotated[str, typer.Option("--profile")] = "account-b",
+    calendar_name: Annotated[str, typer.Option("--calendar-name")] = "Calendar Animation Lab B",
+    animation_output_root: Annotated[Path, typer.Option("--animation-output-root")] = Path(
+        "output/animation-runs"
+    ),
+    output_root: Annotated[Path, typer.Option("--output-root")] = Path(
+        "output/recurrence-validation"
+    ),
+) -> None:
+    """Prepare the isolated 18-slot recurrence ordering validation locally."""
+
+    try:
+        plan = build_ordering_validation_plan(
+            AnimationRunStore(animation_output_root),
+            validation_id=_validation_id(validation_id),
+            source_run_id=source_run_id,
+            start_week=date.fromisoformat(start_week_value),
+            calendar_profile=profile_name,
+            calendar_name=calendar_name,
+        )
+        store = OrderingValidationStore(output_root)
+        path = store.save_plan(plan)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Validation: {plan.validation_id}")
+    typer.echo(f"PROFILE: {plan.calendar_profile}")
+    typer.echo(f"CALENDAR: {plan.calendar_name}")
+    typer.echo("Recurring: 18 parents x 3 displayed weeks")
+    typer.echo("Standalone controls: 18")
+    typer.echo("EXPECTED INSERTS: 36")
+    typer.echo(f"Weeks: {plan.first_week} through {plan.last_week}")
+    typer.echo(f"Plan: {path}")
+    typer.echo("Google Calendar calls: NO")
+
+
+def _ordering_profile_calendar(
+    plan: RecurrenceOrderingValidationPlan,
+) -> tuple[CalendarAccountProfile, GoogleRecurrenceValidationGateway, CalendarInfo]:
+    profiles = _profile_service()
+    profile, base_gateway = profiles.gateway(plan.calendar_profile)
+    if not isinstance(base_gateway, GoogleRecurrenceValidationGateway):
+        raise CalendarAnimError("Profile gateway does not support recurrence validation")
+    calendar = LabCalendarService(
+        base_gateway,
+        ProfileCalendarConfigStore(profiles.store, plan.calendar_profile),
+    ).find(plan.calendar_name)
+    if calendar is None:
+        raise CalendarAnimError("Configured laboratory calendar was not found")
+    if calendar.access_role != "owner":
+        raise CalendarAnimError("Account B does not own the ordering validation calendar")
+    if profile.calendar_id != calendar.id:
+        raise CalendarAnimError("Profile calendar ID changed during validation preflight")
+    return profile, base_gateway, calendar
+
+
+def upload_recurrence_ordering_validation_command(
+    validation_id: Annotated[str, typer.Option("--validation-id")] = ORDERING_VALIDATION_ID,
+    profile_name: Annotated[str, typer.Option("--profile")] = "account-b",
+    output_root: Annotated[Path, typer.Option("--output-root")] = Path(
+        "output/recurrence-validation"
+    ),
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Preflight clean Account-B weeks and create at most 36 validation resources."""
+
+    try:
+        store = OrderingValidationStore(output_root)
+        plan = store.load_plan(_validation_id(validation_id))
+        selected = _selected_profile(profile_name, plan.calendar_profile)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"PROFILE: {selected}")
+    typer.echo(f"CALENDAR: {plan.calendar_name}")
+    typer.echo(f"VALIDATION ID: {plan.validation_id}")
+    typer.echo("EXPECTED INSERTS: 36")
+    typer.echo("Preflight: abort if unrelated events exist in any validation week")
+    typer.echo(f"EXECUTION: {'REAL' if execute else 'DRY RUN'}")
+    if not execute:
+        typer.echo("No authentication or Calendar API call was performed.")
+        return
+    try:
+        profile, gateway, calendar = _ordering_profile_calendar(plan)
+        typer.echo(f"ACCOUNT: {profile.authenticated_google_account}")
+        typer.echo(f"CALENDAR ID: {calendar.id}")
+        typer.confirm("Create only these 36 metadata-scoped Account-B resources?", abort=True)
+        state = RecurrenceValidationService(
+            gateway, store, lambda _name, _timezone: (calendar, False)
+        ).upload(plan)
+    except (CalendarAnimError, HttpError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Status: {state.status.value}")
+    typer.echo(f"events.insert calls: {state.events_insert_calls}")
+    typer.echo(f"rateLimitExceeded: {state.rate_limit_exceeded_count}")
+    typer.echo(f"quotaExceeded: {state.quota_exceeded_count}")
+
+
+def _ordering_snapshot(
+    gateway: PlaywrightCalendarCaptureGateway,
+    plan: RecurrenceOrderingValidationPlan,
+    *,
+    label: str,
+    week_start: date,
+) -> OrderingDomSnapshot:
+    raw = gateway.collect_zero_width_event_geometry(plan.summaries, plan.color_ids)
+    by_slot: dict[int, OrderingDomEvent] = {}
+    for item in raw:
+        event = OrderingDomEvent.model_validate(item)
+        current = by_slot.get(event.slot_index)
+        if current is None or event.width * event.height > current.width * current.height:
+            by_slot[event.slot_index] = event
+    events = list(by_slot.values())
+    ordered = sorted(events, key=lambda item: (item.x, item.slot_index))
+    slot_order = [item.slot_index for item in ordered]
+    return OrderingDomSnapshot(
+        label=label,
+        week_start=week_start,
+        events=events,
+        summaries_preserved=len(events) == 18
+        and all(event.summary == plan.summaries[event.slot_index] for event in events),
+        strictly_increasing_x=len(ordered) == 18
+        and all(left.x < right.x for left, right in zip(ordered, ordered[1:], strict=False)),
+        slot_order=slot_order,
+    )
+
+
+def capture_recurrence_ordering_validation_command(
+    validation_id: Annotated[str, typer.Option("--validation-id")] = ORDERING_VALIDATION_ID,
+    profile_name: Annotated[str, typer.Option("--profile")] = "account-b",
+    output_root: Annotated[Path, typer.Option("--output-root")] = Path(
+        "output/recurrence-validation"
+    ),
+    profile_directory: Annotated[Path | None, typer.Option("--profile-directory")] = None,
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Capture ordering, DOM geometry, refresh, and navigation stability."""
+
+    try:
+        store = OrderingValidationStore(output_root)
+        plan = store.load_plan(_validation_id(validation_id))
+        selected = _selected_profile(profile_name, plan.calendar_profile)
+        profile = CalendarProfileStore().load(selected)
+        state = store.load_state(plan.validation_id)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Validation: {plan.validation_id}")
+    typer.echo(f"Profile: {selected}")
+    typer.echo(f"Browser zoom: {profile.capture_zoom_percent}%")
+    typer.echo("Positioning: required Calendar vertical scroller, 06:00-00:00")
+    typer.echo("DOM analysis: exact Unicode + x/width/y/height + CSS color")
+    typer.echo(f"Execution: {'REAL BROWSER' if execute else 'DRY RUN'}")
+    if not execute:
+        typer.echo("No browser was opened and no Calendar API call was made.")
+        return
+    if state is None or state.status.value != "completed":
+        _fail(CalendarAnimError("Ordering validation upload must be completed before capture"))
+    if profile.capture_zoom_percent != 90:
+        _fail(CalendarAnimError("Account B ordering capture is locked to 90% zoom"))
+    recurring = plan.recurring_weeks[0]
+    away = plan.recurring_weeks[1]
+    snapshots: list[OrderingDomSnapshot] = []
+    try:
+        with PlaywrightCalendarCaptureGateway(
+            _recurrence_capture_config(profile, profile_directory)
+        ) as gateway:
+            gateway.open_week(recurring)
+            gateway.wait_until_ready(recurring, 18)
+            gateway.capture(store.screenshot_path(plan.validation_id, "recurring-initial"))
+            snapshots.append(
+                _ordering_snapshot(gateway, plan, label="recurring-initial", week_start=recurring)
+            )
+            gateway.reload_current_week(recurring, 18)
+            gateway.capture(store.screenshot_path(plan.validation_id, "recurring-refresh"))
+            snapshots.append(
+                _ordering_snapshot(gateway, plan, label="recurring-refresh", week_start=recurring)
+            )
+            gateway.open_week(away)
+            gateway.wait_until_ready(away, 18)
+            snapshots.append(
+                _ordering_snapshot(gateway, plan, label="recurring-week-2", week_start=away)
+            )
+            gateway.open_week(recurring)
+            gateway.wait_until_ready(recurring, 18)
+            gateway.capture(store.screenshot_path(plan.validation_id, "recurring-navigation"))
+            snapshots.append(
+                _ordering_snapshot(
+                    gateway, plan, label="recurring-navigation", week_start=recurring
+                )
+            )
+            third = plan.recurring_weeks[2]
+            gateway.open_week(third)
+            gateway.wait_until_ready(third, 18)
+            snapshots.append(
+                _ordering_snapshot(gateway, plan, label="recurring-week-3", week_start=third)
+            )
+            gateway.open_week(plan.standalone_week)
+            gateway.wait_until_ready(plan.standalone_week, 18)
+            gateway.capture(store.screenshot_path(plan.validation_id, "standalone"))
+            snapshots.append(
+                _ordering_snapshot(
+                    gateway, plan, label="standalone", week_start=plan.standalone_week
+                )
+            )
+        comparison = compose_ordering_comparison(plan, store)
+        result = analyze_snapshots(plan, snapshots, comparison)
+        report_path = store.capture_report_path(plan.validation_id)
+        report_path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"RECURRENCE ZERO-WIDTH ORDERING = {result.result}")
+    typer.echo(f"18/18 summaries: {'YES' if result.summaries_preserved_18_of_18 else 'NO'}")
+    typer.echo(f"Strict x ordering: {'YES' if result.strict_x_ordering else 'NO'}")
+    typer.echo(f"Recurring == standalone: {'YES' if result.recurring_equals_standalone else 'NO'}")
+    typer.echo(f"Refresh stable: {'YES' if result.refresh_stable else 'NO'}")
+    typer.echo(f"Navigation stable: {'YES' if result.navigation_stable else 'NO'}")
+    typer.echo(f"Comparison: {comparison}")
+    typer.echo(f"DOM report: {report_path}")
+    typer.echo("Calendar writes during capture: NO")
+
+
+def cleanup_recurrence_ordering_validation_command(
+    validation_id: Annotated[str, typer.Option("--validation-id")] = ORDERING_VALIDATION_ID,
+    profile_name: Annotated[str, typer.Option("--profile")] = "account-b",
+    output_root: Annotated[Path, typer.Option("--output-root")] = Path(
+        "output/recurrence-validation"
+    ),
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Delete only the metadata-scoped Account-B ordering validation."""
+
+    try:
+        store = OrderingValidationStore(output_root)
+        plan = store.load_plan(_validation_id(validation_id))
+        _selected_profile(profile_name, plan.calendar_profile)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"PROFILE: {plan.calendar_profile}")
+    typer.echo(f"VALIDATION ID: {plan.validation_id}")
+    typer.echo("Filter: generated_by + validation_id + calendar_profile")
+    typer.echo(f"Execution: {'REAL DELETE' if execute else 'DRY RUN'}")
+    if not execute:
+        typer.echo("No authentication, Calendar lookup, or deletion was performed.")
+        return
+    try:
+        profile, gateway, calendar = _ordering_profile_calendar(plan)
+        typer.echo(f"ACCOUNT: {profile.authenticated_google_account}")
+        typer.echo(f"CALENDAR: {calendar.name}")
+        typer.confirm("Delete only this Account-B ordering validation?", abort=True)
+        result = RecurrenceValidationService(
+            gateway, store, lambda _name, _timezone: (calendar, False)
+        ).cleanup(plan, calendar)
+    except (CalendarAnimError, HttpError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Matched resources: {len(result.matched_resource_ids)}")
+    typer.echo(f"Deleted resources: {result.deleted_resources}")
+    typer.echo(f"Failed deletions: {result.failed_deletions}")
+
+
 def register_recurrence_validation_commands(app: typer.Typer) -> None:
     app.command("prepare-recurrence-validation")(prepare_recurrence_validation_command)
     app.command("upload-recurrence-validation")(upload_recurrence_validation_command)
     app.command("capture-recurrence-validation")(capture_recurrence_validation_command)
     app.command("cleanup-recurrence-validation")(cleanup_recurrence_validation_command)
+    app.command("prepare-recurrence-ordering-validation")(
+        prepare_recurrence_ordering_validation_command
+    )
+    app.command("upload-recurrence-ordering-validation")(
+        upload_recurrence_ordering_validation_command
+    )
+    app.command("capture-recurrence-ordering-validation")(
+        capture_recurrence_ordering_validation_command
+    )
+    app.command("cleanup-recurrence-ordering-validation")(
+        cleanup_recurrence_ordering_validation_command
+    )

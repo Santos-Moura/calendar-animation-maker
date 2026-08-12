@@ -422,6 +422,64 @@ class PlaywrightCalendarCaptureGateway:
                 if image is not None:
                     image.close()
 
+    def reload_current_week(self, week_start: date, minimum_event_count: int) -> None:
+        """Reload the current week and re-establish the exact capture window."""
+
+        page = self._require_page()
+        page.reload(wait_until="domcontentloaded")
+        self.wait_until_ready(week_start, minimum_event_count)
+
+    def collect_zero_width_event_geometry(
+        self,
+        summaries: list[str],
+        color_ids: list[str],
+    ) -> list[dict[str, object]]:
+        """Measure the 18 calibrated invisible-summary event chips in the live DOM."""
+
+        if len(summaries) != len(color_ids):
+            raise CalendarAnimError("summary/colorId ordering metadata differs in length")
+        page = self._require_page()
+        raw = page.locator(EVENT_SELECTORS).evaluate_all(
+            """
+            (elements, expected) => {
+              const result = [];
+              for (const element of elements) {
+                const content = element.textContent || '';
+                const aria = element.getAttribute('aria-label') || '';
+                for (let slot = 0; slot < expected.summaries.length; slot += 1) {
+                  const summary = expected.summaries[slot];
+                  if (!content.includes(summary) && !aria.includes(summary)) continue;
+                  const rect = element.getBoundingClientRect();
+                  if (rect.width <= 0 || rect.height <= 0) continue;
+                  const style = window.getComputedStyle(element);
+                  result.push({
+                    slot_index: slot,
+                    summary,
+                    summary_codepoints: [...summary]
+                      .map((value) => {
+                        const code = value.codePointAt(0).toString(16).toUpperCase();
+                        return `U+${code.padStart(4, '0')}`;
+                      })
+                      .join(' '),
+                    color_id_expected: expected.colorIds[slot],
+                    x: rect.x,
+                    width: rect.width,
+                    y: rect.y,
+                    height: rect.height,
+                    css_background_color: style.backgroundColor,
+                  });
+                  break;
+                }
+              }
+              return result;
+            }
+            """,
+            {"summaries": summaries, "colorIds": color_ids},
+        )
+        if not isinstance(raw, list):
+            raise CalendarAnimError("Calendar DOM ordering measurement returned invalid data")
+        return raw
+
     def _find_visible_capture_region(self) -> Any:
         page = self._require_page()
         for selector in CALENDAR_REGION_SELECTORS:

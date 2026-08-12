@@ -1,5 +1,5 @@
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -38,11 +38,33 @@ class RecurrenceValidationGateway(Protocol):
 CalendarResolver = Callable[[str, str], tuple[CalendarInfo, bool]]
 
 
+class ValidationPlan(Protocol):
+    validation_id: str
+    calendar_profile: str
+    calendar_name: str
+    timezone: str
+    resources: list[ValidationResourcePlan]
+
+    @property
+    def first_week(self) -> date: ...
+
+    @property
+    def last_week(self) -> date: ...
+
+
+class ValidationArtifactStore(Protocol):
+    def load_state(self, validation_id: str) -> ValidationUploadState | None: ...
+
+    def save_state(self, state: ValidationUploadState) -> object: ...
+
+    def save_cleanup(self, result: ValidationCleanupResult) -> object: ...
+
+
 class RecurrenceValidationService:
     def __init__(
         self,
         gateway: RecurrenceValidationGateway,
-        store: RecurrenceValidationStore,
+        store: RecurrenceValidationStore | ValidationArtifactStore,
         resolve_calendar: CalendarResolver,
     ) -> None:
         self.gateway = gateway
@@ -57,7 +79,7 @@ class RecurrenceValidationService:
             "calendar_profile": calendar_profile,
         }
 
-    def upload(self, plan: RecurrenceValidationPlan) -> ValidationUploadState:
+    def upload(self, plan: RecurrenceValidationPlan | ValidationPlan) -> ValidationUploadState:
         calendar, created = self.resolve_calendar(plan.calendar_name, plan.timezone)
         if created:
             raise CalendarAnimError(
@@ -120,7 +142,7 @@ class RecurrenceValidationService:
 
     def cleanup(
         self,
-        plan: RecurrenceValidationPlan,
+        plan: RecurrenceValidationPlan | ValidationPlan,
         calendar: CalendarInfo,
     ) -> ValidationCleanupResult:
         metadata = self.metadata(plan.validation_id, plan.calendar_profile)
