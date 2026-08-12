@@ -62,6 +62,7 @@ from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
 from calendar_anim.calendar.horizontal_band_compression.commands import (
     register_horizontal_band_compression_commands,
 )
+from calendar_anim.calendar.hybrid_capture.commands import register_hybrid_capture_commands
 from calendar_anim.calendar.lab import LAB_CALENDAR_DESCRIPTION, LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.commands import register_multi_frame_commands
@@ -922,3 +923,4 @@ def register_calendar_commands(app: typer.Typer) -> None:
     register_capture_commands(app)
     register_vertical_compression_commands(app)
     register_horizontal_band_compression_commands(app)
+    register_hybrid_capture_commands(app)

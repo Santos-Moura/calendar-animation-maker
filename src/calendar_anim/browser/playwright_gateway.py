@@ -422,6 +422,101 @@ class PlaywrightCalendarCaptureGateway:
                 if image is not None:
                     image.close()
 
+    def capture_viewport(self, output_path: Path) -> None:
+        """Save the unmodified visible browser viewport for capture diagnostics."""
+
+        page = self._require_page()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=output_path, animations="disabled", scale="css")
+
+    def capture_logical_event_grid(self, output_path: Path) -> dict[str, object]:
+        """Capture only the rendered event grid and return read-only DOM metrics.
+
+        The vertical bounds are the already-validated 06:00-00:00 time window.
+        Horizontal bounds come from the union of visible event chips. Final
+        animation weeks are full-grid frames, so that union spans all seven days
+        while excluding Calendar's time-label gutter and side controls.
+        """
+
+        if self._time_window_clip is None or self._applied_zoom_percent is None:
+            raise CalendarAnimError("Calendar logical grid is not ready for capture")
+        page = self._require_page()
+        raw = page.locator(EVENT_SELECTORS).evaluate_all(
+            """
+            (elements) => {
+              const transparent = new Set(['', 'transparent', 'rgba(0, 0, 0, 0)']);
+              const opaque = (value) => !transparent.has(value || '');
+              const visibleColor = (element) => {
+                const candidates = [element, ...element.querySelectorAll('*')];
+                let selected = null;
+                for (const node of candidates) {
+                  const rect = node.getBoundingClientRect();
+                  if (rect.width <= 0 || rect.height <= 0) continue;
+                  const style = window.getComputedStyle(node);
+                  const colors = [
+                    style.backgroundColor,
+                    window.getComputedStyle(node, '::before').backgroundColor,
+                    window.getComputedStyle(node, '::after').backgroundColor,
+                  ].filter(opaque);
+                  if (!colors.length) continue;
+                  const area = rect.width * rect.height;
+                  if (!selected || area > selected.area) selected = {color: colors[0], area};
+                }
+                return selected ? selected.color : null;
+              };
+              const visible = [];
+              for (const element of elements) {
+                const rect = element.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                visible.push({
+                  left: rect.left,
+                  right: rect.right,
+                  top: rect.top,
+                  bottom: rect.bottom,
+                  renderedColor: visibleColor(element),
+                });
+              }
+              if (!visible.length) return null;
+              const colors = {};
+              for (const item of visible) {
+                if (item.renderedColor) {
+                  colors[item.renderedColor] = (colors[item.renderedColor] || 0) + 1;
+                }
+              }
+              return {
+                left: Math.min(...visible.map((item) => item.left)),
+                right: Math.max(...visible.map((item) => item.right)),
+                eventCount: visible.length,
+                renderedColorCounts: colors,
+              };
+            }
+            """
+        )
+        if not isinstance(raw, dict):
+            raise CalendarAnimError("No visible Calendar events found in the logical grid")
+        factor = self._applied_zoom_percent / 100
+        left = float(raw["left"]) * factor
+        right = float(raw["right"]) * factor
+        time_clip = self._time_window_clip
+        clip = {
+            "x": left,
+            "y": time_clip["y"],
+            "width": right - left,
+            "height": time_clip["height"],
+        }
+        if clip["width"] <= 0 or clip["height"] <= 0:
+            raise CalendarAnimError("Detected Calendar logical grid has invalid geometry")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=output_path, animations="disabled", scale="css", clip=clip)
+        return {
+            "event_count": int(raw["eventCount"]),
+            "rendered_color_counts": dict(raw.get("renderedColorCounts", {})),
+            "applied_zoom_percent": self._applied_zoom_percent,
+            "logical_clip": clip,
+            "logical_cell_width": clip["width"] / 126,
+            "logical_cell_height": clip["height"] / 72,
+        }
+
     def reload_current_week(self, week_start: date, minimum_event_count: int) -> None:
         """Reload the current week and re-establish the exact capture window."""
 
