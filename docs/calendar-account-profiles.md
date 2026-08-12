@@ -26,6 +26,12 @@ The secondary profile is isolated:
 .calendar-anim/browser-profiles/account-b/
 ```
 
+Capture zoom is also profile-scoped. `account-a` keeps its approved high-detail value of 33%,
+while `account-b` uses native Chrome zoom 90%. Recurrence capture still uses the existing Calendar
+vertical-scroller discovery and positioning, scrolls after opening each week, and validates that
+the exact 06:00–00:00 window fits before taking the screenshot. There is deliberately no
+no-scroll fallback.
+
 The same Desktop OAuth client can authorize multiple Google users. Tokens remain separate. Profile
 JSON stores path references, account identity, calendar identity/name/timezone, and no OAuth token
 contents. `.calendar-anim/`, `credentials*.json`, `token*.json`, and `client_secret*.json` are
