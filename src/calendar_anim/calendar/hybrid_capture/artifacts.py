@@ -51,6 +51,9 @@ class HybridCaptureStore:
     def sanity_frame_directory(self, run_id: str, human_frame: int) -> Path:
         return self.sanity_directory(run_id) / f"frame-{human_frame:03d}"
 
+    def debug_frame_directory(self, run_id: str, human_frame: int) -> Path:
+        return self.run_directory(run_id) / "capture-debug" / f"frame-{human_frame:03d}"
+
     def archive_sanity(self, run_id: str) -> Path | None:
         """Move an earlier sanity run aside before a new read-only capture."""
 
@@ -283,7 +286,8 @@ def sanity_text(report: HybridSanityReport) -> str:
                 f"  Obvious missing content: {item.obvious_missing_content}",
                 f"  Obvious color mismatch: {item.obvious_color_mismatch}",
                 f"  Obvious ordering issue: {item.obvious_ordering_issue}",
-                f"  Population valid: {item.unique_event_population_valid}",
+                "  DOM population diagnostic (not a capture gate): "
+                f"{item.unique_event_population_valid}",
                 f"  Grid geometry valid: {item.grid_geometry_valid}",
                 f"  Colors valid: {item.colors_valid}",
                 f"  Ordering valid: {item.ordering_valid}",

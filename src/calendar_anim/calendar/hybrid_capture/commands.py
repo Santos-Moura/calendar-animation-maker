@@ -122,6 +122,61 @@ def capture_hybrid_sanity_command(
     typer.echo("Calendar writes: NO")
 
 
+def capture_hybrid_debug_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
+    profile: Annotated[str, typer.Option("--profile")] = "account-b",
+    frame: Annotated[int, typer.Option("--frame", min=1, max=108)] = 60,
+    stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
+    ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Capture exactly one hybrid frame with read-only browser diagnostics."""
+
+    try:
+        plan = build_final_capture_plan(run_id)
+        if not 1 <= frame <= len(plan.frames):
+            raise CalendarAnimError(f"Frame must be between 1 and {len(plan.frames)}")
+        selected = plan.frames[frame - 1]
+        if selected.calendar_profile != profile:
+            raise CalendarAnimError(
+                f"Frame {frame} belongs to {selected.calendar_profile}, not {profile}"
+            )
+        store = HybridCaptureStore()
+        output = store.debug_frame_directory(run_id, frame)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Run: {run_id}")
+    typer.echo(f"Human frame: {frame}")
+    typer.echo(f"Week: {selected.week_start}")
+    typer.echo(f"Profile: {profile}")
+    typer.echo(f"Browser zoom: {selected.capture_zoom_percent}%")
+    typer.echo("Visible window: 06:00-00:00")
+    typer.echo("DOM event count: diagnostic only")
+    typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
+    typer.echo(f"Output: {output}")
+    if not execute:
+        typer.echo("No browser was opened and no Calendar API call was made.")
+        typer.echo("Calendar writes: NO")
+        return
+    try:
+        report = HybridCaptureService(
+            store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
+        ).capture_debug(plan, frame, profile)
+    except KeyboardInterrupt:
+        typer.secho("Debug capture interrupted; Calendar was not modified.", fg="yellow")
+        raise typer.Exit(code=130) from None
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    artifacts = report["artifacts"]
+    if not isinstance(artifacts, dict):
+        _fail(CalendarAnimError("Debug capture artifact report is invalid"))
+    typer.echo(f"Raw browser: {artifacts['raw_browser']}")
+    typer.echo(f"Grid crop: {artifacts['grid_crop']}")
+    typer.echo(f"Normalized: {artifacts['normalized']}")
+    typer.echo(f"Debug JSON: {artifacts['debug_json']}")
+    typer.echo("Calendar writes: NO")
+
+
 def capture_final_hybrid_command(
     run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
     stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
@@ -298,6 +353,7 @@ def print_final_bulk_status(run_id: str = FINAL_HYBRID_RUN_ID) -> None:
 
 
 def register_hybrid_capture_commands(app: typer.Typer) -> None:
+    app.command("capture-hybrid-debug")(capture_hybrid_debug_command)
     app.command("capture-hybrid-sanity")(capture_hybrid_sanity_command)
     app.command("capture-hybrid-seam")(capture_hybrid_seam_command)
     app.command("capture-final-hybrid")(capture_final_hybrid_command)

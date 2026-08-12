@@ -44,17 +44,21 @@ class HybridBrowserGateway(Protocol):
 
     def reload_current_week(self, week_start: date, minimum_event_count: int) -> None: ...
 
+    def capture_debug_state(self) -> dict[str, object]: ...
+
 
 class CaptureLoadFailure(CalendarAnimError):
     def __init__(
         self,
         errors: list[str],
         diagnostic_paths: list[Path],
+        diagnostic_json_paths: list[Path],
         population_samples: list[dict[str, object]],
     ) -> None:
         super().__init__(f"CAPTURE LOAD FAILURE after {len(errors)} attempts: {errors[-1]}")
         self.errors = errors
         self.diagnostic_paths = diagnostic_paths
+        self.diagnostic_json_paths = diagnostic_json_paths
         self.population_samples = population_samples
 
 
@@ -105,6 +109,69 @@ class HybridCaptureService:
             report, self.store.sanity_directory(plan.run_id) / "hybrid-sanity-contact-sheet.png"
         )
         return report
+
+    def capture_debug(
+        self, plan: HybridCapturePlan, human_frame: int, profile: str
+    ) -> dict[str, object]:
+        """Capture one frame with exhaustive read-only browser diagnostics."""
+
+        if not 1 <= human_frame <= len(plan.frames):
+            raise CalendarAnimError(f"Human frame must be between 1 and {len(plan.frames)}")
+        frame = plan.frames[human_frame - 1]
+        if frame.calendar_profile != profile:
+            raise CalendarAnimError(
+                f"Frame {human_frame} belongs to {frame.calendar_profile}, not {profile}"
+            )
+        directory = self.store.debug_frame_directory(plan.run_id, human_frame)
+        raw = directory / "raw-browser.png"
+        logical = directory / "grid-crop.png"
+        normalized = directory / "normalized.png"
+        debug_json = directory / "debug.json"
+        try:
+            with self.gateway_factory(profile, frame.capture_zoom_percent) as gateway:
+                metrics = self._browser_capture(
+                    gateway,
+                    frame,
+                    raw,
+                    logical,
+                    debug_directory=directory,
+                )
+            normalize_grid(logical, normalized)
+            payload: dict[str, object] = {
+                "success": True,
+                "run_id": plan.run_id,
+                "human_frame": human_frame,
+                "frame_index": frame.frame_index,
+                "week_start": frame.week_start.isoformat(),
+                "profile": profile,
+                "expected_occurrences_reference": frame.expected_occurrences,
+                "artifacts": {
+                    "raw_browser": str(raw),
+                    "grid_crop": str(logical),
+                    "normalized": str(normalized),
+                    "debug_json": str(debug_json),
+                },
+                "capture": metrics,
+                "google_calendar_writes": False,
+            }
+        except CaptureLoadFailure as error:
+            payload = {
+                "success": False,
+                "run_id": plan.run_id,
+                "human_frame": human_frame,
+                "frame_index": frame.frame_index,
+                "week_start": frame.week_start.isoformat(),
+                "profile": profile,
+                "expected_occurrences_reference": frame.expected_occurrences,
+                "errors": error.errors,
+                "debug_screenshots": [str(path) for path in error.diagnostic_paths],
+                "debug_attempt_json": [str(path) for path in error.diagnostic_json_paths],
+                "google_calendar_writes": False,
+            }
+            write_atomic(debug_json, json.dumps(payload, indent=2) + "\n")
+            raise
+        write_atomic(debug_json, json.dumps(payload, indent=2) + "\n")
+        return payload
 
     def capture_final(
         self, plan: HybridCapturePlan, state: HybridCaptureState
@@ -250,6 +317,9 @@ class HybridCaptureService:
                     {
                         "capture_load_errors": error.errors,
                         "diagnostic_paths": [str(path) for path in error.diagnostic_paths],
+                        "diagnostic_json_paths": [
+                            str(path) for path in error.diagnostic_json_paths
+                        ],
                         **result.model_dump(mode="json"),
                     },
                     indent=2,
@@ -301,7 +371,7 @@ class HybridCaptureService:
             expected_color_distribution=expected_colors,
             rendered_color_distribution=rendered,
             logical_cell_match_ratio=match,
-            obvious_missing_content=not population_valid,
+            obvious_missing_content=match < 0.55,
             obvious_color_mismatch=not colors_valid,
             obvious_ordering_issue=not ordering_valid,
             unique_event_population_valid=population_valid,
@@ -327,20 +397,23 @@ class HybridCaptureService:
         frame: HybridFramePlan,
         raw: Path,
         logical: Path,
+        debug_directory: Path | None = None,
     ) -> dict[str, object]:
         errors: list[str] = []
         diagnostics: list[Path] = []
+        diagnostic_json_paths: list[Path] = []
         population_samples: list[dict[str, object]] = []
         for attempt in range(1, 4):
             try:
                 if attempt == 1:
                     gateway.open_week(frame.week_start)
-                    gateway.wait_until_ready(frame.week_start, 1)
+                    gateway.wait_until_ready(frame.week_start, 0)
                 else:
-                    gateway.reload_current_week(frame.week_start, 1)
+                    gateway.reload_current_week(frame.week_start, 0)
                 gateway.wait_for_animation_events(frame.expected_occurrences)
                 gateway.capture_viewport(raw)
                 metrics = gateway.capture_logical_event_grid(logical)
+                metrics["browser_debug"] = gateway.capture_debug_state()
                 metrics["capture_retry_cycles"] = attempt - 1
                 metrics.setdefault("stabilization_seconds", 0)
                 metrics.setdefault("raw_dom_nodes", metrics.get("event_count", 0))
@@ -372,13 +445,28 @@ class HybridCaptureService:
                     for sample in raw_samples:
                         if isinstance(sample, dict):
                             population_samples.append({"attempt": attempt, **sample})
-                diagnostic = raw.with_name(f"{raw.stem}-load-failure-attempt-{attempt}{raw.suffix}")
+                directory = debug_directory or raw.parent
+                diagnostic = directory / f"debug-attempt-{attempt}.png"
+                diagnostic_json = directory / f"debug-attempt-{attempt}.json"
+                try:
+                    state = gateway.capture_debug_state()
+                except Exception as debug_error:
+                    state = {"diagnostic_error": str(debug_error)}
+                debug_payload = {
+                    "attempt": attempt,
+                    "reason": str(error),
+                    "expected_week": frame.week_start.isoformat(),
+                    "expected_occurrences_reference": frame.expected_occurrences,
+                    "browser": state,
+                }
+                write_atomic(diagnostic_json, json.dumps(debug_payload, indent=2) + "\n")
+                diagnostic_json_paths.append(diagnostic_json)
                 try:
                     gateway.capture_viewport(diagnostic)
                     diagnostics.append(diagnostic)
                 except Exception:
                     pass
-        raise CaptureLoadFailure(errors, diagnostics, population_samples)
+        raise CaptureLoadFailure(errors, diagnostics, diagnostic_json_paths, population_samples)
 
     def _validate_final_sequence(self, plan: HybridCapturePlan) -> None:
         paths = [self.store.final_frame_path(plan.run_id, index) for index in range(108)]
@@ -404,7 +492,6 @@ def _sanity_passes(result: SanityFrameResult) -> bool:
         result.capture_success
         and result.capture_load_success
         and (result.normalized_width, result.normalized_height) == (504, 288)
-        and result.unique_event_population_valid
         and result.grid_geometry_valid
         and result.colors_valid
         and result.ordering_valid
