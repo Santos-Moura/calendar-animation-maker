@@ -1,4 +1,5 @@
 import json
+import statistics
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime
@@ -39,6 +40,23 @@ class HybridBrowserGateway(Protocol):
 
     def capture_logical_event_grid(self, output_path: Path) -> dict[str, object]: ...
 
+    def wait_for_animation_events(self, expected_count: int) -> object: ...
+
+    def reload_current_week(self, week_start: date, minimum_event_count: int) -> None: ...
+
+
+class CaptureLoadFailure(CalendarAnimError):
+    def __init__(
+        self,
+        errors: list[str],
+        diagnostic_paths: list[Path],
+        population_samples: list[dict[str, object]],
+    ) -> None:
+        super().__init__(f"CAPTURE LOAD FAILURE after {len(errors)} attempts: {errors[-1]}")
+        self.errors = errors
+        self.diagnostic_paths = diagnostic_paths
+        self.population_samples = population_samples
+
 
 GatewayContextFactory = Callable[[str, int], AbstractContextManager[HybridBrowserGateway]]
 
@@ -58,7 +76,24 @@ class HybridCaptureService:
         with self.gateway_factory("account-b", 90) as gateway:
             for frame in selected:
                 results.append(self._capture_sanity_frame(gateway, plan, frame))
-        automated = "PASS" if all(_sanity_passes(item) for item in results) else "NO-GO"
+        successful_widths = [
+            item.logical_cell_width for item in results if item.capture_load_success
+        ]
+        successful_heights = [
+            item.logical_cell_height for item in results if item.capture_load_success
+        ]
+        if successful_widths and successful_heights:
+            median_width = statistics.median(successful_widths)
+            median_height = statistics.median(successful_heights)
+            for item in results:
+                item.grid_geometry_valid = item.capture_load_success and (
+                    _relative_delta(item.logical_cell_width, median_width) <= 0.02
+                    and _relative_delta(item.logical_cell_height, median_height) <= 0.02
+                )
+        if any(not item.capture_load_success for item in results):
+            automated = "CAPTURE ERROR"
+        else:
+            automated = "PASS" if all(_sanity_passes(item) for item in results) else "NO-GO"
         report = HybridSanityReport(
             run_id=plan.run_id,
             frames_checked=list(human_frames),
@@ -166,10 +201,62 @@ class HybridCaptureService:
         logical = directory / "logical-grid.png"
         normalized = directory / "normalized.png"
         expected = directory / "expected-local.png"
-        metrics = self._browser_capture(gateway, frame, raw, logical)
-        normalize_grid(logical, normalized)
         frame_plan = _load_frame_plan(frame)
         render_expected_frame(frame_plan, expected)
+        try:
+            metrics = self._browser_capture(gateway, frame, raw, logical)
+        except CaptureLoadFailure as error:
+            last_sample = error.population_samples[-1] if error.population_samples else {}
+            result = SanityFrameResult(
+                frame_index=frame.frame_index,
+                human_frame=frame.human_frame,
+                profile=frame.calendar_profile,
+                week_start=frame.week_start,
+                expected_occurrences=frame.expected_occurrences,
+                rendered_dom_events=int(_sample_number(last_sample, "unique_event_chips")),
+                capture_success=False,
+                capture_load_success=False,
+                capture_error=str(error),
+                capture_retry_cycles=max(0, len(error.errors) - 1),
+                capture_timestamp=datetime.now(UTC),
+                stabilization_seconds=_sample_number(last_sample, "elapsed_seconds"),
+                raw_dom_nodes=int(_sample_number(last_sample, "raw_dom_nodes")),
+                unique_event_chips=int(_sample_number(last_sample, "unique_event_chips")),
+                dom_population_samples=error.population_samples,
+                normalized_width=0,
+                normalized_height=0,
+                logical_cell_width=0,
+                logical_cell_height=0,
+                expected_color_distribution=expected_distribution(frame_plan),
+                rendered_color_distribution={},
+                logical_cell_match_ratio=0,
+                obvious_missing_content=True,
+                obvious_color_mismatch=True,
+                obvious_ordering_issue=True,
+                unique_event_population_valid=False,
+                grid_geometry_valid=False,
+                colors_valid=False,
+                ordering_valid=False,
+                visual_match_valid=False,
+                raw_artifact=str(error.diagnostic_paths[-1] if error.diagnostic_paths else raw),
+                logical_artifact=str(logical),
+                normalized_artifact=str(normalized),
+                expected_artifact=str(expected),
+            )
+            write_atomic(
+                directory / "metrics.json",
+                json.dumps(
+                    {
+                        "capture_load_errors": error.errors,
+                        "diagnostic_paths": [str(path) for path in error.diagnostic_paths],
+                        **result.model_dump(mode="json"),
+                    },
+                    indent=2,
+                )
+                + "\n",
+            )
+            return result
+        normalize_grid(logical, normalized)
         match, classified = compare_logical_cells(expected, normalized)
         raw_rendered = metrics.get("rendered_color_counts")
         if not isinstance(raw_rendered, dict):
@@ -177,6 +264,14 @@ class HybridCaptureService:
         rendered = {str(key): int(value) for key, value in raw_rendered.items()}
         expected_colors = expected_distribution(frame_plan)
         dom_count = int(_number(metrics, "event_count"))
+        population_valid = dom_count == frame.expected_occurrences
+        colors_valid = len(rendered) >= max(1, len(expected_colors) - 1)
+        ordering_valid = match >= 0.55
+        raw_samples = metrics.get("dom_population_samples", [])
+        if not isinstance(raw_samples, list) or not all(
+            isinstance(sample, dict) for sample in raw_samples
+        ):
+            raise CalendarAnimError("Calendar DOM population samples are invalid")
         result = SanityFrameResult(
             frame_index=frame.frame_index,
             human_frame=frame.human_frame,
@@ -185,6 +280,13 @@ class HybridCaptureService:
             expected_occurrences=frame.expected_occurrences,
             rendered_dom_events=dom_count,
             capture_success=True,
+            capture_load_success=True,
+            capture_retry_cycles=int(_number(metrics, "capture_retry_cycles")),
+            capture_timestamp=datetime.now(UTC),
+            stabilization_seconds=_number(metrics, "stabilization_seconds"),
+            raw_dom_nodes=int(_number(metrics, "raw_dom_nodes")),
+            unique_event_chips=int(_number(metrics, "unique_event_chips")),
+            dom_population_samples=raw_samples,
             normalized_width=504,
             normalized_height=288,
             logical_cell_width=_number(metrics, "logical_cell_width"),
@@ -192,9 +294,13 @@ class HybridCaptureService:
             expected_color_distribution=expected_colors,
             rendered_color_distribution=rendered,
             logical_cell_match_ratio=match,
-            obvious_missing_content=dom_count < frame.expected_occurrences * 0.5,
-            obvious_color_mismatch=len(rendered) < max(1, len(expected_colors) - 1),
-            obvious_ordering_issue=match < 0.55,
+            obvious_missing_content=not population_valid,
+            obvious_color_mismatch=not colors_valid,
+            obvious_ordering_issue=not ordering_valid,
+            unique_event_population_valid=population_valid,
+            colors_valid=colors_valid,
+            ordering_valid=ordering_valid,
+            visual_match_valid=ordering_valid,
             raw_artifact=str(raw),
             logical_artifact=str(logical),
             normalized_artifact=str(normalized),
@@ -215,10 +321,39 @@ class HybridCaptureService:
         raw: Path,
         logical: Path,
     ) -> dict[str, object]:
-        gateway.open_week(frame.week_start)
-        gateway.wait_until_ready(frame.week_start, frame.expected_occurrences)
-        gateway.capture_viewport(raw)
-        return gateway.capture_logical_event_grid(logical)
+        errors: list[str] = []
+        diagnostics: list[Path] = []
+        population_samples: list[dict[str, object]] = []
+        for attempt in range(1, 4):
+            try:
+                if attempt == 1:
+                    gateway.open_week(frame.week_start)
+                    gateway.wait_until_ready(frame.week_start, 1)
+                else:
+                    gateway.reload_current_week(frame.week_start, 1)
+                gateway.wait_for_animation_events(frame.expected_occurrences)
+                gateway.capture_viewport(raw)
+                metrics = gateway.capture_logical_event_grid(logical)
+                metrics["capture_retry_cycles"] = attempt - 1
+                metrics.setdefault("stabilization_seconds", 0)
+                metrics.setdefault("raw_dom_nodes", metrics.get("event_count", 0))
+                metrics.setdefault("unique_event_chips", metrics.get("event_count", 0))
+                metrics.setdefault("dom_population_samples", [])
+                return metrics
+            except CalendarAnimError as error:
+                errors.append(str(error))
+                raw_samples = getattr(error, "samples", [])
+                if isinstance(raw_samples, list):
+                    for sample in raw_samples:
+                        if isinstance(sample, dict):
+                            population_samples.append({"attempt": attempt, **sample})
+                diagnostic = raw.with_name(f"{raw.stem}-load-failure-attempt-{attempt}{raw.suffix}")
+                try:
+                    gateway.capture_viewport(diagnostic)
+                    diagnostics.append(diagnostic)
+                except Exception:
+                    pass
+        raise CaptureLoadFailure(errors, diagnostics, population_samples)
 
     def _validate_final_sequence(self, plan: HybridCapturePlan) -> None:
         paths = [self.store.final_frame_path(plan.run_id, index) for index in range(108)]
@@ -242,10 +377,13 @@ def _load_frame_plan(frame: HybridFramePlan) -> SingleFrameCalendarPlan:
 def _sanity_passes(result: SanityFrameResult) -> bool:
     return (
         result.capture_success
+        and result.capture_load_success
         and (result.normalized_width, result.normalized_height) == (504, 288)
-        and not result.obvious_missing_content
-        and not result.obvious_color_mismatch
-        and not result.obvious_ordering_issue
+        and result.unique_event_population_valid
+        and result.grid_geometry_valid
+        and result.colors_valid
+        and result.ordering_valid
+        and result.visual_match_valid
     )
 
 
@@ -258,3 +396,8 @@ def _number(metrics: dict[str, object], key: str) -> float:
 
 def _relative_delta(left: float, right: float) -> float:
     return abs(left - right) / max(left, right, 1e-9)
+
+
+def _sample_number(sample: dict[str, object], key: str) -> float:
+    value = sample.get(key, 0)
+    return float(value) if isinstance(value, (int, float)) else 0.0

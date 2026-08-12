@@ -102,6 +102,9 @@ def capture_hybrid_sanity_command(
         typer.echo("Calendar writes: NO")
         return
     try:
+        archived = store.archive_sanity(run_id)
+        if archived is not None:
+            typer.echo(f"Previous sanity archived: {archived}")
         report = HybridCaptureService(
             store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
         ).capture_sanity(plan, selected)

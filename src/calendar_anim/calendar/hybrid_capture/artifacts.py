@@ -1,4 +1,5 @@
 import os
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -49,6 +50,18 @@ class HybridCaptureStore:
 
     def sanity_frame_directory(self, run_id: str, human_frame: int) -> Path:
         return self.sanity_directory(run_id) / f"frame-{human_frame:03d}"
+
+    def archive_sanity(self, run_id: str) -> Path | None:
+        """Move an earlier sanity run aside before a new read-only capture."""
+
+        source = self.sanity_directory(run_id)
+        if not source.exists() or not any(source.iterdir()):
+            return None
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+        destination = self.run_directory(run_id) / "sanity-backups" / stamp
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(destination))
+        return destination
 
     def final_frames_directory(self, run_id: str) -> Path:
         return self.run_directory(run_id) / "final-frames"
@@ -211,8 +224,12 @@ def compose_sanity_contact_sheet(report: HybridSanityReport, output: Path) -> Pa
             (label_width, result.expected_artifact),
             (label_width + 504, result.normalized_artifact),
         ):
-            with Image.open(path) as source:
-                image.paste(source.convert("RGB"), (x, y))
+            if Path(path).is_file():
+                with Image.open(path) as source:
+                    image.paste(source.convert("RGB"), (x, y))
+            else:
+                draw.rectangle((x, y, x + 503, y + 287), fill="#3c4043")
+                draw.text((x + 12, y + 12), "CAPTURE ERROR", fill="#f28b82")
     output.parent.mkdir(parents=True, exist_ok=True)
     image.save(output)
     image.close()
@@ -252,12 +269,22 @@ def sanity_text(report: HybridSanityReport) -> str:
                 f"Frame {item.human_frame} (index {item.frame_index}):",
                 f"  Expected occurrences: {item.expected_occurrences}",
                 f"  Rendered DOM events: {item.rendered_dom_events}",
+                f"  Raw DOM nodes: {item.raw_dom_nodes}",
+                f"  Unique event chips: {item.unique_event_chips}",
                 f"  Capture success: {item.capture_success}",
+                f"  Capture load success: {item.capture_load_success}",
+                f"  Capture retry cycles: {item.capture_retry_cycles}",
+                f"  Capture error: {item.capture_error or 'none'}",
                 f"  Normalized geometry: {item.normalized_width}x{item.normalized_height}",
                 f"  Logical cell match: {item.logical_cell_match_ratio:.3%}",
                 f"  Obvious missing content: {item.obvious_missing_content}",
                 f"  Obvious color mismatch: {item.obvious_color_mismatch}",
                 f"  Obvious ordering issue: {item.obvious_ordering_issue}",
+                f"  Population valid: {item.unique_event_population_valid}",
+                f"  Grid geometry valid: {item.grid_geometry_valid}",
+                f"  Colors valid: {item.colors_valid}",
+                f"  Ordering valid: {item.ordering_valid}",
+                f"  Visual match valid: {item.visual_match_valid}",
             ]
         )
     lines.extend(

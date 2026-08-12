@@ -82,6 +82,14 @@ class SanityFrameResult(BaseModel):
     expected_occurrences: int
     rendered_dom_events: int
     capture_success: bool
+    capture_load_success: bool = True
+    capture_error: str | None = None
+    capture_retry_cycles: int = 0
+    capture_timestamp: datetime | None = None
+    stabilization_seconds: float = 0
+    raw_dom_nodes: int = 0
+    unique_event_chips: int = 0
+    dom_population_samples: list[dict[str, object]] = Field(default_factory=list)
     normalized_width: int
     normalized_height: int
     logical_cell_width: float
@@ -92,6 +100,11 @@ class SanityFrameResult(BaseModel):
     obvious_missing_content: bool
     obvious_color_mismatch: bool
     obvious_ordering_issue: bool
+    unique_event_population_valid: bool = True
+    grid_geometry_valid: bool = True
+    colors_valid: bool = True
+    ordering_valid: bool = True
+    visual_match_valid: bool = True
     raw_artifact: str
     logical_artifact: str
     normalized_artifact: str

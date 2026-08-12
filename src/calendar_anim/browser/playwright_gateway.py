@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from io import BytesIO
@@ -96,6 +97,94 @@ async (root, options) => {
   };
 }
 """
+ANIMATION_EVENT_AUDIT_SCRIPT = """
+(elements) => {
+  const nodes = Array.from(elements);
+  const eventSelector = "[data-eventid], [data-eventchip], [data-dragsource-type='4']";
+  const transparent = new Set(['', 'transparent', 'rgba(0, 0, 0, 0)']);
+  const opaque = (value) => !transparent.has(value || '');
+  return nodes.map((element, index) => {
+    const rect = element.getBoundingClientRect();
+    const matchingDescendant = element.querySelector(eventSelector);
+    const containsMatchingDescendant = matchingDescendant !== null;
+    const style = window.getComputedStyle(element);
+    const visibleColors = [
+      style.backgroundColor,
+      window.getComputedStyle(element, '::before').backgroundColor,
+      window.getComputedStyle(element, '::after').backgroundColor,
+      ...Array.from(containsMatchingDescendant ? [] :
+        element.querySelectorAll('*')).flatMap((child) => {
+        const childStyle = window.getComputedStyle(child);
+        return [childStyle.backgroundColor,
+          window.getComputedStyle(child, '::before').backgroundColor,
+          window.getComputedStyle(child, '::after').backgroundColor];
+      }),
+    ].filter(opaque);
+    const link = element.closest('a[href]') || element.querySelector('a[href]');
+    return {
+      raw_index: index,
+      contains_matching_descendant: containsMatchingDescendant,
+      matching_descendant_count: containsMatchingDescendant ? 1 : 0,
+      data_eventid: element.getAttribute('data-eventid'),
+      data_eventchip: element.getAttribute('data-eventchip'),
+      data_dragsource_type: element.getAttribute('data-dragsource-type'),
+      href: link ? link.getAttribute('href') : null,
+      aria_label: element.getAttribute('aria-label') || '',
+      text: (element.textContent || '').trim(),
+      visible_color: visibleColors[0] || null,
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      viewport_width: window.innerWidth,
+      viewport_height: window.innerHeight,
+      in_viewport: rect.right > 0 && rect.bottom > 0 &&
+        rect.left < window.innerWidth && rect.top < window.innerHeight,
+    };
+  });
+}
+"""
+STRUCTURAL_WEEK_GRID_SCRIPT = """
+(root) => {
+  const rootRect = root.getBoundingClientRect();
+  const eventSelector = "[data-eventid], [data-eventchip], [data-dragsource-type='4']";
+  const candidates = [root, ...root.querySelectorAll('*')].filter((element) =>
+    !element.matches(eventSelector) && !element.closest(eventSelector)).map((element) => {
+    const rect = element.getBoundingClientRect();
+    return {left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+      width: rect.width, height: rect.height};
+  }).filter((rect) => rect.width >= rootRect.width * 0.08 &&
+    rect.width <= rootRect.width * 0.20 && rect.height >= rootRect.height * 0.35 &&
+    rect.right > rootRect.left && rect.left < rootRect.right);
+  const unique = [];
+  for (const candidate of candidates) {
+    if (!unique.some((item) => Math.abs(item.left - candidate.left) <= 2 &&
+      Math.abs(item.right - candidate.right) <= 2)) unique.push(candidate);
+  }
+  unique.sort((left, right) => left.left - right.left || right.height - left.height);
+  let best = null;
+  for (let start = 0; start <= unique.length - 7; start += 1) {
+    const sequence = unique.slice(start, start + 7);
+    const widths = sequence.map((item) => item.width);
+    const mean = widths.reduce((sum, value) => sum + value, 0) / widths.length;
+    if (Math.max(...widths.map((value) => Math.abs(value - mean))) > mean * 0.08) continue;
+    const gaps = sequence.slice(1).map((item, index) => item.left - sequence[index].right);
+    if (gaps.some((gap) => Math.abs(gap) > mean * 0.15)) continue;
+    const left = sequence[0].left;
+    const right = sequence[6].right;
+    const span = right - left;
+    if (span < rootRect.width * 0.75 || left < rootRect.left - 3 ||
+      right > rootRect.right + 3) continue;
+    const score = span + sequence.reduce((sum, item) => sum + item.height, 0) / 1000;
+    if (!best || score > best.score) best = {left, right, score, sequence};
+  }
+  if (!best) return null;
+  return {left: best.left, right: best.right, width: best.right - best.left,
+    root_left: rootRect.left, root_right: rootRect.right,
+    day_columns: best.sequence.map((item) => ({left: item.left, right: item.right,
+      width: item.width, height: item.height}))};
+}
+"""
 
 
 @dataclass(frozen=True)
@@ -125,6 +214,186 @@ class VisibleWindowMetrics:
             target_scroll_top=raw["targetScrollTop"],
             desired_scroll_top=raw.get("desiredScrollTop", raw["targetScrollTop"]),
         )
+
+
+@dataclass(frozen=True)
+class EventPopulationAudit:
+    raw_node_count: int
+    leaf_node_count: int
+    unique_event_count: int
+    identity_digest: str
+    wrapper_nodes_removed: int
+    structural_nodes_removed: int
+    duplicate_leaf_nodes_removed: int
+    rendered_color_counts: dict[str, int]
+
+
+@dataclass(frozen=True)
+class AnimationReadiness:
+    samples: list[dict[str, object]]
+    raw_node_count: int
+    unique_event_count: int
+    stabilization_seconds: float
+    coordinate_scale: float
+    grid_bounds: dict[str, float]
+
+
+class CaptureReadinessError(CalendarAnimError):
+    def __init__(self, message: str, samples: list[dict[str, object]]) -> None:
+        super().__init__(message)
+        self.samples = samples
+
+
+def deduplicate_event_records(records: list[dict[str, object]]) -> EventPopulationAudit:
+    """Collapse Calendar wrapper/chip layers into unique visible event chips."""
+
+    leaves = [record for record in records if not bool(record["contains_matching_descendant"])]
+    usable: list[dict[str, object]] = []
+    structural = 0
+    for record in leaves:
+        width = _record_float(record, "width")
+        height = _record_float(record, "height")
+        viewport_width = _record_float(record, "viewport_width")
+        if (
+            not bool(record["in_viewport"])
+            or width <= 0
+            or height <= 0
+            or width >= viewport_width * 0.25
+        ):
+            structural += 1
+            continue
+        usable.append(record)
+    unique: dict[str, dict[str, object]] = {}
+    for record in usable:
+        explicit = next(
+            (
+                str(record[key])
+                for key in ("data_eventid", "data_eventchip", "href")
+                if record.get(key)
+            ),
+            None,
+        )
+        geometry = ":".join(
+            f"{_record_float(record, key):.2f}" for key in ("x", "y", "width", "height")
+        )
+        identity = (
+            f"id:{explicit}:geometry:{geometry}"
+            if explicit
+            else f"geometry:{geometry}:{record.get('aria_label', '')}"
+        )
+        unique.setdefault(identity, record)
+    digest = hashlib.sha256("\n".join(sorted(unique)).encode("utf-8")).hexdigest()
+    colors: dict[str, int] = {}
+    for record in unique.values():
+        value = record.get("visible_color")
+        if value:
+            key = str(value)
+            colors[key] = colors.get(key, 0) + 1
+    return EventPopulationAudit(
+        raw_node_count=len(records),
+        leaf_node_count=len(leaves),
+        unique_event_count=len(unique),
+        identity_digest=digest,
+        wrapper_nodes_removed=len(records) - len(leaves),
+        structural_nodes_removed=structural,
+        duplicate_leaf_nodes_removed=len(usable) - len(unique),
+        rendered_color_counts=colors,
+    )
+
+
+def _record_float(record: dict[str, object], key: str) -> float:
+    value = record.get(key)
+    if not isinstance(value, (int, float)):
+        raise CalendarAnimError(f"Calendar DOM record has invalid {key}")
+    return float(value)
+
+
+def wait_for_stable_population(
+    sample: Callable[[], tuple[EventPopulationAudit, float, dict[str, float]]],
+    *,
+    expected_count: int,
+    timeout_seconds: float,
+    interval_seconds: float,
+    stable_samples: int,
+    expected_coordinate_scale: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> AnimationReadiness:
+    started = clock()
+    history: list[dict[str, object]] = []
+    stable = 0
+    previous: tuple[int, str, float, float] | None = None
+    last: tuple[EventPopulationAudit, float, dict[str, float]] | None = None
+    while clock() - started <= timeout_seconds:
+        audit, coordinate_scale, bounds = sample()
+        last = (audit, coordinate_scale, bounds)
+        elapsed = clock() - started
+        signature = (
+            audit.unique_event_count,
+            audit.identity_digest,
+            round(coordinate_scale, 4),
+            round(bounds["width"], 2),
+        )
+        layout_valid = (
+            expected_coordinate_scale is None
+            or abs(coordinate_scale - expected_coordinate_scale) <= 0.02
+        )
+        population_valid = audit.unique_event_count == expected_count
+        loaded = population_valid and layout_valid
+        stable = stable + 1 if loaded and signature == previous else (1 if loaded else 0)
+        history.append(
+            {
+                "elapsed_seconds": elapsed,
+                "raw_dom_nodes": audit.raw_node_count,
+                "leaf_dom_nodes": audit.leaf_node_count,
+                "unique_event_chips": audit.unique_event_count,
+                "wrapper_nodes_removed": audit.wrapper_nodes_removed,
+                "structural_nodes_removed": audit.structural_nodes_removed,
+                "duplicate_leaf_nodes_removed": audit.duplicate_leaf_nodes_removed,
+                "identity_digest": audit.identity_digest,
+                "coordinate_scale": coordinate_scale,
+                "grid_width": bounds["width"],
+                "layout_coordinate_valid": layout_valid,
+                "expected_population_reached": population_valid,
+                "stable_sequence": stable,
+            }
+        )
+        if stable >= stable_samples:
+            return AnimationReadiness(
+                samples=history,
+                raw_node_count=audit.raw_node_count,
+                unique_event_count=audit.unique_event_count,
+                stabilization_seconds=elapsed,
+                coordinate_scale=coordinate_scale,
+                grid_bounds=bounds,
+            )
+        previous = signature
+        sleeper(interval_seconds)
+    unique = last[0].unique_event_count if last is not None else 0
+    raise CaptureReadinessError(
+        f"CAPTURE LOAD FAILURE: event population did not stabilize before "
+        f"{timeout_seconds:.0f}s (last unique count {unique}, expected reference {expected_count})",
+        history,
+    )
+
+
+def logical_grid_clip(
+    structural_bounds: dict[str, float],
+    time_bounds: dict[str, float],
+    scale_x: float,
+    scale_y: float,
+) -> dict[str, float]:
+    """Scale content-independent week-grid bounds into screenshot coordinates."""
+
+    clip = {
+        "x": structural_bounds["left"] * scale_x,
+        "y": time_bounds["y"] * scale_y,
+        "width": structural_bounds["width"] * scale_x,
+        "height": time_bounds["height"] * scale_y,
+    }
+    if clip["width"] <= 0 or clip["height"] <= 0:
+        raise CalendarAnimError("Detected Calendar logical grid has invalid geometry")
+    return clip
 
 
 def capture_clip_for_window(
@@ -288,6 +557,8 @@ class PlaywrightCalendarCaptureGateway:
         self._capture_clip: dict[str, float] | None = None
         self._header_clip: dict[str, float] | None = None
         self._time_window_clip: dict[str, float] | None = None
+        self._logical_grid_clip: dict[str, float] | None = None
+        self._last_animation_readiness: AnimationReadiness | None = None
         self._applied_zoom_percent: float | None = None
 
     def __enter__(self) -> "PlaywrightCalendarCaptureGateway":
@@ -347,6 +618,8 @@ class PlaywrightCalendarCaptureGateway:
         self._capture_clip = None
         self._header_clip = None
         self._time_window_clip = None
+        self._logical_grid_clip = None
+        self._last_animation_readiness = None
         self._applied_zoom_percent = None
 
     def open_week(self, week_start: date) -> None:
@@ -361,6 +634,8 @@ class PlaywrightCalendarCaptureGateway:
         self._capture_clip = None
         self._header_clip = None
         self._time_window_clip = None
+        self._logical_grid_clip = None
+        self._last_animation_readiness = None
 
     def _verify_browser_zoom(self, target_percent: int) -> float:
         page = self._require_page()
@@ -430,92 +705,129 @@ class PlaywrightCalendarCaptureGateway:
         page.screenshot(path=output_path, animations="disabled", scale="css")
 
     def capture_logical_event_grid(self, output_path: Path) -> dict[str, object]:
-        """Capture only the rendered event grid and return read-only DOM metrics.
+        """Capture the stable seven-day structural grid and return DOM diagnostics."""
 
-        The vertical bounds are the already-validated 06:00-00:00 time window.
-        Horizontal bounds come from the union of visible event chips. Final
-        animation weeks are full-grid frames, so that union spans all seven days
-        while excluding Calendar's time-label gutter and side controls.
-        """
-
-        if self._time_window_clip is None or self._applied_zoom_percent is None:
+        if (
+            self._logical_grid_clip is None
+            or self._applied_zoom_percent is None
+            or self._last_animation_readiness is None
+        ):
             raise CalendarAnimError("Calendar logical grid is not ready for capture")
         page = self._require_page()
-        raw = page.locator(EVENT_SELECTORS).evaluate_all(
-            """
-            (elements) => {
-              const transparent = new Set(['', 'transparent', 'rgba(0, 0, 0, 0)']);
-              const opaque = (value) => !transparent.has(value || '');
-              const visibleColor = (element) => {
-                const candidates = [element, ...element.querySelectorAll('*')];
-                let selected = null;
-                for (const node of candidates) {
-                  const rect = node.getBoundingClientRect();
-                  if (rect.width <= 0 || rect.height <= 0) continue;
-                  const style = window.getComputedStyle(node);
-                  const colors = [
-                    style.backgroundColor,
-                    window.getComputedStyle(node, '::before').backgroundColor,
-                    window.getComputedStyle(node, '::after').backgroundColor,
-                  ].filter(opaque);
-                  if (!colors.length) continue;
-                  const area = rect.width * rect.height;
-                  if (!selected || area > selected.area) selected = {color: colors[0], area};
-                }
-                return selected ? selected.color : null;
-              };
-              const visible = [];
-              for (const element of elements) {
-                const rect = element.getBoundingClientRect();
-                if (rect.width <= 0 || rect.height <= 0) continue;
-                visible.push({
-                  left: rect.left,
-                  right: rect.right,
-                  top: rect.top,
-                  bottom: rect.bottom,
-                  renderedColor: visibleColor(element),
-                });
-              }
-              if (!visible.length) return null;
-              const colors = {};
-              for (const item of visible) {
-                if (item.renderedColor) {
-                  colors[item.renderedColor] = (colors[item.renderedColor] || 0) + 1;
-                }
-              }
-              return {
-                left: Math.min(...visible.map((item) => item.left)),
-                right: Math.max(...visible.map((item) => item.right)),
-                eventCount: visible.length,
-                renderedColorCounts: colors,
-              };
-            }
-            """
-        )
-        if not isinstance(raw, dict):
-            raise CalendarAnimError("No visible Calendar events found in the logical grid")
-        factor = self._applied_zoom_percent / 100
-        left = float(raw["left"]) * factor
-        right = float(raw["right"]) * factor
-        time_clip = self._time_window_clip
-        clip = {
-            "x": left,
-            "y": time_clip["y"],
-            "width": right - left,
-            "height": time_clip["height"],
-        }
-        if clip["width"] <= 0 or clip["height"] <= 0:
-            raise CalendarAnimError("Detected Calendar logical grid has invalid geometry")
+        clip = self._logical_grid_clip
         output_path.parent.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=output_path, animations="disabled", scale="css", clip=clip)
+        readiness = self._last_animation_readiness
+        final_audit = self.animation_event_audit()
         return {
-            "event_count": int(raw["eventCount"]),
-            "rendered_color_counts": dict(raw.get("renderedColorCounts", {})),
+            "event_count": final_audit.unique_event_count,
+            "raw_dom_nodes": final_audit.raw_node_count,
+            "leaf_dom_nodes": final_audit.leaf_node_count,
+            "unique_event_chips": final_audit.unique_event_count,
+            "wrapper_nodes_removed": final_audit.wrapper_nodes_removed,
+            "structural_nodes_removed": final_audit.structural_nodes_removed,
+            "duplicate_leaf_nodes_removed": final_audit.duplicate_leaf_nodes_removed,
+            "rendered_color_counts": final_audit.rendered_color_counts,
+            "dom_population_samples": readiness.samples,
+            "stabilization_seconds": readiness.stabilization_seconds,
+            "coordinate_scale": readiness.coordinate_scale,
+            "structural_grid_bounds": readiness.grid_bounds,
             "applied_zoom_percent": self._applied_zoom_percent,
             "logical_clip": clip,
             "logical_cell_width": clip["width"] / 126,
             "logical_cell_height": clip["height"] / 72,
         }
+
+    def animation_event_audit(self) -> EventPopulationAudit:
+        """Return unique visible animation chips with wrapper diagnostics."""
+
+        raw = (
+            self._require_page().locator(EVENT_SELECTORS).evaluate_all(ANIMATION_EVENT_AUDIT_SCRIPT)
+        )
+        if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
+            raise CalendarAnimError("Calendar animation DOM audit returned invalid data")
+        return deduplicate_event_records(raw)
+
+    def wait_for_animation_events(self, expected_count: int) -> AnimationReadiness:
+        """Wait for a stable unique event population and stable zoom/layout geometry."""
+
+        readiness = wait_for_stable_population(
+            self._animation_population_sample,
+            expected_count=expected_count,
+            timeout_seconds=self.config.ready_timeout_seconds,
+            interval_seconds=max(0.25, min(self.config.stabilization_seconds, 1.0)),
+            stable_samples=3,
+            expected_coordinate_scale=native_browser_zoom_factor(self.config.browser_zoom_percent),
+        )
+        self._refresh_animation_capture_geometry(readiness)
+        self._last_animation_readiness = readiness
+        return readiness
+
+    def _animation_population_sample(
+        self,
+    ) -> tuple[EventPopulationAudit, float, dict[str, float]]:
+        region = self._find_visible_capture_region()
+        bounds = self._structural_grid_bounds(region)
+        scale_x, scale_y = self._coordinate_scale()
+        if abs(scale_x - scale_y) > 0.02:
+            raise CalendarAnimError("CAPTURE LOAD FAILURE: Calendar x/y coordinate scales disagree")
+        return self.animation_event_audit(), scale_x, bounds
+
+    def _refresh_animation_capture_geometry(self, readiness: AnimationReadiness) -> None:
+        region = self._find_visible_capture_region()
+        raw = region.evaluate(
+            POSITION_VISIBLE_WINDOW_SCRIPT,
+            {
+                "startHour": self.config.visible_start_hour,
+                "endHour": self.config.visible_end_hour,
+            },
+        )
+        metrics = VisibleWindowMetrics.from_browser(raw)
+        time_bounds = time_window_clip(
+            metrics, self.config.visible_start_hour, self.config.visible_end_hour
+        )
+        scale_x, scale_y = self._coordinate_scale()
+        bounds = self._structural_grid_bounds(region)
+        self._logical_grid_clip = logical_grid_clip(bounds, time_bounds, scale_x, scale_y)
+        self._time_window_clip = {
+            "x": time_bounds["x"] * scale_x,
+            "y": time_bounds["y"] * scale_y,
+            "width": time_bounds["width"] * scale_x,
+            "height": time_bounds["height"] * scale_y,
+        }
+        readiness.grid_bounds.update(bounds)
+
+    def _structural_grid_bounds(self, region: Any) -> dict[str, float]:
+        raw = region.evaluate(STRUCTURAL_WEEK_GRID_SCRIPT)
+        if not isinstance(raw, dict):
+            raise CalendarAnimError(
+                "CAPTURE LOAD FAILURE: seven structural Calendar day columns were not found"
+            )
+        try:
+            bounds = {
+                "left": float(raw["left"]),
+                "right": float(raw["right"]),
+                "width": float(raw["width"]),
+            }
+        except (KeyError, TypeError, ValueError) as error:
+            raise CalendarAnimError(
+                "CAPTURE LOAD FAILURE: Calendar structural grid geometry is invalid"
+            ) from error
+        if bounds["width"] <= 0:
+            raise CalendarAnimError("CAPTURE LOAD FAILURE: Calendar structural grid has zero width")
+        return bounds
+
+    def _coordinate_scale(self) -> tuple[float, float]:
+        raw = self._require_page().evaluate(
+            "({width: window.innerWidth, height: window.innerHeight})"
+        )
+        if not isinstance(raw, dict):
+            raise CalendarAnimError("CAPTURE LOAD FAILURE: viewport geometry is unavailable")
+        width = float(raw.get("width", 0))
+        height = float(raw.get("height", 0))
+        if width <= 0 or height <= 0:
+            raise CalendarAnimError("CAPTURE LOAD FAILURE: viewport geometry is invalid")
+        return self.config.viewport_width / width, self.config.viewport_height / height
 
     def reload_current_week(self, week_start: date, minimum_event_count: int) -> None:
         """Reload the current week and re-establish the exact capture window."""
