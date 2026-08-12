@@ -28,11 +28,16 @@ from calendar_anim.calendar.frame_mapping.models import (
     SingleFrameCalendarPlan,
 )
 from calendar_anim.calendar.hybrid_capture.artifacts import (
+    HIGH_RESOLUTION,
     HybridCaptureStore,
     compose_output_mode,
     normalize_grid,
+    parse_output_resolution,
 )
-from calendar_anim.calendar.hybrid_capture.media import build_final_visual_command
+from calendar_anim.calendar.hybrid_capture.media import (
+    build_final_visual_command,
+    validate_final_frames,
+)
 from calendar_anim.calendar.hybrid_capture.models import (
     HybridCapturePlan,
     HybridFramePlan,
@@ -160,6 +165,28 @@ def test_mode_directories_and_checkpoints_are_isolated(tmp_path: Path) -> None:
     assert len({store.final_frames_directory(plan.run_id, mode) for mode in HybridOutputMode}) == 3
     assert {state.output_mode for state in states.values()} == set(HybridOutputMode)
 
+    high_resolution = store.initialize_state(
+        plan, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+    )
+    assert high_resolution.output_width == 1512
+    assert high_resolution.output_height == 864
+    assert store.state_path(
+        plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+    ) != store.state_path(plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL)
+    assert (
+        store.final_frames_directory(
+            plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+        ).parts[-1]
+        == "1512x864"
+    )
+
+
+def test_resolution_parser_preserves_required_seven_by_four_aspect() -> None:
+    assert parse_output_resolution("1512x864") == (1512, 864)
+    assert parse_output_resolution("504X288") == (504, 288)
+    with pytest.raises(CalendarAnimError, match="7:4"):
+        parse_output_resolution("1920x1080")
+
 
 def test_final_visual_command_uses_all_frames_in_order_and_approved_codec(tmp_path: Path) -> None:
     tools = FFmpegTools(Path("ffmpeg"), Path("ffprobe"), "test")
@@ -248,17 +275,19 @@ class ReadOnlyFakeGateway:
 
     def capture_header_event_grid(self, output_path: Path) -> dict[str, object]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        Image.new("RGB", (504, 360), "#7986CB").save(output_path)
+        Image.new("RGB", (1768, 852), "#7986CB").save(output_path)
         return {
             "header_grid_bounds": {
-                "header_clip": {"x": 0.0, "y": 0.0, "width": 504.0, "height": 72.0},
+                "header_clip": {"x": 0.0, "y": 0.0, "width": 1768.0, "height": 75.0},
                 "event_grid_clip": {
                     "x": 0.0,
-                    "y": 72.0,
-                    "width": 504.0,
-                    "height": 288.0,
+                    "y": 75.0,
+                    "width": 1768.0,
+                    "height": 777.0,
                 },
-                "composite_dimensions": [504, 360],
+                "composite_dimensions": [1768, 852],
+                "native_header_height": 75,
+                "native_grid_height": 777,
             },
             "header_included": True,
             "vertical_interval": "06:00-00:00",
@@ -742,3 +771,50 @@ def test_one_frame_mode_comparison_uses_one_read_only_browser_capture(
     assert (directory / "debug.json").is_file()
     assert not (directory / ".pixel-faithful-source.png").exists()
     assert not (directory / ".header-preserved-source.png").exists()
+
+
+def test_high_resolution_debug_uses_native_crop_without_504_intermediate(
+    tmp_path: Path,
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    gateway = ReadOnlyFakeGateway()
+    store = HybridCaptureStore(tmp_path / "runs")
+
+    report = HybridCaptureService(store, lambda _p, _z: gateway).capture_debug_modes(
+        plan, 60, "account-b", HIGH_RESOLUTION
+    )
+
+    directory = store.high_resolution_debug_directory(plan.run_id, 60)
+    native = directory / "mode-c-native-crop.png"
+    output = directory / "mode-c-1512x864.png"
+    with Image.open(native) as image:
+        assert image.size == (1768, 852)
+        assert image.width > 504 and image.height > 288
+    with Image.open(output) as image:
+        assert image.size == HIGH_RESOLUTION
+        assert image.width * 4 == image.height * 7
+    modes = report["modes"]
+    assert isinstance(modes, dict)
+    mode = modes[HybridOutputMode.HEADER_PRESERVED_FILL.value]
+    assert isinstance(mode, dict)
+    assert mode["source_dimensions"] == [1768, 852]
+    assert mode["final_dimensions"] == [1512, 864]
+    assert mode["source_of_resize"] == "native browser crop"
+    assert mode["intermediate_504x288"] is False
+    assert mode["resize_passes"] == 1
+    assert mode["header_resample_method"] == "lanczos"
+    assert mode["grid_resample_method"] == "nearest-neighbor"
+    assert mode["header_included"] is True
+    assert report["pre_06_gap_present"] is False
+    assert report["vertical_interval"] == "06:00-00:00"
+    assert report["logical_grid"] == [126, 72]
+    assert (directory / "comparison-hires.png").is_file()
+
+
+def test_final_frame_validation_uses_selected_high_resolution(tmp_path: Path) -> None:
+    for index in range(108):
+        Image.new("RGB", HIGH_RESOLUTION, "#7986CB").save(tmp_path / f"frame_{index:03d}.png")
+
+    paths = validate_final_frames(tmp_path, HIGH_RESOLUTION)
+
+    assert len(paths) == 108
