@@ -10,7 +10,9 @@ from calendar_anim.browser.playwright_gateway import (
     EventPopulationAudit,
     deduplicate_event_records,
     logical_grid_clip,
+    structural_grid_bounds_from_diagnostics,
     wait_for_stable_population,
+    wait_for_stable_visual_grid,
 )
 from calendar_anim.calendar.capture.final_media import (
     FFmpegTools,
@@ -158,6 +160,14 @@ class ReadOnlyFakeGateway:
     def reload_current_week(self, week_start: date, minimum_event_count: int) -> None:
         self.reloads.append(week_start)
 
+    def capture_debug_state(self) -> dict[str, object]:
+        return {
+            "url": "https://calendar.google.com/calendar/u/0/r/week/2028/1/2",
+            "viewport": {"width": 1920, "height": 1080},
+            "scroll_position": {"scrollTop": 360.0, "targetScrollTop": 360.0},
+            "grid_diagnostics": {"strategy": "css-grid-seven-tracks"},
+        }
+
     def capture_viewport(self, output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (1920, 1080), "#202124").save(output_path)
@@ -240,7 +250,7 @@ def test_sanity_capture_uses_only_read_browser_methods_and_builds_artifacts(
     assert report.automated_result == "PASS"
     assert report.google_calendar_writes is False
     assert gateway.opened == [date(2028, 1, 2)]
-    assert gateway.waited == [(date(2028, 1, 2), 1)]
+    assert gateway.waited == [(date(2028, 1, 2), 0)]
     assert gateway.population_waits == [1]
     sanity = store.sanity_directory(plan.run_id)
     assert (sanity / "frame-024/raw.png").is_file()
@@ -373,7 +383,7 @@ def _audit(count: int) -> EventPopulationAudit:
     )
 
 
-def test_population_polling_waits_for_complete_stable_dom() -> None:
+def test_population_polling_records_dom_population_without_using_it_as_gate() -> None:
     clock = FakeClock()
     values = iter([1, 500, 972, 972, 972])
 
@@ -389,7 +399,7 @@ def test_population_polling_waits_for_complete_stable_dom() -> None:
     )
 
     assert result.unique_event_count == 972
-    assert len(result.samples) == 5
+    assert len(result.samples) == 3
     assert result.samples[-1]["stable_sequence"] == 3
 
 
@@ -410,12 +420,12 @@ def test_population_polling_does_not_require_an_exact_unique_count() -> None:
     assert result.unique_event_count == 970
 
 
-def test_population_timeout_is_capture_load_failure() -> None:
+def test_population_polling_times_out_only_when_layout_is_invalid() -> None:
     clock = FakeClock()
 
     with pytest.raises(CalendarAnimError, match="CAPTURE LOAD FAILURE") as captured:
         wait_for_stable_population(
-            lambda: (_audit(1), 0.9, {"left": 72.0, "width": 1764.0}),
+            lambda: (_audit(1), 1.0, {"left": 72.0, "width": 1764.0}),
             expected_count=972,
             timeout_seconds=2,
             interval_seconds=1,
@@ -430,6 +440,76 @@ def test_population_timeout_is_capture_load_failure() -> None:
     assert captured.value.samples[-1]["unique_event_chips"] == 1
 
 
+def test_dom_population_below_75_percent_does_not_block_visual_capture() -> None:
+    clock = FakeClock()
+
+    result = wait_for_stable_visual_grid(
+        lambda: (
+            b"stable-grid",
+            _audit(1800),
+            0.9,
+            {"left": 72.0, "right": 1836.0, "width": 1764.0},
+            {"strategy": "css-grid-seven-tracks"},
+        ),
+        expected_count=3474,
+        timeout_seconds=5,
+        interval_seconds=1,
+        stable_samples=3,
+        expected_coordinate_scale=0.9,
+        clock=clock,
+        sleeper=clock.sleep,
+    )
+
+    assert result.unique_event_count == 1800
+    assert result.samples[-1]["event_population_warning"] is True
+    assert result.samples[-1]["stable_sequence"] == 3
+
+
+def test_visual_grid_stability_requires_three_matching_samples() -> None:
+    clock = FakeClock()
+    images = iter([b"changing", b"stable", b"stable", b"stable"])
+
+    result = wait_for_stable_visual_grid(
+        lambda: (
+            next(images),
+            _audit(0),
+            0.9,
+            {"left": 72.0, "right": 1836.0, "width": 1764.0},
+            {"strategy": "seven-equal-structural-columns"},
+        ),
+        expected_count=3474,
+        timeout_seconds=5,
+        interval_seconds=1,
+        stable_samples=3,
+        expected_coordinate_scale=0.9,
+        clock=clock,
+        sleeper=clock.sleep,
+    )
+
+    assert len(result.samples) == 4
+    assert result.samples[-1]["stable_sequence"] == 3
+
+
+def test_grid_can_be_selected_without_exactly_seven_day_nodes() -> None:
+    diagnostics = {
+        "selected": {"left": 72, "right": 1836, "width": 1764},
+        "strategy": "css-grid-seven-tracks",
+        "day_column_candidates": [],
+        "selected_day_columns": [],
+    }
+
+    assert structural_grid_bounds_from_diagnostics(diagnostics) == {
+        "left": 72.0,
+        "right": 1836.0,
+        "width": 1764.0,
+    }
+
+
+def test_missing_structural_grid_is_capture_load_failure() -> None:
+    with pytest.raises(CalendarAnimError, match="content-independent Calendar week grid"):
+        structural_grid_bounds_from_diagnostics({"selected": None, "day_column_candidates": []})
+
+
 def test_structural_grid_clip_does_not_depend_on_sparse_or_dense_events() -> None:
     structural = {"left": 72.0, "right": 1836.0, "width": 1764.0}
     time_bounds = {"x": 0.0, "y": 300.0, "width": 1900.0, "height": 800.0}
@@ -439,6 +519,29 @@ def test_structural_grid_clip_does_not_depend_on_sparse_or_dense_events() -> Non
 
     assert dense_clip == sparse_clip
     assert dense_clip["width"] / 126 == pytest.approx(12.6)
+
+
+def test_wrong_week_blocks_capture_before_screenshot(tmp_path: Path) -> None:
+    plan = _hybrid_plan(tmp_path)
+    _write_uniform_frame_plan(Path(plan.frames[23].source_frame_plan), 23)
+
+    class WrongWeekGateway(ReadOnlyFakeGateway):
+        def wait_until_ready(self, week_start: date, minimum_event_count: int) -> None:
+            self.waited.append((week_start, minimum_event_count))
+            raise CalendarAnimError("Calendar navigated to a different week")
+
+        def reload_current_week(self, week_start: date, minimum_event_count: int) -> None:
+            self.reloads.append(week_start)
+            self.wait_until_ready(week_start, minimum_event_count)
+
+    gateway = WrongWeekGateway()
+    report = HybridCaptureService(
+        HybridCaptureStore(tmp_path / "runs"), lambda _p, _z: gateway
+    ).capture_sanity(plan, [24])
+
+    assert report.automated_result == "CAPTURE ERROR"
+    assert gateway.population_waits == []
+    assert len(gateway.reloads) == 2
 
 
 def test_previous_sanity_is_archived_before_replacement(tmp_path: Path) -> None:
@@ -499,3 +602,37 @@ def test_exhausted_loading_retries_are_capture_error_not_recurrence_no_go(
     assert report.results[0].capture_load_success is False
     assert report.results[0].capture_retry_cycles == 2
     assert report.results[0].unique_event_population_valid is False
+
+
+def test_low_dom_population_is_diagnostic_and_not_part_of_sanity_gate(
+    tmp_path: Path,
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    plan.frames[23].expected_occurrences = 10
+    _write_uniform_frame_plan(Path(plan.frames[23].source_frame_plan), 23)
+    gateway = ReadOnlyFakeGateway()
+
+    report = HybridCaptureService(
+        HybridCaptureStore(tmp_path / "runs"), lambda _p, _z: gateway
+    ).capture_sanity(plan, [24])
+
+    assert report.results[0].unique_event_population_valid is False
+    assert report.results[0].obvious_missing_content is False
+    assert report.automated_result == "PASS"
+
+
+def test_one_frame_debug_capture_writes_all_artifacts(tmp_path: Path) -> None:
+    plan = _hybrid_plan(tmp_path)
+    gateway = ReadOnlyFakeGateway()
+    store = HybridCaptureStore(tmp_path / "runs")
+
+    report = HybridCaptureService(store, lambda _p, _z: gateway).capture_debug(
+        plan, 60, "account-b"
+    )
+
+    directory = store.debug_frame_directory(plan.run_id, 60)
+    assert report["google_calendar_writes"] is False
+    assert (directory / "raw-browser.png").is_file()
+    assert (directory / "grid-crop.png").is_file()
+    assert (directory / "normalized.png").is_file()
+    assert (directory / "debug.json").is_file()
