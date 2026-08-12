@@ -246,6 +246,13 @@ frame and checkpoints pause metadata. The approved final run automatically waits
 30 minutes, 60 minutes, 2 hours, then 4 hours between single-event deterministic recovery probes.
 It resumes automatically when the probe succeeds and stops safely after 48 continuous hours.
 
+Before migrating the remaining frames to recurring parents, the isolated
+[recurrence smallest real validation](docs/recurrence-smallest-real-validation.md) creates one
+`DTSTART + 2 RDATE` parent (three displayed recurring instances) and three standalone controls in
+six post-run weeks. Its real upload is separately confirmed, preflights clean weeks, records the
+exact insert/error counts, captures paired Playwright screenshots, and cleans up only its own
+private validation metadata.
+
 Cleanup is local by default and can target one frame or the whole run:
 
 ```powershell
