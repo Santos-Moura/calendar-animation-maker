@@ -265,6 +265,40 @@ def test_upload_animation_dry_run_skips_api_and_lists_actions(
     assert "No authentication or Calendar API call was made" in result.output
 
 
+def test_recurrence_plan_is_local_and_expands_exactly(tmp_path: Path) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=2)
+    output_root = tmp_path / "runs"
+    artifact_directory = tmp_path / "recurrence-study"
+    assert runner.invoke(app, _plan_command(manifest, profile, output_root, 2)).exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "recurrence-plan",
+            "--run-id",
+            "cli-animation",
+            "--output-root",
+            str(output_root),
+            "--artifact-directory",
+            str(artifact_directory),
+            "--parent-chunk-size",
+            "25",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Expansion equals original: YES" in result.output
+    assert "Google Calendar writes: NO" in result.output
+    report = json.loads((artifact_directory / "recurrence-report.json").read_text(encoding="utf-8"))
+    migration = json.loads(
+        (artifact_directory / "recurrence-plan.json").read_text(encoding="utf-8")
+    )
+    assert report["rendered_instances"] == report["current_independent_inserts"]
+    assert report["expanded_full_set_equals_original"] is True
+    assert migration["expansion_equals_missing"] is True
+
+
 def test_upload_execute_requires_confirmation_before_gateway(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
