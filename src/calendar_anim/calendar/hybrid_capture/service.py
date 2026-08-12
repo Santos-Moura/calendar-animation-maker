@@ -10,8 +10,10 @@ from PIL import Image
 
 from calendar_anim.calendar.frame_mapping.models import SingleFrameCalendarPlan
 from calendar_anim.calendar.hybrid_capture.artifacts import (
+    LEGACY_RESOLUTION,
     HybridCaptureStore,
     compare_logical_cells,
+    compose_high_resolution_comparison,
     compose_mode_contact_sheet,
     compose_output_mode,
     compose_sanity_contact_sheet,
@@ -179,9 +181,13 @@ class HybridCaptureService:
         return payload
 
     def capture_debug_modes(
-        self, plan: HybridCapturePlan, human_frame: int, profile: str
+        self,
+        plan: HybridCapturePlan,
+        human_frame: int,
+        profile: str,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
     ) -> dict[str, object]:
-        """Capture one browser view and derive all three output modes locally."""
+        """Capture once and compose legacy modes or the native high-resolution Mode C."""
 
         if not 1 <= human_frame <= len(plan.frames):
             raise CalendarAnimError(f"Human frame must be between 1 and {len(plan.frames)}")
@@ -190,20 +196,19 @@ class HybridCaptureService:
             raise CalendarAnimError(
                 f"Frame {human_frame} belongs to {frame.calendar_profile}, not {profile}"
             )
-        directory = self.store.debug_frame_directory(plan.run_id, human_frame)
+        high_resolution = resolution != LEGACY_RESOLUTION
+        directory = (
+            self.store.high_resolution_debug_directory(plan.run_id, human_frame)
+            if high_resolution
+            else self.store.debug_frame_directory(plan.run_id, human_frame)
+        )
         raw = directory / "raw-browser.png"
         logical_source = directory / ".pixel-faithful-source.png"
-        header_source = directory / ".header-preserved-source.png"
+        header_source = directory / (
+            "mode-c-native-crop.png" if high_resolution else ".header-preserved-source.png"
+        )
         debug_json = directory / "debug.json"
-        mode_paths = {
-            HybridOutputMode.PIXEL_FAITHFUL: directory / "mode-a-pixel-faithful.png",
-            HybridOutputMode.HEADER_PRESERVED_LETTERBOX: (
-                directory / "mode-b-header-preserved-letterbox.png"
-            ),
-            HybridOutputMode.HEADER_PRESERVED_FILL: (
-                directory / "mode-c-header-preserved-fill.png"
-            ),
-        }
+        mode_paths = _debug_mode_paths(directory, resolution)
         try:
             with self.gateway_factory(profile, frame.capture_zoom_percent) as gateway:
                 metrics = self._browser_capture(
@@ -216,22 +221,33 @@ class HybridCaptureService:
                 )
             modes: dict[str, object] = {}
             logical_clip = metrics.get("logical_clip")
-            header_clip = metrics.get("header_grid_bounds")
+            header_bounds = metrics.get("header_grid_bounds")
+            native_header_height = _native_header_height(metrics)
             for mode, output in mode_paths.items():
                 composition = compose_output_mode(
                     logical_source,
                     header_source,
                     output,
                     mode,
+                    resolution,
+                    native_header_height=native_header_height,
                 )
                 composition["bounds"] = (
-                    logical_clip if mode is HybridOutputMode.PIXEL_FAITHFUL else header_clip
+                    logical_clip if mode is HybridOutputMode.PIXEL_FAITHFUL else header_bounds
                 )
-                composition["source"] = "temporary structural browser crop (removed)"
+                composition["source"] = "native browser crop"
                 composition["artifact"] = str(output)
                 modes[mode.value] = composition
-            contact_sheet = compose_mode_contact_sheet(
-                list(mode_paths.items()), directory / "comparison-contact-sheet.png"
+            comparison = (
+                compose_high_resolution_comparison(
+                    header_source,
+                    mode_paths[HybridOutputMode.HEADER_PRESERVED_FILL],
+                    directory / "comparison-hires.png",
+                )
+                if high_resolution
+                else compose_mode_contact_sheet(
+                    list(mode_paths.items()), directory / "comparison-contact-sheet.png"
+                )
             )
             payload: dict[str, object] = {
                 "success": True,
@@ -241,12 +257,21 @@ class HybridCaptureService:
                 "week_start": frame.week_start.isoformat(),
                 "profile": profile,
                 "capture_zoom_percent": frame.capture_zoom_percent,
+                "output_resolution": list(resolution),
+                "raw_browser_dimensions": _image_dimensions(raw),
+                "native_composed_crop_dimensions": (
+                    _image_dimensions(header_source) if high_resolution else None
+                ),
                 "vertical_interval": "06:00-00:00",
+                "logical_grid": [126, 72],
+                "pre_06_gap_present": False,
                 "bounds_source": "content-independent structural week grid",
                 "modes": modes,
                 "artifacts": {
                     "raw_browser": str(raw),
-                    "comparison_contact_sheet": str(contact_sheet),
+                    "native_crop": str(header_source) if high_resolution else None,
+                    "final_output": str(mode_paths.get(HybridOutputMode.HEADER_PRESERVED_FILL, "")),
+                    "comparison": str(comparison),
                     "debug_json": str(debug_json),
                 },
                 "capture": metrics,
@@ -270,7 +295,10 @@ class HybridCaptureService:
             write_atomic(debug_json, json.dumps(payload, indent=2) + "\n")
             raise
         finally:
-            for temporary in (logical_source, header_source):
+            temporary_paths = [logical_source]
+            if not high_resolution:
+                temporary_paths.append(header_source)
+            for temporary in temporary_paths:
                 if temporary.exists():
                     temporary.unlink()
 
@@ -279,9 +307,12 @@ class HybridCaptureService:
         plan: HybridCapturePlan,
         state: HybridCaptureState,
         mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
     ) -> HybridCaptureState:
         if state.output_mode is not mode:
             raise CalendarAnimError("Hybrid capture state does not match selected output mode")
+        if (state.output_width, state.output_height) != resolution:
+            raise CalendarAnimError("Hybrid capture state does not match selected resolution")
         sanity = self.store.load_sanity_report(plan.run_id)
         if sanity.automated_result != "PASS":
             raise CalendarAnimError("Hybrid sanity is NO-GO; full capture is blocked")
@@ -293,7 +324,9 @@ class HybridCaptureService:
             with self.gateway_factory(profile, zoom) as gateway:
                 for frame in frames:
                     state_frame = state.frame(frame.frame_index)
-                    output = self.store.final_frame_path(plan.run_id, frame.frame_index, mode)
+                    output = self.store.final_frame_path(
+                        plan.run_id, frame.frame_index, mode, resolution
+                    )
                     if state_frame.status is HybridFrameStatus.COMPLETED and output.is_file():
                         continue
                     state_frame.status = HybridFrameStatus.CAPTURING
@@ -301,20 +334,35 @@ class HybridCaptureService:
                     state_frame.error = None
                     self.store.save_state(state)
                     try:
-                        raw = self.store.final_raw_path(plan.run_id, frame.frame_index, mode)
+                        raw = self.store.final_raw_path(
+                            plan.run_id, frame.frame_index, mode, resolution
+                        )
                         logical = self.store.final_logical_path(
-                            plan.run_id, frame.frame_index, mode
+                            plan.run_id, frame.frame_index, mode, resolution
                         )
                         header = (
-                            self.store.final_header_path(plan.run_id, frame.frame_index, mode)
+                            self.store.final_header_path(
+                                plan.run_id, frame.frame_index, mode, resolution
+                            )
                             if mode.includes_header
                             else None
                         )
-                        self._browser_capture(gateway, frame, raw, logical, header=header)
-                        compose_output_mode(logical, header, output, mode)
+                        metrics = self._browser_capture(gateway, frame, raw, logical, header=header)
+                        compose_output_mode(
+                            logical,
+                            header,
+                            output,
+                            mode,
+                            resolution,
+                            native_header_height=(
+                                _native_header_height(metrics) if mode.includes_header else None
+                            ),
+                        )
                         with Image.open(output) as image:
-                            if image.size != (504, 288):
-                                raise CalendarAnimError("Final normalized frame is not 504x288")
+                            if image.size != resolution:
+                                raise CalendarAnimError(
+                                    "Final normalized frame resolution is incorrect"
+                                )
                     except Exception as error:
                         state_frame.status = HybridFrameStatus.FAILED
                         state_frame.error = str(error)
@@ -323,13 +371,14 @@ class HybridCaptureService:
                     state_frame.status = HybridFrameStatus.COMPLETED
                     state_frame.completed_at = datetime.now(UTC)
                     self.store.save_state(state)
-        self._validate_final_sequence(plan, mode)
+        self._validate_final_sequence(plan, mode, resolution)
         compose_seam_geometry(
-            self.store.final_frame_path(plan.run_id, 22, mode),
-            self.store.final_frame_path(plan.run_id, 23, mode),
+            self.store.final_frame_path(plan.run_id, 22, mode, resolution),
+            self.store.final_frame_path(plan.run_id, 23, mode, resolution),
             self.store.run_directory(plan.run_id)
             / "seam"
             / mode.directory_name
+            / f"{resolution[0]}x{resolution[1]}"
             / "a-b-transition-geometry.png",
         )
         return state
@@ -587,13 +636,21 @@ class HybridCaptureService:
                     pass
         raise CaptureLoadFailure(errors, diagnostics, diagnostic_json_paths, population_samples)
 
-    def _validate_final_sequence(self, plan: HybridCapturePlan, mode: HybridOutputMode) -> None:
-        paths = [self.store.final_frame_path(plan.run_id, index, mode) for index in range(108)]
+    def _validate_final_sequence(
+        self,
+        plan: HybridCapturePlan,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> None:
+        paths = [
+            self.store.final_frame_path(plan.run_id, index, mode, resolution)
+            for index in range(108)
+        ]
         if len(paths) != len(set(paths)) or any(not path.is_file() for path in paths):
             raise CalendarAnimError("Final hybrid frames contain a gap or duplicate")
         for path in paths:
             with Image.open(path) as image:
-                if image.size != (504, 288):
+                if image.size != resolution:
                     raise CalendarAnimError(f"Final frame has wrong geometry: {path}")
 
 
@@ -604,6 +661,40 @@ def _load_frame_plan(frame: HybridFramePlan) -> SingleFrameCalendarPlan:
         )
     except (OSError, ValueError) as error:
         raise CalendarAnimError(f"Invalid source frame plan: {frame.source_frame_plan}") from error
+
+
+def _native_header_height(metrics: dict[str, object]) -> int:
+    bounds = metrics.get("header_grid_bounds")
+    if not isinstance(bounds, dict):
+        raise CalendarAnimError("Native Calendar header bounds are unavailable")
+    height = bounds.get("native_header_height")
+    if not isinstance(height, int) or height <= 0:
+        raise CalendarAnimError("Native Calendar header height is invalid")
+    return height
+
+
+def _image_dimensions(path: Path) -> list[int]:
+    try:
+        with Image.open(path) as image:
+            return [image.width, image.height]
+    except OSError as error:
+        raise CalendarAnimError(f"Could not inspect capture dimensions: {path}") from error
+
+
+def _debug_mode_paths(directory: Path, resolution: tuple[int, int]) -> dict[HybridOutputMode, Path]:
+    if resolution != LEGACY_RESOLUTION:
+        return {
+            HybridOutputMode.HEADER_PRESERVED_FILL: (
+                directory / f"mode-c-{resolution[0]}x{resolution[1]}.png"
+            )
+        }
+    return {
+        HybridOutputMode.PIXEL_FAITHFUL: directory / "mode-a-pixel-faithful.png",
+        HybridOutputMode.HEADER_PRESERVED_LETTERBOX: (
+            directory / "mode-b-header-preserved-letterbox.png"
+        ),
+        HybridOutputMode.HEADER_PRESERVED_FILL: (directory / "mode-c-header-preserved-fill.png"),
+    }
 
 
 def _sanity_passes(result: SanityFrameResult) -> bool:

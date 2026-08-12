@@ -79,9 +79,11 @@ class HybridFrameState(BaseModel):
 
 
 class HybridCaptureState(BaseModel):
-    schema_version: str = "2.0"
+    schema_version: str = "3.0"
     run_id: str
     output_mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL
+    output_width: int = 504
+    output_height: int = 288
     frames: list[HybridFrameState]
     updated_at: datetime
 

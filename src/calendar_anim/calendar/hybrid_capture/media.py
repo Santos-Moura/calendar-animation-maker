@@ -11,7 +11,7 @@ from calendar_anim.calendar.capture.final_media import FFmpegTools
 from calendar_anim.exceptions import CalendarAnimError
 
 
-def validate_final_frames(directory: Path) -> list[Path]:
+def validate_final_frames(directory: Path, resolution: tuple[int, int] = (504, 288)) -> list[Path]:
     expected = [directory / f"frame_{index:03d}.png" for index in range(108)]
     actual = sorted(directory.glob("frame_*.png"))
     if actual != expected:
@@ -19,8 +19,10 @@ def validate_final_frames(directory: Path) -> list[Path]:
     for path in expected:
         try:
             with Image.open(path) as image:
-                if image.size != (504, 288):
-                    raise CalendarAnimError(f"Final frame is not 504x288: {path}")
+                if image.size != resolution:
+                    raise CalendarAnimError(
+                        f"Final frame is not {resolution[0]}x{resolution[1]}: {path}"
+                    )
         except OSError as error:
             raise CalendarAnimError(f"Unreadable final frame: {path}") from error
     return expected
@@ -58,8 +60,13 @@ def build_final_visual_command(
     ]
 
 
-def compose_final_visual(tools: FFmpegTools, frame_directory: Path, output: Path) -> Path:
-    validate_final_frames(frame_directory)
+def compose_final_visual(
+    tools: FFmpegTools,
+    frame_directory: Path,
+    output: Path,
+    resolution: tuple[int, int] = (504, 288),
+) -> Path:
+    validate_final_frames(frame_directory, resolution)
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(build_final_visual_command(tools, frame_directory, output))
     return output

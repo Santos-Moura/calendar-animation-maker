@@ -16,7 +16,12 @@ from calendar_anim.calendar.capture.final_media import (
     validate_timing,
 )
 from calendar_anim.calendar.capture.models import BrowserChannel, CalendarCaptureConfig
-from calendar_anim.calendar.hybrid_capture.artifacts import HybridCaptureStore, write_atomic
+from calendar_anim.calendar.hybrid_capture.artifacts import (
+    HybridCaptureStore,
+    parse_output_resolution,
+    resolution_name,
+    write_atomic,
+)
 from calendar_anim.calendar.hybrid_capture.media import compose_final_visual
 from calendar_anim.calendar.hybrid_capture.models import HybridOutputMode
 from calendar_anim.calendar.hybrid_capture.planner import (
@@ -182,6 +187,7 @@ def capture_hybrid_debug_modes_command(
     run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
     profile: Annotated[str, typer.Option("--profile")] = "account-b",
     frame: Annotated[int, typer.Option("--frame", min=1, max=108)] = 60,
+    resolution: Annotated[str, typer.Option("--resolution")] = "504x288",
     stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
     ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
     execute: Annotated[bool, typer.Option("--execute")] = False,
@@ -190,13 +196,18 @@ def capture_hybrid_debug_modes_command(
 
     try:
         plan = build_final_capture_plan(run_id)
+        output_resolution = parse_output_resolution(resolution)
         selected = plan.frames[frame - 1]
         if selected.calendar_profile != profile:
             raise CalendarAnimError(
                 f"Frame {frame} belongs to {selected.calendar_profile}, not {profile}"
             )
         store = HybridCaptureStore()
-        output = store.debug_frame_directory(run_id, frame)
+        output = (
+            store.high_resolution_debug_directory(run_id, frame)
+            if output_resolution != (504, 288)
+            else store.debug_frame_directory(run_id, frame)
+        )
     except (CalendarAnimError, IndexError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Run: {run_id}")
@@ -204,7 +215,11 @@ def capture_hybrid_debug_modes_command(
     typer.echo(f"Week: {selected.week_start}")
     typer.echo(f"Profile: {profile}")
     typer.echo(f"Browser zoom: {selected.capture_zoom_percent}%")
-    typer.echo("Modes: pixel_faithful, header_preserved_letterbox, header_preserved_fill")
+    typer.echo(f"Output resolution: {resolution_name(output_resolution)}")
+    if output_resolution == (504, 288):
+        typer.echo("Modes: pixel_faithful, header_preserved_letterbox, header_preserved_fill")
+    else:
+        typer.echo("Mode: header_preserved_fill (native high-resolution path)")
     typer.echo("Visible window: 06:00-00:00")
     typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
     typer.echo(f"Output: {output}")
@@ -215,7 +230,7 @@ def capture_hybrid_debug_modes_command(
     try:
         report = HybridCaptureService(
             store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
-        ).capture_debug_modes(plan, frame, profile)
+        ).capture_debug_modes(plan, frame, profile, output_resolution)
     except KeyboardInterrupt:
         typer.secho("Mode comparison interrupted; Calendar was not modified.", fg="yellow")
         raise typer.Exit(code=130) from None
@@ -224,10 +239,14 @@ def capture_hybrid_debug_modes_command(
     artifacts = report.get("artifacts")
     if not isinstance(artifacts, dict):
         _fail(CalendarAnimError("Mode comparison artifact report is invalid"))
-    typer.echo(f"Mode A: {output / 'mode-a-pixel-faithful.png'}")
-    typer.echo(f"Mode B: {output / 'mode-b-header-preserved-letterbox.png'}")
-    typer.echo(f"Mode C: {output / 'mode-c-header-preserved-fill.png'}")
-    typer.echo(f"Comparison: {artifacts['comparison_contact_sheet']}")
+    if output_resolution == (504, 288):
+        typer.echo(f"Mode A: {output / 'mode-a-pixel-faithful.png'}")
+        typer.echo(f"Mode B: {output / 'mode-b-header-preserved-letterbox.png'}")
+        typer.echo(f"Mode C: {output / 'mode-c-header-preserved-fill.png'}")
+    else:
+        typer.echo(f"Native crop: {artifacts['native_crop']}")
+        typer.echo(f"Mode C high resolution: {artifacts['final_output']}")
+    typer.echo(f"Comparison: {artifacts['comparison']}")
     typer.echo(f"Debug JSON: {artifacts['debug_json']}")
     typer.echo("Calendar writes: NO")
 
@@ -235,6 +254,7 @@ def capture_hybrid_debug_modes_command(
 def capture_final_hybrid_command(
     run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
     mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (HybridOutputMode.PIXEL_FAITHFUL),
+    resolution: Annotated[str, typer.Option("--resolution")] = "504x288",
     stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
     ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
     execute: Annotated[bool, typer.Option("--execute")] = False,
@@ -243,8 +263,9 @@ def capture_final_hybrid_command(
 
     try:
         plan = build_final_capture_plan(run_id)
+        output_resolution = parse_output_resolution(resolution)
         store = HybridCaptureStore()
-        state = store.initialize_state(plan, mode)
+        state = store.initialize_state(plan, mode, output_resolution)
         sanity_path = store.sanity_directory(run_id) / "sanity-report.json"
         sanity = store.load_sanity_report(run_id) if sanity_path.exists() else None
     except (CalendarAnimError, OSError, ValueError) as error:
@@ -254,10 +275,10 @@ def capture_final_hybrid_command(
     typer.echo("Frames 24-108: account-b, zoom 90%")
     typer.echo("Visible window: 06:00-00:00")
     typer.echo(f"Output mode: {mode.value}")
-    typer.echo("Normalized output: 108 PNGs, 504x288")
+    typer.echo(f"Normalized output: 108 PNGs, {resolution_name(output_resolution)}")
     typer.echo(f"Sanity gate: {sanity.automated_result if sanity else 'NOT RUN'}")
     typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
-    typer.echo(f"Output: {store.final_frames_directory(run_id, mode)}")
+    typer.echo(f"Output: {store.final_frames_directory(run_id, mode, output_resolution)}")
     if not execute:
         typer.echo("No browser was opened and no Calendar API call was made.")
         typer.echo("Calendar writes: NO")
@@ -265,7 +286,7 @@ def capture_final_hybrid_command(
     try:
         state = HybridCaptureService(
             store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
-        ).capture_final(plan, state, mode)
+        ).capture_final(plan, state, mode, output_resolution)
     except KeyboardInterrupt:
         typer.secho("Capture interrupted; atomic frame checkpoint was preserved.", fg="yellow")
         raise typer.Exit(code=130) from None
@@ -324,17 +345,24 @@ def capture_hybrid_seam_command(
 def compose_final_hybrid_command(
     run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
     mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (HybridOutputMode.PIXEL_FAITHFUL),
+    resolution: Annotated[str, typer.Option("--resolution")] = "504x288",
 ) -> None:
     """Compose 108 normalized PNG frames into the approved silent MP4."""
 
     try:
         store = HybridCaptureStore()
+        output_resolution = parse_output_resolution(resolution)
         plan = store.load_plan(run_id)
         if plan.frame_count / plan.fps != 36:
             raise CalendarAnimError("108 frames at 3 FPS must equal exactly 36 seconds")
         tools = detect_ffmpeg()
-        output = store.final_directory(run_id, mode) / "calendar-animation.mp4"
-        compose_final_visual(tools, store.final_frames_directory(run_id, mode), output)
+        output = store.final_directory(run_id, mode, output_resolution) / "calendar-animation.mp4"
+        compose_final_visual(
+            tools,
+            store.final_frames_directory(run_id, mode, output_resolution),
+            output,
+            output_resolution,
+        )
         duration = probe_duration(tools, output)
         if abs(duration - 36) > 0.05:
             raise CalendarAnimError(f"Silent MP4 duration is {duration:.6f}s, expected 36s")
@@ -342,7 +370,7 @@ def compose_final_hybrid_command(
             "frames": 108,
             "fps": 3,
             "duration_seconds": duration,
-            "resolution": "504x288",
+            "resolution": resolution_name(output_resolution),
             "codec": "H.264 High",
             "crf": 10,
             "preset": "slow",
@@ -366,14 +394,16 @@ def compose_final_hybrid_command(
 def mux_final_hybrid_audio_command(
     run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
     mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (HybridOutputMode.PIXEL_FAITHFUL),
+    resolution: Annotated[str, typer.Option("--resolution")] = "504x288",
     source_video: Annotated[Path, typer.Option("--source-video")] = Path("input.mp4"),
 ) -> None:
     """Mux the exact 114-150s source audio with the composed Calendar MP4."""
 
     try:
         validate_input_hash(source_video)
+        output_resolution = parse_output_resolution(resolution)
         store = HybridCaptureStore()
-        final = store.final_directory(run_id, mode)
+        final = store.final_directory(run_id, mode, output_resolution)
         visual = final / "calendar-animation.mp4"
         if not visual.is_file():
             raise CalendarAnimError("Compose the silent final hybrid MP4 first")

@@ -17,6 +17,30 @@ from calendar_anim.calendar.hybrid_capture.models import (
 )
 from calendar_anim.exceptions import CalendarAnimError
 
+LEGACY_RESOLUTION = (504, 288)
+HIGH_RESOLUTION = (1512, 864)
+
+
+def parse_output_resolution(value: str) -> tuple[int, int]:
+    try:
+        width_text, height_text = value.lower().split("x", maxsplit=1)
+        width, height = int(width_text), int(height_text)
+    except ValueError as error:
+        raise CalendarAnimError(
+            "--resolution must use WIDTHxHEIGHT, for example 1512x864"
+        ) from error
+    if width <= 0 or height <= 0 or width > 7680 or height > 4320:
+        raise CalendarAnimError("Output resolution is outside the supported positive range")
+    if width * 4 != height * 7:
+        raise CalendarAnimError("Hybrid output resolution must preserve the 7:4 aspect ratio")
+    if width % 2 or height % 2:
+        raise CalendarAnimError("Hybrid output dimensions must be even for yuv420p")
+    return width, height
+
+
+def resolution_name(resolution: tuple[int, int]) -> str:
+    return f"{resolution[0]}x{resolution[1]}"
+
 
 def write_atomic(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,8 +71,10 @@ class HybridCaptureStore:
         self,
         run_id: str,
         mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
     ) -> Path:
-        return self.run_directory(run_id) / "final-capture-state" / f"{mode.value}.json"
+        name = f"{mode.value}-{resolution_name(resolution)}.json"
+        return self.run_directory(run_id) / "final-capture-state" / name
 
     def sanity_directory(self, run_id: str) -> Path:
         return self.run_directory(run_id) / "sanity"
@@ -58,6 +84,9 @@ class HybridCaptureStore:
 
     def debug_frame_directory(self, run_id: str, human_frame: int) -> Path:
         return self.run_directory(run_id) / "capture-debug" / f"frame-{human_frame:03d}"
+
+    def high_resolution_debug_directory(self, run_id: str, human_frame: int) -> Path:
+        return self.run_directory(run_id) / "capture-debug" / f"frame-{human_frame:03d}-hires"
 
     def archive_sanity(self, run_id: str) -> Path | None:
         """Move an earlier sanity run aside before a new read-only capture."""
@@ -75,46 +104,80 @@ class HybridCaptureStore:
         self,
         run_id: str,
         mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
     ) -> Path:
-        return self.run_directory(run_id) / "final-frames" / mode.directory_name
+        return (
+            self.run_directory(run_id)
+            / "final-frames"
+            / mode.directory_name
+            / resolution_name(resolution)
+        )
 
     def final_frame_path(
         self,
         run_id: str,
         frame_index: int,
         mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
     ) -> Path:
-        return self.final_frames_directory(run_id, mode) / f"frame_{frame_index:03d}.png"
+        return (
+            self.final_frames_directory(run_id, mode, resolution) / f"frame_{frame_index:03d}.png"
+        )
 
-    def final_raw_path(self, run_id: str, frame_index: int, mode: HybridOutputMode) -> Path:
+    def final_raw_path(
+        self,
+        run_id: str,
+        frame_index: int,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
+    ) -> Path:
         return (
             self.run_directory(run_id)
             / "final-capture"
             / mode.directory_name
+            / resolution_name(resolution)
             / "raw"
             / f"frame_{frame_index:03d}.png"
         )
 
-    def final_logical_path(self, run_id: str, frame_index: int, mode: HybridOutputMode) -> Path:
+    def final_logical_path(
+        self,
+        run_id: str,
+        frame_index: int,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
+    ) -> Path:
         return (
             self.run_directory(run_id)
             / "final-capture"
             / mode.directory_name
+            / resolution_name(resolution)
             / "logical"
             / f"frame_{frame_index:03d}.png"
         )
 
-    def final_header_path(self, run_id: str, frame_index: int, mode: HybridOutputMode) -> Path:
+    def final_header_path(
+        self,
+        run_id: str,
+        frame_index: int,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
+    ) -> Path:
         return (
             self.run_directory(run_id)
             / "final-capture"
             / mode.directory_name
+            / resolution_name(resolution)
             / "header-grid"
             / f"frame_{frame_index:03d}.png"
         )
 
-    def final_directory(self, run_id: str, mode: HybridOutputMode) -> Path:
-        return self.run_directory(run_id) / "final" / mode.directory_name
+    def final_directory(
+        self, run_id: str, mode: HybridOutputMode, resolution: tuple[int, int]
+    ) -> Path:
+        return (
+            self.run_directory(run_id) / "final" / mode.directory_name / resolution_name(resolution)
+        )
 
     def save_plan(self, plan: HybridCapturePlan) -> Path:
         path = self.plan_path(plan.run_id)
@@ -135,12 +198,15 @@ class HybridCaptureStore:
         self,
         plan: HybridCapturePlan,
         mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
     ) -> HybridCaptureState:
-        path = self.state_path(plan.run_id, mode)
+        path = self.state_path(plan.run_id, mode, resolution)
         if path.exists():
             state = HybridCaptureState.model_validate_json(path.read_text(encoding="utf-8"))
             if state.output_mode is not mode:
                 raise CalendarAnimError("Hybrid capture state output mode differs")
+            if (state.output_width, state.output_height) != resolution:
+                raise CalendarAnimError("Hybrid capture state resolution differs")
             expected = [(item.frame_index, item.calendar_profile) for item in plan.frames]
             actual = [(item.frame_index, item.profile) for item in state.frames]
             if actual != expected:
@@ -149,6 +215,8 @@ class HybridCaptureStore:
         state = HybridCaptureState(
             run_id=plan.run_id,
             output_mode=mode,
+            output_width=resolution[0],
+            output_height=resolution[1],
             frames=[
                 HybridFrameState(frame_index=item.frame_index, profile=item.calendar_profile)
                 for item in plan.frames
@@ -161,7 +229,11 @@ class HybridCaptureStore:
     def save_state(self, state: HybridCaptureState) -> Path:
         state.updated_at = datetime.now(UTC)
         return write_atomic(
-            self.state_path(state.run_id, state.output_mode),
+            self.state_path(
+                state.run_id,
+                state.output_mode,
+                (state.output_width, state.output_height),
+            ),
             state.model_dump_json(indent=2) + "\n",
         )
 
@@ -217,8 +289,11 @@ def compose_output_mode(
     header_source: Path | None,
     destination: Path,
     mode: HybridOutputMode,
+    resolution: tuple[int, int] = LEGACY_RESOLUTION,
+    *,
+    native_header_height: int | None = None,
 ) -> dict[str, object]:
-    """Compose one Calendar capture mode using nearest-neighbor pixels only."""
+    """Compose directly from native browser crops into the requested resolution."""
 
     source_path = logical_source if mode is HybridOutputMode.PIXEL_FAITHFUL else header_source
     if source_path is None:
@@ -228,30 +303,66 @@ def compose_output_mode(
         with Image.open(source_path) as opened:
             source = opened.convert("RGB")
             source_width, source_height = source.size
+            target_width, target_height = resolution
             if source_width <= 0 or source_height <= 0:
                 raise CalendarAnimError("Calendar mode source has invalid dimensions")
             if mode is HybridOutputMode.HEADER_PRESERVED_LETTERBOX:
-                scale = min(504 / source_width, 288 / source_height)
+                scale = min(target_width / source_width, target_height / source_height)
                 content_size = (
                     max(1, round(source_width * scale)),
                     max(1, round(source_height * scale)),
                 )
                 resized = source.resize(content_size, Image.Resampling.NEAREST)
-                output = Image.new("RGB", (504, 288), "#202124")
-                offset = ((504 - content_size[0]) // 2, (288 - content_size[1]) // 2)
+                output = Image.new("RGB", resolution, "#202124")
+                offset = (
+                    (target_width - content_size[0]) // 2,
+                    (target_height - content_size[1]) // 2,
+                )
                 output.paste(resized, offset)
                 resized.close()
-                letterbox = content_size != (504, 288)
+                letterbox = content_size != resolution
                 stretch = False
+                header_method = "nearest-neighbor"
+                grid_method = "nearest-neighbor"
+            elif mode is HybridOutputMode.HEADER_PRESERVED_FILL and resolution != LEGACY_RESOLUTION:
+                if native_header_height is None or not 0 < native_header_height < source_height:
+                    raise CalendarAnimError(
+                        "High-resolution header fill requires native header geometry"
+                    )
+                target_header_height = max(
+                    1, round(target_height * native_header_height / source_height)
+                )
+                target_grid_height = target_height - target_header_height
+                native_header = source.crop((0, 0, source_width, native_header_height))
+                native_grid = source.crop((0, native_header_height, source_width, source_height))
+                resized_header = native_header.resize(
+                    (target_width, target_header_height), Image.Resampling.LANCZOS
+                )
+                resized_grid = native_grid.resize(
+                    (target_width, target_grid_height), Image.Resampling.NEAREST
+                )
+                output = Image.new("RGB", resolution)
+                output.paste(resized_header, (0, 0))
+                output.paste(resized_grid, (0, target_header_height))
+                for image in (native_header, native_grid, resized_header, resized_grid):
+                    image.close()
+                content_size = resolution
+                offset = (0, 0)
+                letterbox = False
+                stretch = abs(source_width / source_height - target_width / target_height) > 1e-6
+                header_method = "lanczos"
+                grid_method = "nearest-neighbor"
             else:
-                content_size = (504, 288)
+                content_size = resolution
                 offset = (0, 0)
                 output = source.resize(content_size, Image.Resampling.NEAREST)
                 letterbox = False
                 stretch = (
                     mode is HybridOutputMode.HEADER_PRESERVED_FILL
-                    and abs(source_width / source_height - 504 / 288) > 1e-6
+                    and abs(source_width / source_height - target_width / target_height) > 1e-6
                 )
+                header_method = "nearest-neighbor"
+                grid_method = "nearest-neighbor"
             output.save(destination)
             output.close()
             source.close()
@@ -263,16 +374,58 @@ def compose_output_mode(
         "source_dimensions": [source_width, source_height],
         "content_dimensions": list(content_size),
         "content_offset": list(offset),
-        "final_dimensions": [504, 288],
+        "final_dimensions": list(resolution),
         "header_included": mode.includes_header,
         "vertical_interval": "06:00-00:00",
         "letterbox": letterbox,
         "stretch": stretch,
         "logical_grid_normalization": mode is HybridOutputMode.PIXEL_FAITHFUL,
-        "resampling": "nearest-neighbor",
+        "source_of_resize": "native browser crop",
+        "intermediate_504x288": False,
+        "resize_passes": 1,
+        "header_resample_method": header_method,
+        "grid_resample_method": grid_method,
+        "resampling": (header_method if header_method == grid_method else "hybrid"),
         "blur_or_sharpen": False,
         "notes": _mode_notes(mode),
     }
+
+
+def compose_high_resolution_comparison(
+    native_crop: Path, final_output: Path, destination: Path
+) -> Path:
+    """Stack native and final images at actual size without downscaling either."""
+
+    try:
+        with Image.open(native_crop) as native_opened, Image.open(final_output) as final_opened:
+            native = native_opened.convert("RGB")
+            final = final_opened.convert("RGB")
+            label_height = 36
+            canvas_width = max(native.width, final.width)
+            canvas = Image.new(
+                "RGB",
+                (canvas_width, label_height * 2 + native.height + final.height),
+                "#202124",
+            )
+            draw = ImageDraw.Draw(canvas)
+            draw.text((8, 10), f"NATIVE CROP {native.width}x{native.height}", fill="white")
+            native_x = (canvas_width - native.width) // 2
+            canvas.paste(native, (native_x, label_height))
+            final_y = label_height + native.height
+            draw.text(
+                (8, final_y + 10),
+                f"FINAL OUTPUT {final.width}x{final.height}",
+                fill="white",
+            )
+            final_x = (canvas_width - final.width) // 2
+            canvas.paste(final, (final_x, final_y + label_height))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            canvas.save(destination)
+            for image in (native, final, canvas):
+                image.close()
+    except OSError as error:
+        raise CalendarAnimError("Could not compose high-resolution comparison") from error
+    return destination
 
 
 def compose_mode_contact_sheet(
@@ -380,15 +533,16 @@ def compose_sanity_contact_sheet(report: HybridSanityReport, output: Path) -> Pa
 
 
 def compose_seam_geometry(left: Path, right: Path, output: Path) -> Path:
-    image = Image.new("RGB", (1008, 324), "#202124")
-    draw = ImageDraw.Draw(image)
-    draw.text((10, 8), "FRAME 23 / ACCOUNT A", fill="white")
-    draw.text((514, 8), "FRAME 24 / ACCOUNT B", fill="white")
-    for x, path in ((0, left), (504, right)):
-        with Image.open(path) as source:
-            if source.size != (504, 288):
-                raise CalendarAnimError("A/B seam inputs must both be 504x288")
-            image.paste(source.convert("RGB"), (x, 36))
+    with Image.open(left) as left_opened, Image.open(right) as right_opened:
+        if left_opened.size != right_opened.size:
+            raise CalendarAnimError("A/B seam inputs must have equal resolution")
+        width, height = left_opened.size
+        image = Image.new("RGB", (width * 2, height + 36), "#202124")
+        draw = ImageDraw.Draw(image)
+        draw.text((10, 8), "FRAME 23 / ACCOUNT A", fill="white")
+        draw.text((width + 10, 8), "FRAME 24 / ACCOUNT B", fill="white")
+        image.paste(left_opened.convert("RGB"), (0, 36))
+        image.paste(right_opened.convert("RGB"), (width, 36))
     output.parent.mkdir(parents=True, exist_ok=True)
     image.save(output)
     image.close()

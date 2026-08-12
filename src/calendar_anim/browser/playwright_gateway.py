@@ -988,6 +988,8 @@ class PlaywrightCalendarCaptureGateway:
                 "header_clip": header_clip,
                 "event_grid_clip": event_grid_clip,
                 "composite_dimensions": dimensions,
+                "native_header_height": dimensions[1] - event_grid.height,
+                "native_grid_height": event_grid.height,
             },
             "header_included": True,
             "vertical_interval": "06:00-00:00",
