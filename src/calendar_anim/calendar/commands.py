@@ -68,6 +68,9 @@ from calendar_anim.calendar.multi_frame.commands import register_multi_frame_com
 from calendar_anim.calendar.recurrence_compaction.commands import (
     register_recurrence_compaction_commands,
 )
+from calendar_anim.calendar.recurrence_validation.commands import (
+    register_recurrence_validation_commands,
+)
 from calendar_anim.calendar.subcolumn_ordering import (
     SubcolumnOrderStrategy,
     format_summary_key,
@@ -909,6 +912,7 @@ def register_calendar_commands(app: typer.Typer) -> None:
     app.command("map-frame")(map_frame_command)
     register_multi_frame_commands(app)
     register_recurrence_compaction_commands(app)
+    register_recurrence_validation_commands(app)
     register_capture_commands(app)
     register_vertical_compression_commands(app)
     register_horizontal_band_compression_commands(app)
