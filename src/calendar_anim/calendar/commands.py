@@ -76,6 +76,9 @@ from calendar_anim.calendar.recurrence_upload.commands import (
 from calendar_anim.calendar.recurrence_validation.commands import (
     register_recurrence_validation_commands,
 )
+from calendar_anim.calendar.remote_recurrence_audit.commands import (
+    register_remote_recurrence_audit_commands,
+)
 from calendar_anim.calendar.subcolumn_ordering import (
     SubcolumnOrderStrategy,
     format_summary_key,
@@ -920,6 +923,7 @@ def register_calendar_commands(app: typer.Typer) -> None:
     register_recurrence_compaction_commands(app)
     register_recurrence_validation_commands(app)
     register_recurrence_upload_commands(app)
+    register_remote_recurrence_audit_commands(app)
     register_capture_commands(app)
     register_vertical_compression_commands(app)
     register_horizontal_band_compression_commands(app)
