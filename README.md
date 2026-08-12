@@ -230,12 +230,20 @@ python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animat
 python -m calendar_anim calendar upload-animation --run-id animation-bands-01
 ```
 
-The second command is also a local dry-run unless `--execute` is supplied. Real uploads are serial and checkpoint every frame. Completed frames are skipped; a partial frame requires explicit `--recover-partial`, which deletes and recreates only that frame before continuing:
+The second command is also a local dry-run unless `--execute` is supplied. Real uploads are serial
+and checkpoint every frame. Completed frames are skipped; a partial frame is reconciled through
+deterministic event IDs and only missing events are created. `--recover-partial` remains a
+compatibility option for legacy plans whose remote IDs cannot be reconciled safely:
 
 ```powershell
 python -m calendar_anim calendar upload-animation --run-id animation-bands-01 --execute
 python -m calendar_anim calendar upload-animation --run-id animation-bands-01 --resume --recover-partial --execute
 ```
+
+Temporary `rateLimitExceeded` responses retain adaptive pacing, cooldown, and retry. A Calendar
+usage-limit `quotaExceeded` response opens a circuit breaker instead: it preserves the partial
+frame, checkpoints pause metadata, stops the run, and must be resumed later with the ordinary
+`--resume --execute` command.
 
 Cleanup is local by default and can target one frame or the whole run:
 

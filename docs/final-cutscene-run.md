@@ -23,8 +23,10 @@ ID derived from its immutable contents. A lost response can therefore be retried
 creating a duplicate; Google `409 Conflict` confirms that the intended event already exists.
 
 Retryable failures are limited to `429`, temporary `403 rateLimitExceeded` or
-`userRateLimitExceeded`, `5xx`, timeouts, and recognized temporary transport errors. Other
-`403` responses remain permanent. The default policy is five event attempts with exponential
+`userRateLimitExceeded`, `5xx`, timeouts, and recognized temporary transport errors. The
+`403 quotaExceeded` usage-limit response is deliberately separate: it is not a short retry and
+does not enter the rate-limit backoff loop. Other `403` responses remain permanent. The default
+policy is five event attempts with exponential
 backoff, jitter, and a 30-second ceiling. Calendar rate limits use a longer 32-to-64-second
 cooldown recommended for sustained quota pressure. A frame gets at most three automatic
 recovery cycles per invocation. Permanent errors do not loop.
@@ -36,10 +38,24 @@ increases the interval by 50% up to a `3s` ceiling, and lets the service retry o
 events after the longer cooldown. After every 200 successful writes the interval decays by 10%
 toward the `0.75s` baseline. Other run IDs retain their existing write behavior.
 
+The first confirmed `quotaExceeded` opens a circuit breaker. No new event write is submitted,
+already-created events are preserved, and the current frame is atomically checkpointed as
+`partial` with the HTTP status, Google reason, frame index, timestamp, created count, and planned
+count. The whole invocation then stops and reports the unchanged resume command. It performs no
+immediate quota retry and no cleanup.
+
 On resume, completed frames are skipped. Partial, interrupted, and failed frames are reconciled
 against their deterministic event IDs and only missing drafts are submitted. Unknown legacy
 event IDs trigger metadata-scoped cleanup of that frame as a safe fallback. Persistent failure
-is checkpointed as `failed` and stops the run before later frames.
+is checkpointed as `failed` and stops the run before later frames. A legacy state written before
+the quota circuit breaker that contains `quotaExceeded` is migrated from `failed` to `partial`
+without deleting its recorded event IDs.
+
+Resume after the Calendar usage limit has cleared:
+
+```powershell
+.\.venv\Scripts\python.exe -m calendar_anim calendar upload-animation --run-id cayde-final-126x72-3fps-36s-01 --resume --execute
+```
 
 ## Final media composition
 
