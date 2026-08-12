@@ -13,6 +13,7 @@ from calendar_anim.calendar.models import (
     CalendarEventInfo,
     CalendarInfo,
     CalendarWriteFailure,
+    CalendarWritePacingSnapshot,
     CalendarWriteResult,
 )
 from calendar_anim.calendar.multi_frame.retry import (
@@ -31,6 +32,7 @@ class GoogleCalendarGateway:
         self.service = service
         self.minimum_write_interval_seconds = 0.0
         self.current_write_interval_seconds = 0.0
+        self.previous_write_interval_seconds: float | None = None
         self.maximum_write_interval_seconds = 3.0
         self._last_write_started_at: float | None = None
         self._successful_writes_since_rate_limit = 0
@@ -41,17 +43,43 @@ class GoogleCalendarGateway:
         self,
         minimum_interval_seconds: float,
         *,
+        current_interval_seconds: float | None = None,
+        successful_writes_since_rate_limit: int = 0,
         clock: Any = monotonic,
         sleeper: Any = sleep,
     ) -> None:
         if minimum_interval_seconds < 0:
             raise ValueError("minimum write interval must be non-negative")
         self.minimum_write_interval_seconds = minimum_interval_seconds
-        self.current_write_interval_seconds = minimum_interval_seconds
+        self.current_write_interval_seconds = max(
+            minimum_interval_seconds,
+            current_interval_seconds or 0.0,
+        )
+        self.previous_write_interval_seconds = None
         self._last_write_started_at = None
-        self._successful_writes_since_rate_limit = 0
+        self._successful_writes_since_rate_limit = successful_writes_since_rate_limit
         self._clock = clock
         self._sleeper = sleeper
+
+    def write_pacing_snapshot(self) -> CalendarWritePacingSnapshot:
+        return CalendarWritePacingSnapshot(
+            minimum_interval_seconds=self.minimum_write_interval_seconds,
+            current_interval_seconds=self.current_write_interval_seconds,
+            previous_interval_seconds=self.previous_write_interval_seconds,
+            maximum_interval_seconds=self.maximum_write_interval_seconds,
+            successful_writes_since_rate_limit=self._successful_writes_since_rate_limit,
+        )
+
+    def restore_write_pacing(self, snapshot: CalendarWritePacingSnapshot) -> None:
+        self.minimum_write_interval_seconds = snapshot.minimum_interval_seconds
+        self.current_write_interval_seconds = max(
+            snapshot.minimum_interval_seconds,
+            snapshot.current_interval_seconds,
+        )
+        self.previous_write_interval_seconds = snapshot.previous_interval_seconds
+        self.maximum_write_interval_seconds = snapshot.maximum_interval_seconds
+        self._successful_writes_since_rate_limit = snapshot.successful_writes_since_rate_limit
+        self._last_write_started_at = None
 
     @staticmethod
     def _calendar_info(item: dict[str, Any]) -> CalendarInfo:
@@ -224,6 +252,7 @@ class GoogleCalendarGateway:
             self.current_write_interval_seconds,
             0.1,
         )
+        self.previous_write_interval_seconds = self.current_write_interval_seconds
         self.current_write_interval_seconds = min(
             self.maximum_write_interval_seconds,
             baseline * 1.5,
@@ -236,6 +265,7 @@ class GoogleCalendarGateway:
         self._successful_writes_since_rate_limit += 1
         if self._successful_writes_since_rate_limit < 200:
             return
+        self.previous_write_interval_seconds = self.current_write_interval_seconds
         self.current_write_interval_seconds = max(
             self.minimum_write_interval_seconds,
             self.current_write_interval_seconds * 0.9,

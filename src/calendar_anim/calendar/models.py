@@ -75,6 +75,14 @@ class CalendarWriteResult(BaseModel):
         return len(self.created_event_ids)
 
 
+class CalendarWritePacingSnapshot(BaseModel):
+    minimum_interval_seconds: float = Field(default=0.0, ge=0)
+    current_interval_seconds: float = Field(default=0.0, ge=0)
+    previous_interval_seconds: float | None = Field(default=None, ge=0)
+    maximum_interval_seconds: float = Field(default=3.0, ge=0)
+    successful_writes_since_rate_limit: int = Field(default=0, ge=0)
+
+
 class CalendarDeleteResult(BaseModel):
     deleted_events: int = Field(default=0, ge=0)
     failed_events: int = Field(default=0, ge=0)
