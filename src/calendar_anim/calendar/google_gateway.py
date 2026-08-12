@@ -16,7 +16,9 @@ from calendar_anim.calendar.models import (
     CalendarWriteResult,
 )
 from calendar_anim.calendar.multi_frame.retry import (
+    CALENDAR_USAGE_QUOTA_REASON,
     http_error_reasons,
+    is_calendar_usage_quota_exception,
     is_rate_limit_exception,
     is_retryable_exception,
 )
@@ -114,6 +116,9 @@ class GoogleCalendarGateway:
         created_indexes: list[int] = []
         errors: list[str] = []
         failures: list[CalendarWriteFailure] = []
+        rate_limit_exceeded_count = 0
+        quota_exceeded_count = 0
+        quota_circuit_breaker_count = 0
         for index, event in enumerate(events):
             expected_id = deterministic_event_id(event)
             body: dict[str, Any] = {
@@ -161,9 +166,18 @@ class GoogleCalendarGateway:
                         reason=reason,
                     )
                 )
-                if is_rate_limit_exception(error):
+                rate_limited = is_rate_limit_exception(error)
+                quota_exceeded = is_calendar_usage_quota_exception(error)
+                if rate_limited:
+                    rate_limit_exceeded_count += 1
                     self._record_rate_limit()
-                    deferred_reason = reason or "rateLimitExceeded"
+                if quota_exceeded:
+                    quota_exceeded_count += 1
+                    quota_circuit_breaker_count += 1
+                if rate_limited or quota_exceeded:
+                    deferred_reason = reason or (
+                        CALENDAR_USAGE_QUOTA_REASON if quota_exceeded else "rateLimitExceeded"
+                    )
                     deferred_message = (
                         f"Deferred after event {index} hit {deferred_reason}; no request sent"
                     )
@@ -172,14 +186,14 @@ class GoogleCalendarGateway:
                             CalendarWriteFailure(
                                 event_index=deferred_index,
                                 message=deferred_message,
-                                retryable=True,
+                                retryable=rate_limited,
                                 status_code=status or None,
                                 reason=deferred_reason,
                             )
                         )
                     if len(events) - index - 1:
                         errors.append(
-                            f"Deferred {len(events) - index - 1} event(s) after rate limit"
+                            f"Deferred {len(events) - index - 1} event(s) after {deferred_reason}"
                         )
                     break
         return CalendarWriteResult(
@@ -188,6 +202,9 @@ class GoogleCalendarGateway:
             failed_events=len(events) - len(created_indexes),
             errors=errors,
             failures=failures,
+            rate_limit_exceeded_count=rate_limit_exceeded_count,
+            quota_exceeded_count=quota_exceeded_count,
+            quota_circuit_breaker_count=quota_circuit_breaker_count,
         )
 
     def _pace_write(self) -> None:

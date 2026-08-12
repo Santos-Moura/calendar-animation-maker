@@ -15,6 +15,24 @@ class FrameUploadStatus(StrEnum):
     FAILED = "failed"
 
 
+class UploadPauseReason(StrEnum):
+    CALENDAR_USAGE_QUOTA_EXCEEDED = "calendar_usage_quota_exceeded"
+
+
+class UploadPauseMetadata(BaseModel):
+    reason: UploadPauseReason
+    http_status: int = Field(ge=100, le=599)
+    google_reason: str
+    frame_index: int = Field(ge=0)
+    timestamp: datetime
+    created_before_pause: int = Field(ge=0)
+    planned_events: int = Field(ge=0)
+
+    @property
+    def remaining_events(self) -> int:
+        return max(0, self.planned_events - self.created_before_pause)
+
+
 class FrameUploadPlan(BaseModel):
     frame_index: int = Field(ge=0)
     source_timestamp_seconds: float | None = Field(default=None, ge=0)
@@ -121,6 +139,10 @@ class FrameUploadState(BaseModel):
     event_retry_count: int = Field(default=0, ge=0)
     recovery_cycles: int = Field(default=0, ge=0)
     last_failure_retryable: bool | None = None
+    rate_limit_exceeded_count: int = Field(default=0, ge=0)
+    quota_exceeded_count: int = Field(default=0, ge=0)
+    adaptive_rate_limit_cooldowns: int = Field(default=0, ge=0)
+    quota_circuit_breaker_count: int = Field(default=0, ge=0)
     frame_started_at: datetime | None = None
     frame_completed_at: datetime | None = None
     duration_seconds: float | None = Field(default=None, ge=0)
@@ -140,6 +162,8 @@ class AnimationUploadState(BaseModel):
     animation_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     calendar_id: str | None = None
     calendar_created: bool = False
+    pause: UploadPauseMetadata | None = None
+    pause_history: list[UploadPauseMetadata] = Field(default_factory=list)
     frames: list[FrameUploadState]
     updated_at: datetime
 
@@ -173,6 +197,11 @@ class FrameUploadExecutionResult(BaseModel):
     event_retry_count: int = Field(default=0, ge=0)
     recovery_cycles: int = Field(default=0, ge=0)
     last_failure_retryable: bool | None = None
+    rate_limit_exceeded_count: int = Field(default=0, ge=0)
+    quota_exceeded_count: int = Field(default=0, ge=0)
+    adaptive_rate_limit_cooldowns: int = Field(default=0, ge=0)
+    quota_circuit_breaker_count: int = Field(default=0, ge=0)
+    pause: UploadPauseMetadata | None = None
 
 
 class AnimationCleanupResult(BaseModel):

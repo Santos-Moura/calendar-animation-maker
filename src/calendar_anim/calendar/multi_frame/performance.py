@@ -8,6 +8,7 @@ from calendar_anim.calendar.multi_frame.models import (
     FrameUploadState,
     FrameUploadStatus,
     MultiFramePlan,
+    UploadPauseMetadata,
 )
 
 InvocationStatus = Literal["running", "completed", "stopped", "failed", "interrupted"]
@@ -36,6 +37,10 @@ class FrameUploadPerformance(BaseModel):
     event_retry_count: int = Field(default=0, ge=0)
     recovery_cycles: int = Field(default=0, ge=0)
     last_failure_retryable: bool | None = None
+    rate_limit_exceeded_count: int = Field(default=0, ge=0)
+    quota_exceeded_count: int = Field(default=0, ge=0)
+    adaptive_rate_limit_cooldowns: int = Field(default=0, ge=0)
+    quota_circuit_breaker_count: int = Field(default=0, ge=0)
     initial_attempt_seconds: float | None = Field(default=None, ge=0)
     total_frame_elapsed_seconds: float | None = Field(default=None, ge=0)
     attempts: list[FrameUploadAttemptPerformance] = Field(default_factory=list)
@@ -72,6 +77,12 @@ class UploadPerformanceReport(BaseModel):
     total_failed_events: int = Field(default=0, ge=0)
     overall_events_per_second: float | None = Field(default=None, ge=0)
     average_seconds_per_frame: float | None = Field(default=None, ge=0)
+    rate_limit_exceeded_count: int = Field(default=0, ge=0)
+    quota_exceeded_count: int = Field(default=0, ge=0)
+    adaptive_rate_limit_cooldowns: int = Field(default=0, ge=0)
+    quota_circuit_breaker_count: int = Field(default=0, ge=0)
+    pause: UploadPauseMetadata | None = None
+    pause_history: list[UploadPauseMetadata] = Field(default_factory=list)
     frames: list[FrameUploadPerformance] = Field(default_factory=list)
     invocations: list[UploadInvocationPerformance] = Field(default_factory=list)
 
@@ -163,6 +174,10 @@ def record_frame_performance(
         event_retry_count=frame_state.event_retry_count,
         recovery_cycles=frame_state.recovery_cycles,
         last_failure_retryable=frame_state.last_failure_retryable,
+        rate_limit_exceeded_count=frame_state.rate_limit_exceeded_count,
+        quota_exceeded_count=frame_state.quota_exceeded_count,
+        adaptive_rate_limit_cooldowns=frame_state.adaptive_rate_limit_cooldowns,
+        quota_circuit_breaker_count=frame_state.quota_circuit_breaker_count,
         initial_attempt_seconds=attempts[0].elapsed_seconds,
         total_frame_elapsed_seconds=frame_state.duration_seconds,
         attempts=attempts,
@@ -221,6 +236,18 @@ def refresh_performance_report(
     report.average_seconds_per_frame = (
         report.total_elapsed_seconds / len(attempts) if attempts else None
     )
+    report.rate_limit_exceeded_count = sum(
+        frame.rate_limit_exceeded_count for frame in state.frames
+    )
+    report.quota_exceeded_count = sum(frame.quota_exceeded_count for frame in state.frames)
+    report.adaptive_rate_limit_cooldowns = sum(
+        frame.adaptive_rate_limit_cooldowns for frame in state.frames
+    )
+    report.quota_circuit_breaker_count = sum(
+        frame.quota_circuit_breaker_count for frame in state.frames
+    )
+    report.pause = state.pause
+    report.pause_history = list(state.pause_history)
     return report
 
 
@@ -255,6 +282,10 @@ def build_performance_text(report: UploadPerformanceReport) -> str:
                 f"  Event retries: {frame.event_retry_count}",
                 f"  Recovery cycles: {frame.recovery_cycles}",
                 "  Last failure retryable: " + _optional_bool(frame.last_failure_retryable),
+                f"  Rate limit exceeded: {frame.rate_limit_exceeded_count}",
+                f"  Calendar usage quota exceeded: {frame.quota_exceeded_count}",
+                f"  Adaptive rate-limit cooldowns: {frame.adaptive_rate_limit_cooldowns}",
+                f"  Quota circuit breakers: {frame.quota_circuit_breaker_count}",
                 f"  Initial attempt seconds: {_number(frame.initial_attempt_seconds)}",
                 f"  Total frame elapsed seconds: {_number(frame.total_frame_elapsed_seconds)}",
             ]
@@ -290,6 +321,12 @@ def build_performance_text(report: UploadPerformanceReport) -> str:
             f"Elapsed seconds: {_number(report.total_elapsed_seconds)}",
             f"Events/second: {_number(report.overall_events_per_second)}",
             f"Average seconds/frame: {_number(report.average_seconds_per_frame)}",
+            f"Rate limit exceeded count: {report.rate_limit_exceeded_count}",
+            f"Quota exceeded count: {report.quota_exceeded_count}",
+            f"Adaptive rate-limit cooldowns: {report.adaptive_rate_limit_cooldowns}",
+            f"Quota circuit breaker count: {report.quota_circuit_breaker_count}",
+            f"Quota pause history: {len(report.pause_history)}",
+            "Active pause: " + _pause(report.pause),
             "",
         ]
     )
@@ -319,6 +356,10 @@ def _frame_from_state(
         event_retry_count=frame_state.event_retry_count,
         recovery_cycles=frame_state.recovery_cycles,
         last_failure_retryable=frame_state.last_failure_retryable,
+        rate_limit_exceeded_count=frame_state.rate_limit_exceeded_count,
+        quota_exceeded_count=frame_state.quota_exceeded_count,
+        adaptive_rate_limit_cooldowns=frame_state.adaptive_rate_limit_cooldowns,
+        quota_circuit_breaker_count=frame_state.quota_circuit_breaker_count,
         total_frame_elapsed_seconds=frame_state.duration_seconds,
     )
 
@@ -345,3 +386,13 @@ def _optional_bool(value: bool | None) -> str:
     if value is None:
         return "none"
     return "yes" if value else "no"
+
+
+def _pause(value: UploadPauseMetadata | None) -> str:
+    if value is None:
+        return "none"
+    return (
+        f"{value.reason.value}, frame={value.frame_index}, "
+        f"created={value.created_before_pause}/{value.planned_events}, "
+        f"google_reason={value.google_reason}, timestamp={value.timestamp.isoformat()}"
+    )

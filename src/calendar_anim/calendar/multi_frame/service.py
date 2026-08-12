@@ -28,6 +28,8 @@ from calendar_anim.calendar.multi_frame.models import (
     FrameUploadState,
     FrameUploadStatus,
     MultiFramePlan,
+    UploadPauseMetadata,
+    UploadPauseReason,
 )
 from calendar_anim.calendar.multi_frame.performance import (
     FrameUploadPerformance,
@@ -41,11 +43,13 @@ from calendar_anim.calendar.multi_frame.performance import (
     refresh_performance_report,
 )
 from calendar_anim.calendar.multi_frame.retry import (
+    CALENDAR_USAGE_QUOTA_REASON,
     DEFAULT_UPLOAD_RETRY_POLICY,
     RETRYABLE_FORBIDDEN_REASONS,
     Jitter,
     UploadRetryPolicy,
     default_jitter,
+    is_calendar_usage_quota_exception,
     is_rate_limit_exception,
     is_retryable_exception,
     rate_limit_retry_delay,
@@ -67,6 +71,51 @@ def _utc_now() -> datetime:
 
 def _is_rate_limit_failure(failure: CalendarWriteFailure) -> bool:
     return failure.status_code == 429 or failure.reason in RETRYABLE_FORBIDDEN_REASONS
+
+
+class CalendarUsageQuotaPause(CalendarAnimError):
+    """Expected circuit-breaker stop after Google Calendar usage quota exhaustion."""
+
+    def __init__(self, pause: UploadPauseMetadata) -> None:
+        self.pause = pause
+        super().__init__("Google Calendar usage quota exceeded")
+
+
+def normalize_legacy_calendar_usage_quota_pause(
+    state: AnimationUploadState,
+) -> bool:
+    """Upgrade a pre-circuit-breaker quota failure without losing created IDs."""
+
+    for frame in state.frames:
+        if frame.status is not FrameUploadStatus.FAILED:
+            continue
+        if not any(
+            CALENDAR_USAGE_QUOTA_REASON in error or "Calendar usage limits exceeded" in error
+            for error in frame.errors
+        ):
+            continue
+        pause = UploadPauseMetadata(
+            reason=UploadPauseReason.CALENDAR_USAGE_QUOTA_EXCEEDED,
+            http_status=403,
+            google_reason=CALENDAR_USAGE_QUOTA_REASON,
+            frame_index=frame.frame_index,
+            timestamp=state.updated_at,
+            created_before_pause=frame.created_events,
+            planned_events=frame.planned_events,
+        )
+        frame.status = FrameUploadStatus.PARTIAL
+        frame.failed_events = 0
+        frame.last_failure_retryable = None
+        frame.quota_exceeded_count += 1
+        frame.quota_circuit_breaker_count += 1
+        state.pause = pause
+        if not any(
+            existing.frame_index == pause.frame_index and existing.timestamp == pause.timestamp
+            for existing in state.pause_history
+        ):
+            state.pause_history.append(pause)
+        return True
+    return False
 
 
 class MultiFrameUploadService:
@@ -108,7 +157,10 @@ class MultiFrameUploadService:
         *,
         recover_partial: bool = False,
     ) -> AnimationUploadState:
+        normalized_legacy_pause = normalize_legacy_calendar_usage_quota_pause(state)
         self._validate(plan, state)
+        if normalized_legacy_pause:
+            self._checkpoint(plan, state)
         interrupted = [
             frame for frame in state.frames if frame.status is FrameUploadStatus.UPLOADING
         ]
@@ -135,6 +187,9 @@ class MultiFrameUploadService:
             return uploaded
         except KeyboardInterrupt:
             invocation_status = "interrupted"
+            raise
+        except CalendarUsageQuotaPause:
+            invocation_status = "stopped"
             raise
         except Exception:
             invocation_status = "failed"
@@ -166,6 +221,7 @@ class MultiFrameUploadService:
             raise CalendarAnimError("Animation state refers to a different Calendar")
         state.calendar_id = calendar.id
         state.calendar_created = state.calendar_created or calendar_created
+        state.pause = None
         self._checkpoint(plan, state)
 
         for frame_summary in plan.frames:
@@ -226,6 +282,10 @@ class MultiFrameUploadService:
             for events in _chunks(pending_events, self.chunk_size):
                 result, retries, retryable = self._create_events_with_retry(calendar_id, events)
                 frame_state.event_retry_count += retries
+                frame_state.rate_limit_exceeded_count += result.rate_limit_exceeded_count
+                frame_state.quota_exceeded_count += result.quota_exceeded_count
+                frame_state.adaptive_rate_limit_cooldowns += result.adaptive_rate_limit_cooldowns
+                frame_state.quota_circuit_breaker_count += result.quota_circuit_breaker_count
                 for event_id in result.created_event_ids:
                     if event_id not in known_ids:
                         frame_state.created_event_ids.append(event_id)
@@ -240,6 +300,30 @@ class MultiFrameUploadService:
                     frame_state.created_events,
                     frame_plan.event_count,
                 )
+                if result.quota_exceeded_count:
+                    pause = UploadPauseMetadata(
+                        reason=UploadPauseReason.CALENDAR_USAGE_QUOTA_EXCEEDED,
+                        http_status=403,
+                        google_reason=CALENDAR_USAGE_QUOTA_REASON,
+                        frame_index=frame_plan.frame_index,
+                        timestamp=self.now(),
+                        created_before_pause=frame_state.created_events,
+                        planned_events=frame_state.planned_events,
+                    )
+                    state.pause = pause
+                    state.pause_history.append(pause)
+                    frame_state.status = FrameUploadStatus.PARTIAL
+                    frame_state.failed_events = 0
+                    frame_state.last_failure_retryable = None
+                    self._checkpoint(animation_plan, state)
+                    self._finish_frame(
+                        animation_plan,
+                        state,
+                        frame_plan,
+                        frame_state,
+                        started_counter,
+                    )
+                    raise CalendarUsageQuotaPause(pause)
                 if result.failed_events or result.created_events != len(events):
                     frame_state.status = (
                         FrameUploadStatus.PARTIAL
@@ -254,6 +338,8 @@ class MultiFrameUploadService:
                         started_counter,
                     )
                     return False
+        except CalendarUsageQuotaPause:
+            raise
         except KeyboardInterrupt:
             frame_state.status = FrameUploadStatus.PARTIAL
             frame_state.errors.append("Upload interrupted by user")
@@ -321,6 +407,11 @@ class MultiFrameUploadService:
                 event_retry_count=frame_state.event_retry_count,
                 recovery_cycles=frame_state.recovery_cycles,
                 last_failure_retryable=frame_state.last_failure_retryable,
+                rate_limit_exceeded_count=frame_state.rate_limit_exceeded_count,
+                quota_exceeded_count=frame_state.quota_exceeded_count,
+                adaptive_rate_limit_cooldowns=frame_state.adaptive_rate_limit_cooldowns,
+                quota_circuit_breaker_count=frame_state.quota_circuit_breaker_count,
+                pause=state.pause,
             ),
         )
         self._checkpoint(animation_plan, state)
@@ -399,11 +490,30 @@ class MultiFrameUploadService:
         created_ids: list[str] = []
         retries = 0
         final_errors: list[str] = []
+        rate_limit_exceeded_count = 0
+        quota_exceeded_count = 0
+        adaptive_rate_limit_cooldowns = 0
+        quota_circuit_breaker_count = 0
         for attempt in range(1, self.retry_policy.max_event_attempts + 1):
             try:
                 result = self.gateway.create_events(calendar_id, pending)
             except Exception as error:
+                if is_calendar_usage_quota_exception(error):
+                    return (
+                        CalendarWriteResult(
+                            created_event_ids=created_ids,
+                            failed_events=len(pending),
+                            errors=[str(error)],
+                            quota_exceeded_count=1,
+                            quota_circuit_breaker_count=1,
+                        ),
+                        retries,
+                        None,
+                    )
                 retryable = is_retryable_exception(error)
+                rate_limited = is_rate_limit_exception(error)
+                if rate_limited:
+                    rate_limit_exceeded_count += 1
                 final_errors = [str(error)]
                 if not retryable or attempt == self.retry_policy.max_event_attempts:
                     return (
@@ -411,6 +521,8 @@ class MultiFrameUploadService:
                             created_event_ids=created_ids,
                             failed_events=len(pending),
                             errors=final_errors,
+                            rate_limit_exceeded_count=rate_limit_exceeded_count,
+                            adaptive_rate_limit_cooldowns=adaptive_rate_limit_cooldowns,
                         ),
                         retries,
                         retryable,
@@ -418,12 +530,17 @@ class MultiFrameUploadService:
                 retries += 1
                 delay = (
                     rate_limit_retry_delay(self.retry_policy, attempt, self.jitter)
-                    if is_rate_limit_exception(error)
+                    if rate_limited
                     else retry_delay(self.retry_policy, attempt, self.jitter)
                 )
+                if rate_limited:
+                    adaptive_rate_limit_cooldowns += 1
                 self.sleeper(delay)
                 continue
 
+            rate_limit_exceeded_count += result.rate_limit_exceeded_count
+            quota_exceeded_count += result.quota_exceeded_count
+            quota_circuit_breaker_count += result.quota_circuit_breaker_count
             created_indexes = set(result.created_event_indexes)
             created_ids.extend(result.created_event_ids)
             missing_indexes = [
@@ -434,6 +551,25 @@ class MultiFrameUploadService:
                     CalendarWriteResult(
                         created_event_ids=created_ids,
                         created_event_indexes=list(range(len(events))),
+                        rate_limit_exceeded_count=rate_limit_exceeded_count,
+                        quota_exceeded_count=quota_exceeded_count,
+                        adaptive_rate_limit_cooldowns=adaptive_rate_limit_cooldowns,
+                        quota_circuit_breaker_count=quota_circuit_breaker_count,
+                    ),
+                    retries,
+                    None,
+                )
+            if result.quota_exceeded_count:
+                return (
+                    CalendarWriteResult(
+                        created_event_ids=created_ids,
+                        failed_events=len(missing_indexes),
+                        errors=result.errors,
+                        failures=result.failures,
+                        rate_limit_exceeded_count=rate_limit_exceeded_count,
+                        quota_exceeded_count=quota_exceeded_count,
+                        adaptive_rate_limit_cooldowns=adaptive_rate_limit_cooldowns,
+                        quota_circuit_breaker_count=quota_circuit_breaker_count,
                     ),
                     retries,
                     None,
@@ -455,6 +591,10 @@ class MultiFrameUploadService:
                         failures=[
                             failures[index] for index in missing_indexes if index in failures
                         ],
+                        rate_limit_exceeded_count=rate_limit_exceeded_count,
+                        quota_exceeded_count=quota_exceeded_count,
+                        adaptive_rate_limit_cooldowns=adaptive_rate_limit_cooldowns,
+                        quota_circuit_breaker_count=quota_circuit_breaker_count,
                     ),
                     retries,
                     retryable,
@@ -466,6 +606,8 @@ class MultiFrameUploadService:
                 if any(_is_rate_limit_failure(failures[index]) for index in missing_indexes)
                 else retry_delay(self.retry_policy, attempt, self.jitter)
             )
+            if any(_is_rate_limit_failure(failures[index]) for index in missing_indexes):
+                adaptive_rate_limit_cooldowns += 1
             self.sleeper(delay)
         raise AssertionError("unreachable retry loop")
 

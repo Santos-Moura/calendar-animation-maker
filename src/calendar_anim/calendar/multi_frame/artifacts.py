@@ -284,6 +284,10 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
                 f"  Failed events: {frame_state.failed_events}",
                 f"  Event retries: {frame_state.event_retry_count}",
                 f"  Recovery cycles: {frame_state.recovery_cycles}",
+                f"  Rate limit exceeded: {frame_state.rate_limit_exceeded_count}",
+                f"  Calendar usage quota exceeded: {frame_state.quota_exceeded_count}",
+                f"  Adaptive rate-limit cooldowns: {frame_state.adaptive_rate_limit_cooldowns}",
+                f"  Quota circuit breakers: {frame_state.quota_circuit_breaker_count}",
                 f"  Duration seconds: {_duration(frame_state.duration_seconds)}",
             ]
         )
@@ -296,7 +300,13 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
             "Partial frames are reconciled by deterministic event ID and only missing events "
             "are recreated; legacy/inconsistent frames use metadata-scoped cleanup as fallback.",
             "Retryable event failures use bounded exponential backoff with jitter.",
+            "Calendar quotaExceeded opens a circuit breaker: the current frame remains "
+            "partial, existing events are preserved, and the whole run stops safely.",
             "The upload stops on the first frame failure.",
+            "",
+            "Active pause",
+            "------------",
+            _pause_text(state),
             "",
         ]
     )
@@ -305,3 +315,15 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
 
 def _duration(value: float | None) -> str:
     return "pending" if value is None else f"{value:.2f}"
+
+
+def _pause_text(state: AnimationUploadState) -> str:
+    pause = state.pause
+    if pause is None:
+        return "none"
+    return (
+        f"{pause.reason.value}; status={pause.http_status}; "
+        f"google_reason={pause.google_reason}; frame={pause.frame_index}; "
+        f"created={pause.created_before_pause}/{pause.planned_events}; "
+        f"timestamp={pause.timestamp.isoformat()}"
+    )

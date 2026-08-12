@@ -42,7 +42,11 @@ from calendar_anim.calendar.multi_frame.models import (
 )
 from calendar_anim.calendar.multi_frame.performance import FrameUploadPerformance
 from calendar_anim.calendar.multi_frame.planner import build_multi_frame_plan
-from calendar_anim.calendar.multi_frame.service import MultiFrameUploadService
+from calendar_anim.calendar.multi_frame.service import (
+    CalendarUsageQuotaPause,
+    MultiFrameUploadService,
+    normalize_legacy_calendar_usage_quota_pause,
+)
 from calendar_anim.calendar.subcolumn_ordering import (
     SubcolumnOrderStrategy,
     format_summary_key,
@@ -238,6 +242,7 @@ def upload_animation_command(
         store = AnimationRunStore(output_root)
         plan = store.load_plan(resolved_run_id)
         state = store.load_state(resolved_run_id)
+        normalize_legacy_calendar_usage_quota_pause(state)
     except (CalendarAnimError, OSError, ValueError) as error:
         _fail(error)
     _print_upload_summary(plan, state, execute)
@@ -290,6 +295,8 @@ def upload_animation_command(
         typer.echo(f"Rate: {_rate(performance.events_per_second)}")
         typer.echo(f"Event retries: {performance.event_retry_count}")
         typer.echo(f"Recovery cycles: {performance.recovery_cycles}")
+        typer.echo(f"Rate limit exceeded: {performance.rate_limit_exceeded_count}")
+        typer.echo(f"Quota exceeded: {performance.quota_exceeded_count}")
 
     try:
         gateway = _google_gateway()
@@ -304,6 +311,21 @@ def upload_animation_command(
             frame_complete=frame_complete,
         )
         state = service.upload(plan, state, recover_partial=recover_partial)
+    except CalendarUsageQuotaPause as error:
+        pause = error.pause
+        typer.secho("\nCalendar usage limit reached.", fg=typer.colors.YELLOW)
+        typer.echo(f"Frame: {pause.frame_index}")
+        typer.echo(f"Created: {pause.created_before_pause}/{pause.planned_events}")
+        typer.echo(f"Remaining: {pause.remaining_events}")
+        typer.echo("Run checkpointed safely.")
+        typer.echo("Do not retry immediately.")
+        typer.echo("Resume later with:")
+        typer.echo(
+            f".\\.venv\\Scripts\\python.exe -m calendar_anim calendar upload-animation "
+            f"--run-id {plan.run_id} --resume --execute"
+        )
+        typer.echo(f"Performance report: {store.performance_json_path(plan.run_id)}")
+        raise typer.Exit(code=1) from None
     except KeyboardInterrupt:
         typer.secho("Upload interrupted; the current frame was checkpointed as partial.", fg="red")
         raise typer.Exit(code=130) from None
@@ -331,6 +353,10 @@ def upload_animation_command(
     typer.echo(f"Total elapsed: {_seconds(performance.total_elapsed_seconds)}")
     typer.echo(f"Average/frame: {_seconds(performance.average_seconds_per_frame)}")
     typer.echo(f"Overall events/sec: {_rate(performance.overall_events_per_second)}")
+    typer.echo(f"Rate limit exceeded count: {performance.rate_limit_exceeded_count}")
+    typer.echo(f"Quota exceeded count: {performance.quota_exceeded_count}")
+    typer.echo(f"Adaptive rate-limit cooldowns: {performance.adaptive_rate_limit_cooldowns}")
+    typer.echo(f"Quota circuit breakers: {performance.quota_circuit_breaker_count}")
     typer.echo(f"Performance report: {store.performance_json_path(plan.run_id)}")
     if any(
         frame.status in {FrameUploadStatus.PARTIAL, FrameUploadStatus.FAILED}

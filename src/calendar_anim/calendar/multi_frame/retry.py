@@ -32,6 +32,7 @@ class UploadRetryPolicy:
 
 DEFAULT_UPLOAD_RETRY_POLICY: Final = UploadRetryPolicy()
 RETRYABLE_FORBIDDEN_REASONS: Final = frozenset({"rateLimitExceeded", "userRateLimitExceeded"})
+CALENDAR_USAGE_QUOTA_REASON: Final = "quotaExceeded"
 type Jitter = Callable[[float], float]
 
 
@@ -90,6 +91,10 @@ def is_rate_limit_exception(error: BaseException) -> bool:
         return False
     status = int(getattr(error.resp, "status", 0) or 0)
     return status == 429 or bool(http_error_reasons(error) & RETRYABLE_FORBIDDEN_REASONS)
+
+
+def is_calendar_usage_quota_exception(error: BaseException) -> bool:
+    return isinstance(error, HttpError) and CALENDAR_USAGE_QUOTA_REASON in http_error_reasons(error)
 
 
 def http_error_reasons(error: HttpError) -> set[str]:

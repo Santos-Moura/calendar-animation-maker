@@ -65,6 +65,10 @@ class CalendarWriteResult(BaseModel):
     failed_events: int = Field(default=0, ge=0)
     errors: list[str] = Field(default_factory=list)
     failures: list[CalendarWriteFailure] = Field(default_factory=list)
+    rate_limit_exceeded_count: int = Field(default=0, ge=0)
+    quota_exceeded_count: int = Field(default=0, ge=0)
+    adaptive_rate_limit_cooldowns: int = Field(default=0, ge=0)
+    quota_circuit_breaker_count: int = Field(default=0, ge=0)
 
     @property
     def created_events(self) -> int:
