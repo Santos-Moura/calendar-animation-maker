@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -25,6 +25,7 @@ from calendar_anim.calendar.recurrence_validation.gateway import (
 from calendar_anim.calendar.recurrence_validation.models import (
     ValidationResourceRole,
     ValidationStatus,
+    ValidationUploadState,
 )
 from calendar_anim.calendar.recurrence_validation.planner import (
     build_recurrence_validation_plan,
@@ -141,6 +142,39 @@ def test_plan_is_deterministic() -> None:
     assert validation_plan() == validation_plan()
 
 
+def test_account_b_plan_scopes_every_resource_and_rejects_account_a_selection(
+    tmp_path: Path,
+) -> None:
+    plan = build_recurrence_validation_plan(
+        SourceStore(source_frame_plan()),  # type: ignore[arg-type]
+        validation_id="recurrence-rdate-account-b-01",
+        source_run_id="cayde-final-126x72-3fps-36s-01",
+        source_frame_index=23,
+        source_event_index=0,
+        start_week=date(2030, 2, 3),
+        calendar_profile="account-b",
+        calendar_name="Calendar Animation Lab B",
+    )
+
+    assert plan.calendar_profile == "account-b"
+    assert plan.calendar_name == "Calendar Animation Lab B"
+    assert all(
+        resource.private_metadata["calendar_profile"] == "account-b" for resource in plan.resources
+    )
+    with pytest.raises(CalendarAnimError, match="different Calendar profile"):
+        state = ValidationUploadState(
+            validation_id=plan.validation_id,
+            calendar_profile="account-a",
+            updated_at=datetime.now(UTC),
+        )
+        store = RecurrenceValidationStore(tmp_path)
+        store.save_state(state)
+        service = RecurrenceValidationService(  # type: ignore[arg-type]
+            FakeValidationGateway(), store, lambda _name, _timezone: (calendar(), False)
+        )
+        service.upload(plan)
+
+
 class ExecutableResponse:
     def __init__(self, value: dict[str, object]) -> None:
         self.value = value
@@ -198,6 +232,7 @@ def test_google_gateway_sends_rdate_timezone_and_lists_masters_for_cleanup() -> 
     listed = google.events_resource.list_calls[0]
     assert listed["singleEvents"] is False
     assert listed["privateExtendedProperty"] == [
+        "calendar_profile=account-a",
         "generated_by=calendar-anim-recurrence-validation",
         "validation_id=recurrence-rdate-smallest-real-01",
     ]
@@ -211,6 +246,7 @@ class FakeValidationGateway:
         self.deleted: list[str] = []
         self.failure_at: int | None = None
         self.failure: ValidationInsertError | None = None
+        self.requested_metadata: list[dict[str, str]] = []
 
     def list_window_resources(
         self, _calendar_id: str, _start: datetime, _end: datetime
@@ -218,9 +254,14 @@ class FakeValidationGateway:
         return self.window
 
     def find_validation_resources(
-        self, _calendar_id: str, _metadata: dict[str, str]
+        self, _calendar_id: str, metadata: dict[str, str]
     ) -> list[ValidationRemoteResource]:
-        return self.remote
+        self.requested_metadata.append(metadata)
+        return [
+            resource
+            for resource in self.remote
+            if all(resource.metadata.get(key) == value for key, value in metadata.items())
+        ]
 
     def insert_validation_resource(self, _calendar_id: str, resource: Any) -> str:
         if self.failure_at == len(self.inserted) and self.failure is not None:
@@ -337,3 +378,37 @@ def test_cleanup_deletes_only_metadata_query_results(tmp_path: Path) -> None:
     assert result.deleted_resources == 4
     assert gateway.deleted == sorted(resource.event_id for resource in plan.resources)
     assert "existing-final-event" not in gateway.deleted
+
+
+def test_account_b_cleanup_cannot_select_account_a_resources(tmp_path: Path) -> None:
+    plan = build_recurrence_validation_plan(
+        SourceStore(source_frame_plan()),  # type: ignore[arg-type]
+        validation_id="recurrence-rdate-account-b-01",
+        source_run_id="cayde-final-126x72-3fps-36s-01",
+        source_frame_index=23,
+        source_event_index=0,
+        start_week=date(2030, 2, 3),
+        calendar_profile="account-b",
+        calendar_name="Calendar Animation Lab B",
+    )
+    gateway = FakeValidationGateway()
+    gateway.remote = [
+        *[
+            ValidationRemoteResource(resource.event_id, resource.private_metadata)
+            for resource in plan.resources
+        ],
+        ValidationRemoteResource(
+            "account-a-resource",
+            {
+                "generated_by": "calendar-anim-recurrence-validation",
+                "validation_id": plan.validation_id,
+                "calendar_profile": "account-a",
+            },
+        ),
+    ]
+
+    result = service(tmp_path, gateway).cleanup(plan, calendar())
+
+    assert result.deleted_resources == 4
+    assert "account-a-resource" not in gateway.deleted
+    assert gateway.requested_metadata[-1]["calendar_profile"] == "account-b"
