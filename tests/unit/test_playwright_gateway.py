@@ -125,3 +125,17 @@ def test_native_zoom_persists_exact_thirty_three_percent(tmp_path: Path) -> None
     assert scale_clip_for_browser_zoom(
         {"x": 0, "y": 300, "width": 1800, "height": 900}, 100 / 3
     ) == pytest.approx({"x": 0, "y": 100, "width": 600, "height": 300})
+
+
+def test_native_zoom_persists_account_b_ninety_percent(tmp_path: Path) -> None:
+    default = tmp_path / "Default"
+    default.mkdir()
+    preferences = default / "Preferences"
+    preferences.write_text("{}", encoding="utf-8")
+
+    configure_calendar_zoom_preference(tmp_path, 90)
+
+    saved = json.loads(preferences.read_text(encoding="utf-8"))
+    zoom = saved["partition"]["per_host_zoom_levels"]["x"]["calendar.google.com"]
+    assert native_browser_zoom_factor(90) == pytest.approx(0.9)
+    assert zoom["zoom_level"] == pytest.approx(chromium_zoom_level(90))

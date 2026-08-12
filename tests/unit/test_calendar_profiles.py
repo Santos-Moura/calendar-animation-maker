@@ -59,6 +59,8 @@ def test_two_profiles_use_separate_tokens_and_calendar_configs(tmp_path: Path) -
     assert account_a.token_file == Path("token.json")
     assert account_b.token_file == tmp_path / ".calendar-anim/profiles/account-b/token.json"
     assert account_a.token_file != account_b.token_file
+    assert account_a.capture_zoom_percent == 33
+    assert account_b.capture_zoom_percent == 90
 
     a_calendar = ProfileCalendarConfigStore(store, "account-a")
     b_calendar = ProfileCalendarConfigStore(store, "account-b")
@@ -145,6 +147,27 @@ def test_legacy_plan_without_profile_loads_as_account_a() -> None:
 
     assert plan.calendar_profile == "account-a"
     assert plan.frames[0].calendar_profile is None
+
+
+def test_legacy_profile_json_gets_profile_specific_capture_zoom(tmp_path: Path) -> None:
+    store = profile_store(tmp_path)
+    profile_path = store.profile_path("account-b")
+    profile_path.parent.mkdir(parents=True)
+    profile_path.write_text(
+        """{
+  "profile_name": "account-b",
+  "credentials_file": "credentials.json",
+  "token_file": ".calendar-anim/profiles/account-b/token.json",
+  "calendar_name": "Calendar Animation Lab B",
+  "browser_profile_directory": ".calendar-anim/browser-profiles/account-b"
+}
+""",
+        encoding="utf-8",
+    )
+
+    profile = store.load("account-b")
+
+    assert profile.capture_zoom_percent == 90
 
 
 def test_profile_runtime_paths_reject_workspace_escape(tmp_path: Path) -> None:

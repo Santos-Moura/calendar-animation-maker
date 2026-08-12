@@ -16,7 +16,9 @@ from calendar_anim.calendar.models import (
     CalendarEventDraft,
     CalendarInfo,
 )
+from calendar_anim.calendar.profiles.models import CalendarAccountProfile
 from calendar_anim.calendar.recurrence_validation.artifacts import RecurrenceValidationStore
+from calendar_anim.calendar.recurrence_validation.commands import _recurrence_capture_config
 from calendar_anim.calendar.recurrence_validation.gateway import (
     GoogleRecurrenceValidationGateway,
     ValidationInsertError,
@@ -140,6 +142,23 @@ def test_plan_has_one_parent_two_rdates_three_controls_and_exact_visual_properti
 
 def test_plan_is_deterministic() -> None:
     assert validation_plan() == validation_plan()
+
+
+def test_account_b_capture_uses_ninety_percent_and_exact_scrolled_window() -> None:
+    profile = CalendarAccountProfile(
+        profile_name="account-b",
+        credentials_file=Path("credentials.json"),
+        token_file=Path(".calendar-anim/profiles/account-b/token.json"),
+        calendar_name="Calendar Animation Lab B",
+        browser_profile_directory=Path(".calendar-anim/browser-profiles/account-b"),
+        capture_zoom_percent=90,
+    )
+
+    config = _recurrence_capture_config(profile)
+
+    assert config.browser_zoom_percent == 90
+    assert (config.visible_start_hour, config.visible_end_hour) == (6, 24)
+    assert config.profile_directory == Path(".calendar-anim/browser-profiles/account-b")
 
 
 def test_account_b_plan_scopes_every_resource_and_rejects_account_a_selection(

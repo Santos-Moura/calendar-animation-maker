@@ -56,6 +56,7 @@ def test_profile_management_dry_runs_never_authenticate_or_write_google(tmp_path
     assert "account-b" in listed.output
     assert "No browser was opened" in authenticated.output
     assert "Authenticated Google account: NO" in inspected.output
+    assert "Capture zoom: 90%" in inspected.output
     assert "Google Calendar writes: NO" in inspected.output
     assert "EXECUTION: DRY RUN" in created.output
     assert not (profiles_root / "account-b/token.json").exists()
