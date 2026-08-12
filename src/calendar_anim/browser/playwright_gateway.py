@@ -442,6 +442,29 @@ class PlaywrightCalendarCaptureGateway:
         raw = page.locator(EVENT_SELECTORS).evaluate_all(
             """
             (elements, expected) => {
+              const transparent = new Set(['', 'transparent', 'rgba(0, 0, 0, 0)']);
+              const opaque = (value) => !transparent.has(value || '');
+              const auditStyle = (node) => {
+                const style = window.getComputedStyle(node);
+                const before = window.getComputedStyle(node, '::before');
+                const after = window.getComputedStyle(node, '::after');
+                const customProperties = {};
+                for (let index = 0; index < style.length; index += 1) {
+                  const name = style[index];
+                  if (name.startsWith('--')) customProperties[name] = style.getPropertyValue(name);
+                }
+                return {
+                  node,
+                  rect: node.getBoundingClientRect(),
+                  background: style.backgroundColor,
+                  borders: [style.borderTopColor, style.borderRightColor,
+                    style.borderBottomColor, style.borderLeftColor],
+                  customProperties,
+                  inlineStyle: node.getAttribute('style') || '',
+                  pseudoBackgrounds: [before.backgroundColor, after.backgroundColor]
+                    .filter(opaque),
+                };
+              };
               const result = [];
               for (const element of elements) {
                 const content = element.textContent || '';
@@ -451,7 +474,27 @@ class PlaywrightCalendarCaptureGateway:
                   if (!content.includes(summary) && !aria.includes(summary)) continue;
                   const rect = element.getBoundingClientRect();
                   if (rect.width <= 0 || rect.height <= 0) continue;
-                  const style = window.getComputedStyle(element);
+                  const audits = [element, ...element.querySelectorAll('*')]
+                    .map(auditStyle)
+                    .filter((item) => item.rect.width > 0 && item.rect.height > 0);
+                  const elementAudit = audits[0];
+                  const visibleCandidates = audits.flatMap((item, index) => {
+                    const candidates = [];
+                    if (opaque(item.background)) {
+                      candidates.push({
+                        color: item.background,
+                        source: index === 0 ? 'element-background' : 'descendant-background',
+                        area: item.rect.width * item.rect.height,
+                      });
+                    }
+                    for (const color of item.pseudoBackgrounds) {
+                      candidates.push({color, source: 'pseudo-element-background',
+                        area: item.rect.width * item.rect.height});
+                    }
+                    return candidates;
+                  });
+                  visibleCandidates.sort((left, right) => right.area - left.area);
+                  const rendered = visibleCandidates[0] || null;
                   result.push({
                     slot_index: slot,
                     summary,
@@ -466,7 +509,16 @@ class PlaywrightCalendarCaptureGateway:
                     width: rect.width,
                     y: rect.y,
                     height: rect.height,
-                    css_background_color: style.backgroundColor,
+                    css_background_color: elementAudit.background,
+                    rendered_color: rendered ? rendered.color : null,
+                    rendered_color_source: rendered ? rendered.source : null,
+                    element_border_colors: [...new Set(elementAudit.borders)],
+                    descendant_background_colors: [...new Set(audits.slice(1)
+                      .map((item) => item.background).filter(opaque))],
+                    css_custom_properties: elementAudit.customProperties,
+                    inline_style: elementAudit.inlineStyle,
+                    pseudo_background_colors: [...new Set(audits.flatMap(
+                      (item) => item.pseudoBackgrounds))],
                   });
                   break;
                 }

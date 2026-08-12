@@ -33,6 +33,7 @@ from calendar_anim.calendar.recurrence_validation.gateway import (
 from calendar_anim.calendar.recurrence_validation.ordering import (
     ORDERING_START_WEEK,
     ORDERING_VALIDATION_ID,
+    OrderingCaptureResult,
     OrderingDomEvent,
     OrderingDomSnapshot,
     OrderingValidationStore,
@@ -40,6 +41,7 @@ from calendar_anim.calendar.recurrence_validation.ordering import (
     analyze_snapshots,
     build_ordering_validation_plan,
     compose_ordering_comparison,
+    extract_rendered_slot_colors,
 )
 from calendar_anim.calendar.recurrence_validation.planner import (
     build_recurrence_validation_plan,
@@ -455,7 +457,19 @@ def _ordering_snapshot(
     for item in raw:
         event = OrderingDomEvent.model_validate(item)
         current = by_slot.get(event.slot_index)
-        if current is None or event.width * event.height > current.width * current.height:
+        event_score = (
+            event.rendered_color is None,
+            event.width * event.height,
+        )
+        current_score = (
+            (
+                current.rendered_color is None,
+                current.width * current.height,
+            )
+            if current is not None
+            else None
+        )
+        if current_score is None or event_score < current_score:
             by_slot[event.slot_index] = event
     events = list(by_slot.values())
     ordered = sorted(events, key=lambda item: (item.x, item.slot_index))
@@ -550,9 +564,20 @@ def capture_recurrence_ordering_validation_command(
                 )
             )
         comparison = compose_ordering_comparison(plan, store)
-        result = analyze_snapshots(plan, snapshots, comparison)
-        report_path = store.capture_report_path(plan.validation_id)
-        report_path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        rendered_colors = {
+            label: extract_rendered_slot_colors(
+                store.screenshot_path(plan.validation_id, label), snapshots
+            )
+            for label in ("recurring-initial", "standalone")
+        }
+        result = analyze_snapshots(
+            plan,
+            snapshots,
+            comparison,
+            rendered_colors,
+            "existing-screenshot-pixels",
+        )
+        report_path = store.save_capture_result(result)
     except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
         _fail(error)
     typer.echo(f"RECURRENCE ZERO-WIDTH ORDERING = {result.result}")
@@ -561,9 +586,65 @@ def capture_recurrence_ordering_validation_command(
     typer.echo(f"Recurring == standalone: {'YES' if result.recurring_equals_standalone else 'NO'}")
     typer.echo(f"Refresh stable: {'YES' if result.refresh_stable else 'NO'}")
     typer.echo(f"Navigation stable: {'YES' if result.navigation_stable else 'NO'}")
+    typer.echo(f"Rendered colors match: {'YES' if result.rendered_colors_match else 'NO'}")
+    typer.echo(f"Expected color mapping verified: {result.expected_color_mapping_verified.value}")
     typer.echo(f"Comparison: {comparison}")
     typer.echo(f"DOM report: {report_path}")
     typer.echo("Calendar writes during capture: NO")
+
+
+def reprocess_recurrence_ordering_validation_command(
+    validation_id: Annotated[str, typer.Option("--validation-id")] = ORDERING_VALIDATION_ID,
+    output_root: Annotated[Path, typer.Option("--output-root")] = Path(
+        "output/recurrence-validation"
+    ),
+) -> None:
+    """Re-evaluate existing screenshots and DOM artifacts without opening Calendar."""
+
+    try:
+        store = OrderingValidationStore(output_root)
+        plan = store.load_plan(_validation_id(validation_id))
+        report_path = store.capture_report_path(plan.validation_id)
+        original_report = report_path.read_text(encoding="utf-8")
+        old = OrderingCaptureResult.model_validate_json(original_report)
+        snapshots = old.snapshots
+        rendered_colors = {
+            label: extract_rendered_slot_colors(
+                store.screenshot_path(plan.validation_id, label), snapshots
+            )
+            for label in ("recurring-initial", "standalone")
+        }
+        result = analyze_snapshots(
+            plan,
+            snapshots,
+            Path(old.comparison_path),
+            rendered_colors,
+            "existing-screenshot-pixels",
+        )
+        backup = report_path.with_name("ordering-result.pre-color-fix.json")
+        if not backup.exists():
+            backup.write_text(original_report, encoding="utf-8")
+        store.save_capture_result(result)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Old result: {old.result}")
+    typer.echo(f"New result: {result.result}")
+    typer.echo(
+        "Recurring vs standalone rendered colors: "
+        f"{sum(item.match for item in result.color_comparisons)}/18 match"
+    )
+    for item in result.color_comparisons:
+        typer.echo(
+            f"Slot {item.slot_index:02d} colorId={item.expected_color_id} "
+            f"recurring={item.recurring_rendered_color} "
+            f"standalone={item.standalone_rendered_color} "
+            f"match={'YES' if item.match else 'NO'}"
+        )
+    typer.echo(f"Expected color mapping verified: {result.expected_color_mapping_verified.value}")
+    typer.echo(f"Report: {store.capture_report_path(plan.validation_id)}")
+    typer.echo("Browser opened: NO")
+    typer.echo("Google Calendar reads: NO")
+    typer.echo("Google Calendar writes: NO")
 
 
 def cleanup_recurrence_ordering_validation_command(
@@ -617,6 +698,9 @@ def register_recurrence_validation_commands(app: typer.Typer) -> None:
     )
     app.command("capture-recurrence-ordering-validation")(
         capture_recurrence_ordering_validation_command
+    )
+    app.command("reprocess-recurrence-ordering-validation")(
+        reprocess_recurrence_ordering_validation_command
     )
     app.command("cleanup-recurrence-ordering-validation")(
         cleanup_recurrence_ordering_validation_command

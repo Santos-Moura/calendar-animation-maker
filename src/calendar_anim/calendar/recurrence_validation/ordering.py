@@ -1,7 +1,10 @@
 import hashlib
 import json
 import os
+import re
+from collections import Counter
 from datetime import UTC, date, datetime, time, timedelta
+from enum import StrEnum
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -107,6 +110,13 @@ class OrderingDomEvent(BaseModel):
     y: float
     height: float = Field(gt=0)
     css_background_color: str
+    rendered_color: str | None = None
+    rendered_color_source: str | None = None
+    element_border_colors: list[str] = Field(default_factory=list)
+    descendant_background_colors: list[str] = Field(default_factory=list)
+    css_custom_properties: dict[str, str] = Field(default_factory=dict)
+    inline_style: str = ""
+    pseudo_background_colors: list[str] = Field(default_factory=list)
 
 
 class OrderingDomSnapshot(BaseModel):
@@ -118,8 +128,22 @@ class OrderingDomSnapshot(BaseModel):
     slot_order: list[int]
 
 
+class ColorMappingVerification(StrEnum):
+    YES = "YES"
+    NO = "NO"
+    UNKNOWN = "UNKNOWN"
+
+
+class OrderingColorComparison(BaseModel):
+    slot_index: int = Field(ge=0, le=17)
+    expected_color_id: str
+    recurring_rendered_color: str | None
+    standalone_rendered_color: str | None
+    match: bool
+
+
 class OrderingCaptureResult(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     validation_id: str
     calendar_profile: str
     browser_zoom_percent: int
@@ -130,6 +154,11 @@ class OrderingCaptureResult(BaseModel):
     recurring_equals_standalone: bool
     refresh_stable: bool
     navigation_stable: bool
+    rendered_colors_match: bool = False
+    expected_color_mapping_verified: ColorMappingVerification = ColorMappingVerification.UNKNOWN
+    color_comparisons: list[OrderingColorComparison] = Field(default_factory=list)
+    rendered_color_evidence: str = "legacy-wrapper-background"
+    # Backward-compatible alias retained for existing consumers and artifacts.
     color_preserved: bool
     no_visible_text_pollution: bool
     result: str = Field(pattern=r"^(PASS|NO-GO)$")
@@ -334,6 +363,12 @@ class OrderingValidationStore:
     def capture_report_path(self, validation_id: str) -> Path:
         return self.capture_directory(validation_id) / "ordering-result.json"
 
+    def save_capture_result(self, result: OrderingCaptureResult) -> Path:
+        return _write_atomic(
+            self.capture_report_path(result.validation_id),
+            result.model_dump_json(indent=2) + "\n",
+        )
+
     def comparison_path(self, validation_id: str) -> Path:
         return self.capture_directory(validation_id) / "recurring-vs-standalone-ordering.png"
 
@@ -400,6 +435,8 @@ def analyze_snapshots(
     plan: RecurrenceOrderingValidationPlan,
     snapshots: list[OrderingDomSnapshot],
     comparison: Path,
+    rendered_colors_by_label: dict[str, list[str | None]] | None = None,
+    color_evidence_source: str = "dom-computed-visible-layer",
 ) -> OrderingCaptureResult:
     by_label = {item.label: item for item in snapshots}
     required = {"recurring-initial", "recurring-refresh", "recurring-navigation", "standalone"}
@@ -431,20 +468,32 @@ def analyze_snapshots(
     refresh = close(initial, geometry("recurring-refresh"))
     navigation = close(initial, geometry("recurring-navigation"))
     equivalent = close(initial, geometry("standalone"))
-    color_preserved = all(
-        event.color_id_expected == plan.color_ids[event.slot_index]
-        and event.css_background_color not in {"", "rgba(0, 0, 0, 0)", "transparent"}
-        for snapshot in snapshots
-        for event in snapshot.events
-    )
-    initial_colors = {
-        event.slot_index: event.css_background_color
-        for event in by_label["recurring-initial"].events
-    }
-    color_preserved = color_preserved and all(
-        initial_colors.get(event.slot_index) == event.css_background_color
-        for event in by_label["standalone"].events
-    )
+    rendered_colors_by_label = rendered_colors_by_label or {}
+
+    def snapshot_colors(label: str) -> list[str | None]:
+        supplied = rendered_colors_by_label.get(label)
+        if supplied is not None:
+            if len(supplied) != 18:
+                raise CalendarAnimError(f"Rendered color audit for {label} must contain 18 slots")
+            return supplied
+        by_slot = {item.slot_index: item for item in by_label[label].events}
+        return [effective_rendered_color(by_slot.get(slot)) for slot in range(18)]
+
+    recurring_colors = snapshot_colors("recurring-initial")
+    standalone_colors = snapshot_colors("standalone")
+    color_comparisons = [
+        OrderingColorComparison(
+            slot_index=slot,
+            expected_color_id=plan.color_ids[slot],
+            recurring_rendered_color=recurring_colors[slot],
+            standalone_rendered_color=standalone_colors[slot],
+            match=recurring_colors[slot] is not None
+            and recurring_colors[slot] == standalone_colors[slot],
+        )
+        for slot in range(18)
+    ]
+    rendered_colors_match = all(item.match for item in color_comparisons)
+    expected_mapping = verify_expected_color_mapping(plan, color_comparisons)
     invisible = all(
         not any(character.isprintable() for character in summary) for summary in plan.summaries
     )
@@ -456,7 +505,7 @@ def analyze_snapshots(
             refresh,
             navigation,
             equivalent,
-            color_preserved,
+            rendered_colors_match,
             invisible,
         )
     )
@@ -471,8 +520,102 @@ def analyze_snapshots(
         recurring_equals_standalone=equivalent,
         refresh_stable=refresh,
         navigation_stable=navigation,
-        color_preserved=color_preserved,
+        rendered_colors_match=rendered_colors_match,
+        expected_color_mapping_verified=expected_mapping,
+        color_comparisons=color_comparisons,
+        rendered_color_evidence=color_evidence_source,
+        color_preserved=rendered_colors_match,
         no_visible_text_pollution=invisible,
         result="PASS" if passed else "NO-GO",
         comparison_path=str(comparison),
     )
+
+
+TRANSPARENT_COLORS = {"", "rgba(0, 0, 0, 0)", "transparent"}
+RGB_PATTERN = re.compile(r"^rgba?\((\d+),\s*(\d+),\s*(\d+)")
+
+
+def effective_rendered_color(event: OrderingDomEvent | None) -> str | None:
+    if event is None:
+        return None
+    for value in (event.rendered_color, event.css_background_color):
+        if value and value not in TRANSPARENT_COLORS:
+            return value
+    return None
+
+
+def verify_expected_color_mapping(
+    plan: RecurrenceOrderingValidationPlan,
+    comparisons: list[OrderingColorComparison],
+) -> ColorMappingVerification:
+    mappings: dict[str, set[str]] = {}
+    for item in comparisons:
+        if not item.match or item.recurring_rendered_color is None:
+            continue
+        mappings.setdefault(item.expected_color_id, set()).add(item.recurring_rendered_color)
+    expected_ids = set(plan.color_ids)
+    if set(mappings) != expected_ids:
+        return ColorMappingVerification.UNKNOWN
+    if any(len(colors) != 1 for colors in mappings.values()):
+        return ColorMappingVerification.NO
+    return ColorMappingVerification.YES
+
+
+def extract_rendered_slot_colors(
+    screenshot: Path,
+    snapshots: list[OrderingDomSnapshot],
+    *,
+    slot_count: int = 18,
+) -> list[str | None]:
+    """Recover equal-width rendered slot colors from an existing screenshot.
+
+    The palette is learned from opaque chip colors already present in the DOM capture.
+    The screenshot, rather than the wrapper style, is then the source of truth.
+    """
+
+    palette_names = {
+        color
+        for snapshot in snapshots
+        for event in snapshot.events
+        for color in (event.rendered_color, event.css_background_color)
+        if color and color not in TRANSPARENT_COLORS and _rgb_tuple(color) is not None
+    }
+    palette: dict[tuple[int, int, int], str] = {}
+    for name in palette_names:
+        rgb = _rgb_tuple(name)
+        if rgb is not None:
+            palette[rgb] = name
+    if not palette:
+        return [None] * slot_count
+    with Image.open(screenshot) as source:
+        image = source.convert("RGB")
+        column_counts: dict[int, Counter[tuple[int, int, int]]] = {}
+        for x in range(image.width):
+            column_palette_counts: Counter[tuple[int, int, int]] = Counter(
+                pixel
+                for pixel in (image.getpixel((x, y)) for y in range(image.height))
+                if pixel in palette
+            )
+            if sum(column_palette_counts.values()) >= 10:
+                column_counts[x] = column_palette_counts
+        if not column_counts:
+            return [None] * slot_count
+        left, right = min(column_counts), max(column_counts) + 1
+        lane_width = (right - left) / slot_count
+        colors: list[str | None] = []
+        for slot in range(slot_count):
+            start = round(left + slot * lane_width)
+            end = round(left + (slot + 1) * lane_width)
+            lane_counts: Counter[tuple[int, int, int]] = Counter()
+            for x in range(start, end):
+                lane_counts.update(column_counts.get(x, Counter()))
+            colors.append(palette[lane_counts.most_common(1)[0][0]] if lane_counts else None)
+        return colors
+
+
+def _rgb_tuple(value: str) -> tuple[int, int, int] | None:
+    match = RGB_PATTERN.match(value)
+    if match is None:
+        return None
+    red, green, blue = (int(part) for part in match.groups())
+    return red, green, blue
