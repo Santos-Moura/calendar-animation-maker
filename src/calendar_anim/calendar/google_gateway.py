@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from time import monotonic, sleep
 from typing import Any
 
 from googleapiclient.errors import HttpError
@@ -14,7 +15,11 @@ from calendar_anim.calendar.models import (
     CalendarWriteFailure,
     CalendarWriteResult,
 )
-from calendar_anim.calendar.multi_frame.retry import is_retryable_exception
+from calendar_anim.calendar.multi_frame.retry import (
+    http_error_reasons,
+    is_rate_limit_exception,
+    is_retryable_exception,
+)
 
 
 class GoogleCalendarGateway:
@@ -22,6 +27,29 @@ class GoogleCalendarGateway:
 
     def __init__(self, service: Any) -> None:
         self.service = service
+        self.minimum_write_interval_seconds = 0.0
+        self.current_write_interval_seconds = 0.0
+        self.maximum_write_interval_seconds = 3.0
+        self._last_write_started_at: float | None = None
+        self._successful_writes_since_rate_limit = 0
+        self._clock = monotonic
+        self._sleeper = sleep
+
+    def configure_write_pacing(
+        self,
+        minimum_interval_seconds: float,
+        *,
+        clock: Any = monotonic,
+        sleeper: Any = sleep,
+    ) -> None:
+        if minimum_interval_seconds < 0:
+            raise ValueError("minimum write interval must be non-negative")
+        self.minimum_write_interval_seconds = minimum_interval_seconds
+        self.current_write_interval_seconds = minimum_interval_seconds
+        self._last_write_started_at = None
+        self._successful_writes_since_rate_limit = 0
+        self._clock = clock
+        self._sleeper = sleeper
 
     @staticmethod
     def _calendar_info(item: dict[str, Any]) -> CalendarInfo:
@@ -98,6 +126,7 @@ class GoogleCalendarGateway:
             if event.color_id:
                 body["colorId"] = event.color_id
             try:
+                self._pace_write()
                 response = (
                     self.service.events()
                     .insert(calendarId=calendar_id, body=body, sendUpdates="none")
@@ -107,14 +136,20 @@ class GoogleCalendarGateway:
                 if event_id:
                     created.append(str(event_id))
                     created_indexes.append(index)
+                    self._record_successful_write()
                 else:
-                    errors.append(f"Event {index} was created without a returned ID")
+                    message = f"Event {index} was created without a returned ID"
+                    errors.append(message)
+                    failures.append(CalendarWriteFailure(event_index=index, message=message))
             except HttpError as error:
                 status = int(getattr(error.resp, "status", 0) or 0)
                 if status == 409:
                     created.append(expected_id)
                     created_indexes.append(index)
+                    self._record_successful_write()
                     continue
+                reasons = http_error_reasons(error)
+                reason = next(iter(sorted(reasons)), None)
                 message = f"Event {index}: {error}"
                 errors.append(message)
                 failures.append(
@@ -123,15 +158,72 @@ class GoogleCalendarGateway:
                         message=message,
                         retryable=is_retryable_exception(error),
                         status_code=status or None,
+                        reason=reason,
                     )
                 )
+                if is_rate_limit_exception(error):
+                    self._record_rate_limit()
+                    deferred_reason = reason or "rateLimitExceeded"
+                    deferred_message = (
+                        f"Deferred after event {index} hit {deferred_reason}; no request sent"
+                    )
+                    for deferred_index in range(index + 1, len(events)):
+                        failures.append(
+                            CalendarWriteFailure(
+                                event_index=deferred_index,
+                                message=deferred_message,
+                                retryable=True,
+                                status_code=status or None,
+                                reason=deferred_reason,
+                            )
+                        )
+                    if len(events) - index - 1:
+                        errors.append(
+                            f"Deferred {len(events) - index - 1} event(s) after rate limit"
+                        )
+                    break
         return CalendarWriteResult(
             created_event_ids=created,
             created_event_indexes=created_indexes,
-            failed_events=len(errors),
+            failed_events=len(events) - len(created_indexes),
             errors=errors,
             failures=failures,
         )
+
+    def _pace_write(self) -> None:
+        if self.current_write_interval_seconds <= 0:
+            return
+        now = self._clock()
+        if self._last_write_started_at is not None:
+            remaining = self.current_write_interval_seconds - (now - self._last_write_started_at)
+            if remaining > 0:
+                self._sleeper(remaining)
+                now = self._clock()
+        self._last_write_started_at = now
+
+    def _record_rate_limit(self) -> None:
+        baseline = max(
+            self.minimum_write_interval_seconds,
+            self.current_write_interval_seconds,
+            0.1,
+        )
+        self.current_write_interval_seconds = min(
+            self.maximum_write_interval_seconds,
+            baseline * 1.5,
+        )
+        self._successful_writes_since_rate_limit = 0
+
+    def _record_successful_write(self) -> None:
+        if self.current_write_interval_seconds <= self.minimum_write_interval_seconds:
+            return
+        self._successful_writes_since_rate_limit += 1
+        if self._successful_writes_since_rate_limit < 200:
+            return
+        self.current_write_interval_seconds = max(
+            self.minimum_write_interval_seconds,
+            self.current_write_interval_seconds * 0.9,
+        )
+        self._successful_writes_since_rate_limit = 0
 
     def find_events_by_private_metadata(
         self, calendar_id: str, metadata: Mapping[str, str]

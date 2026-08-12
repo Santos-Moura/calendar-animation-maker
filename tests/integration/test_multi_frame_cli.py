@@ -204,6 +204,21 @@ def test_final_cutscene_run_has_isolated_5200_event_safety_limit(
     plan = AnimationRunStore(tmp_path / "runs").load_plan("cayde-final-126x72-3fps-36s-01")
     assert plan.max_events_per_frame == 5200
 
+    upload = runner.invoke(
+        app,
+        [
+            "calendar",
+            "upload-animation",
+            "--run-id",
+            plan.run_id,
+            "--output-root",
+            str(tmp_path / "runs"),
+            "--resume",
+        ],
+    )
+    assert upload.exit_code == 0, upload.output
+    assert "Write pacing: adaptive, minimum 0.75s" in upload.output
+
 
 def test_final_cutscene_run_rejects_more_than_5200_events_per_frame(tmp_path: Path) -> None:
     manifest, profile = _inputs(tmp_path, frame_count=1)
@@ -245,6 +260,7 @@ def test_upload_animation_dry_run_skips_api_and_lists_actions(
 
     assert result.exit_code == 0, result.output
     assert "Execution: DRY RUN" in result.output
+    assert "Write pacing: default" in result.output
     assert "Frame 0: UPLOAD" in result.output
     assert "No authentication or Calendar API call was made" in result.output
 

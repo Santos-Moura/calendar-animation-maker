@@ -12,6 +12,7 @@ HIGH_DETAIL_GRID_PROFILE: Final = f"high-detail-{HIGH_DETAIL_GRID}"
 HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS: Final = 2500
 FINAL_CUTSCENE_RUN_ID: Final = "cayde-final-126x72-3fps-36s-01"
 FINAL_CUTSCENE_MAX_EVENTS: Final = 5200
+FINAL_CUTSCENE_MIN_WRITE_INTERVAL_SECONDS: Final = 0.75
 
 
 def high_detail_max_events_for_run(run_id: str) -> int:
@@ -20,6 +21,14 @@ def high_detail_max_events_for_run(run_id: str) -> int:
     if run_id == FINAL_CUTSCENE_RUN_ID:
         return FINAL_CUTSCENE_MAX_EVENTS
     return HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS
+
+
+def minimum_write_interval_for_run(run_id: str) -> float:
+    """Return isolated Calendar write pacing without changing production defaults."""
+
+    if run_id == FINAL_CUTSCENE_RUN_ID:
+        return FINAL_CUTSCENE_MIN_WRITE_INTERVAL_SECONDS
+    return 0.0
 
 
 def is_high_detail_geometry(

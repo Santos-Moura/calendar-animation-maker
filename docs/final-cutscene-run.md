@@ -25,8 +25,16 @@ creating a duplicate; Google `409 Conflict` confirms that the intended event alr
 Retryable failures are limited to `429`, temporary `403 rateLimitExceeded` or
 `userRateLimitExceeded`, `5xx`, timeouts, and recognized temporary transport errors. Other
 `403` responses remain permanent. The default policy is five event attempts with exponential
-backoff, jitter, and a 30-second ceiling. A frame gets at most three automatic recovery cycles
-per invocation. Permanent errors do not loop.
+backoff, jitter, and a 30-second ceiling. Calendar rate limits use a longer 32-to-64-second
+cooldown recommended for sustained quota pressure. A frame gets at most three automatic
+recovery cycles per invocation. Permanent errors do not loop.
+
+The approved final run also has isolated adaptive write pacing. Event starts are initially
+spaced by at least `0.75s` (about 80 writes/minute). A new Calendar rate limit immediately
+stops the current chunk so unsent events do not generate dozens of guaranteed failures,
+increases the interval by 50% up to a `3s` ceiling, and lets the service retry only the missing
+events after the longer cooldown. After every 200 successful writes the interval decays by 10%
+toward the `0.75s` baseline. Other run IDs retain their existing write behavior.
 
 On resume, completed frames are skipped. Partial, interrupted, and failed frames are reconciled
 against their deterministic event IDs and only missing drafts are submitted. Unknown legacy

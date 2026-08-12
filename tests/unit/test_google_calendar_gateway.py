@@ -148,6 +148,64 @@ def test_google_gateway_only_retries_temporary_403_reasons(
     assert result.failures[0].retryable is retryable
 
 
+def test_google_gateway_stops_batch_after_first_rate_limit() -> None:
+    service = FailingGoogleService(403, "rateLimitExceeded")
+    gateway = GoogleCalendarGateway(service)
+    gateway.configure_write_pacing(0.75)
+    start = datetime(2026, 9, 21, 6, 0, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    drafts = [
+        CalendarEventDraft(
+            start=start + timedelta(minutes=index),
+            end=start + timedelta(minutes=index + 1),
+            summary="",
+            private_metadata={"event": str(index)},
+        )
+        for index in range(50)
+    ]
+
+    result = gateway.create_events("calendar-id", drafts)
+
+    assert len(service.events_resource.calls) == 1
+    assert result.failed_events == 50
+    assert len(result.failures) == 50
+    assert all(failure.retryable for failure in result.failures)
+    assert all(failure.reason == "rateLimitExceeded" for failure in result.failures)
+    assert gateway.current_write_interval_seconds == pytest.approx(1.125)
+
+
+def test_google_gateway_spaces_write_starts_at_configured_interval() -> None:
+    service = RecordingGoogleService()
+    gateway = GoogleCalendarGateway(service)
+    current = [0.0]
+    sleeps: list[float] = []
+
+    def sleeper(seconds: float) -> None:
+        sleeps.append(seconds)
+        current[0] += seconds
+
+    gateway.configure_write_pacing(
+        0.75,
+        clock=lambda: current[0],
+        sleeper=sleeper,
+    )
+    start = datetime(2026, 9, 21, 6, 0, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    drafts = [
+        CalendarEventDraft(
+            start=start + timedelta(minutes=index),
+            end=start + timedelta(minutes=index + 1),
+            summary="",
+            private_metadata={"event": str(index)},
+        )
+        for index in range(3)
+    ]
+
+    result = gateway.create_events("calendar-id", drafts)
+
+    assert result.failed_events == 0
+    assert sleeps == [0.75, 0.75]
+    assert current[0] == 1.5
+
+
 def test_google_conflict_confirms_deterministic_event_already_exists() -> None:
     service = FailingGoogleService(409)
     gateway = GoogleCalendarGateway(service)

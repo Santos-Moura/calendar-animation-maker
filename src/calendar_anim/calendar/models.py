@@ -56,6 +56,7 @@ class CalendarWriteFailure(BaseModel):
     message: str
     retryable: bool = False
     status_code: int | None = None
+    reason: str | None = None
 
 
 class CalendarWriteResult(BaseModel):

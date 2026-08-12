@@ -15,7 +15,11 @@ from calendar_anim.calendar.high_detail import (
     is_high_detail_geometry,
 )
 from calendar_anim.calendar.lab import LabCalendarService
-from calendar_anim.calendar.models import CalendarEventDraft, CalendarWriteResult
+from calendar_anim.calendar.models import (
+    CalendarEventDraft,
+    CalendarWriteFailure,
+    CalendarWriteResult,
+)
 from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
 from calendar_anim.calendar.multi_frame.models import (
     AnimationUploadState,
@@ -38,10 +42,13 @@ from calendar_anim.calendar.multi_frame.performance import (
 )
 from calendar_anim.calendar.multi_frame.retry import (
     DEFAULT_UPLOAD_RETRY_POLICY,
+    RETRYABLE_FORBIDDEN_REASONS,
     Jitter,
     UploadRetryPolicy,
     default_jitter,
+    is_rate_limit_exception,
     is_retryable_exception,
+    rate_limit_retry_delay,
     retry_delay,
 )
 from calendar_anim.exceptions import CalendarAnimError
@@ -56,6 +63,10 @@ Sleeper = Callable[[float], None]
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _is_rate_limit_failure(failure: CalendarWriteFailure) -> bool:
+    return failure.status_code == 429 or failure.reason in RETRYABLE_FORBIDDEN_REASONS
 
 
 class MultiFrameUploadService:
@@ -405,7 +416,12 @@ class MultiFrameUploadService:
                         retryable,
                     )
                 retries += 1
-                self.sleeper(retry_delay(self.retry_policy, attempt, self.jitter))
+                delay = (
+                    rate_limit_retry_delay(self.retry_policy, attempt, self.jitter)
+                    if is_rate_limit_exception(error)
+                    else retry_delay(self.retry_policy, attempt, self.jitter)
+                )
+                self.sleeper(delay)
                 continue
 
             created_indexes = set(result.created_event_indexes)
@@ -445,7 +461,12 @@ class MultiFrameUploadService:
                 )
             pending = [pending[index] for index in missing_indexes]
             retries += 1
-            self.sleeper(retry_delay(self.retry_policy, attempt, self.jitter))
+            delay = (
+                rate_limit_retry_delay(self.retry_policy, attempt, self.jitter)
+                if any(_is_rate_limit_failure(failures[index]) for index in missing_indexes)
+                else retry_delay(self.retry_policy, attempt, self.jitter)
+            )
+            self.sleeper(delay)
         raise AssertionError("unreachable retry loop")
 
     def _checkpoint(self, plan: MultiFramePlan, state: AnimationUploadState) -> None:

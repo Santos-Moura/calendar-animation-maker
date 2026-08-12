@@ -25,6 +25,7 @@ from calendar_anim.calendar.high_detail import (
     HIGH_DETAIL_GRID_PROFILE,
     apply_high_detail_grid,
     high_detail_max_events_for_run,
+    minimum_write_interval_for_run,
 )
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
@@ -292,6 +293,9 @@ def upload_animation_command(
 
     try:
         gateway = _google_gateway()
+        write_interval = minimum_write_interval_for_run(plan.run_id)
+        if write_interval:
+            gateway.configure_write_pacing(write_interval)
         service = MultiFrameUploadService(
             gateway,
             LabCalendarService(gateway, CalendarConfigStore()),
@@ -403,6 +407,11 @@ def _print_upload_summary(plan: MultiFramePlan, state: AnimationUploadState, exe
     typer.echo(f"Total planned events: {plan.total_events}")
     typer.echo(f"Max events/frame: {plan.max_events_per_frame}")
     typer.echo(f"Largest frame: {max(plan.events_per_frame)}")
+    write_interval = minimum_write_interval_for_run(plan.run_id)
+    if write_interval:
+        typer.echo(f"Write pacing: adaptive, minimum {write_interval:.2f}s between event starts")
+    else:
+        typer.echo("Write pacing: default")
     typer.echo(f"Current state: {_status_counts(state)}")
     typer.echo(f"Execution: {'REAL' if execute else 'DRY RUN'}")
 

@@ -94,6 +94,34 @@ class PermanentFailureGateway(FakeCalendarGateway):
         )
 
 
+class RateLimitOnceGateway(FakeCalendarGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rate_limited = False
+
+    def create_events(
+        self, calendar_id: str, events: Sequence[CalendarEventDraft]
+    ) -> CalendarWriteResult:
+        if not self.rate_limited:
+            self.rate_limited = True
+            self.create_event_calls += 1
+            return CalendarWriteResult(
+                failed_events=len(events),
+                errors=["simulated rateLimitExceeded"],
+                failures=[
+                    CalendarWriteFailure(
+                        event_index=index,
+                        message="simulated rateLimitExceeded",
+                        retryable=True,
+                        status_code=403,
+                        reason="rateLimitExceeded",
+                    )
+                    for index in range(len(events))
+                ],
+            )
+        return super().create_events(calendar_id, events)
+
+
 class PersistThenCrashGateway(FakeCalendarGateway):
     def __init__(self) -> None:
         super().__init__()
@@ -151,11 +179,12 @@ def _initialized_run(tmp_path: Path, frame_count: int = 3):
 
 
 def _service(gateway: FakeCalendarGateway, store: AnimationRunStore, tmp_path: Path, **kwargs):
+    sleeper = kwargs.pop("sleeper", lambda _: None)
     return MultiFrameUploadService(
         gateway,
         LabCalendarService(gateway, CalendarConfigStore(tmp_path / "calendar.json")),
         store,
-        sleeper=lambda _: None,
+        sleeper=sleeper,
         jitter=lambda _: 0.0,
         **kwargs,
     )
@@ -190,6 +219,27 @@ def test_retryable_partial_chunk_retries_only_missing_events_without_duplicates(
     assert attempt.initial_attempt_seconds is not None
     assert attempt.total_frame_elapsed_seconds is not None
     assert len(attempt.attempts) == 1
+
+
+def test_rate_limit_uses_long_cooldown_then_resumes_missing_events(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=1)
+    gateway = RateLimitOnceGateway()
+    sleeps: list[float] = []
+    service = _service(
+        gateway,
+        store,
+        tmp_path,
+        chunk_size=50,
+        sleeper=sleeps.append,
+    )
+
+    uploaded = service.upload(plan, state)
+
+    assert uploaded.frames[0].status is FrameUploadStatus.COMPLETED
+    assert uploaded.frames[0].event_retry_count == 1
+    assert sleeps[0] == 32.0
+    calendar_id = uploaded.calendar_id or ""
+    assert len(gateway.events[calendar_id]) == 1008
 
 
 def test_response_loss_after_persistence_is_idempotent(tmp_path: Path) -> None:

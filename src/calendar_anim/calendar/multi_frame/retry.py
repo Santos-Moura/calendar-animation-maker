@@ -14,6 +14,8 @@ class UploadRetryPolicy:
     max_delay_seconds: float = 30.0
     jitter_seconds: float = 1.0
     max_frame_recovery_cycles: int = 3
+    rate_limit_base_delay_seconds: float = 32.0
+    rate_limit_max_delay_seconds: float = 64.0
 
     def __post_init__(self) -> None:
         if self.max_event_attempts < 1:
@@ -24,6 +26,8 @@ class UploadRetryPolicy:
             raise ValueError("retry jitter must be non-negative")
         if self.max_frame_recovery_cycles < 0:
             raise ValueError("max_frame_recovery_cycles must be non-negative")
+        if self.rate_limit_base_delay_seconds < 0 or self.rate_limit_max_delay_seconds < 0:
+            raise ValueError("rate-limit delays must be non-negative")
 
 
 DEFAULT_UPLOAD_RETRY_POLICY: Final = UploadRetryPolicy()
@@ -48,6 +52,21 @@ def retry_delay(
     return policy.max_delay_seconds if delayed > policy.max_delay_seconds else delayed
 
 
+def rate_limit_retry_delay(
+    policy: UploadRetryPolicy,
+    failed_attempt: int,
+    jitter: Jitter = default_jitter,
+) -> float:
+    exponential = policy.rate_limit_base_delay_seconds * (2 ** max(0, failed_attempt - 1))
+    base = min(policy.rate_limit_max_delay_seconds, exponential)
+    available_jitter = min(
+        policy.jitter_seconds,
+        max(0.0, policy.rate_limit_max_delay_seconds - base),
+    )
+    delayed: float = base + jitter(available_jitter)
+    return min(policy.rate_limit_max_delay_seconds, delayed)
+
+
 def is_retryable_exception(error: BaseException) -> bool:
     if isinstance(error, HttpError):
         status = int(getattr(error.resp, "status", 0) or 0)
@@ -55,7 +74,7 @@ def is_retryable_exception(error: BaseException) -> bool:
             status == 429
             or 500 <= status <= 599
             or status == 403
-            and bool(_http_error_reasons(error) & RETRYABLE_FORBIDDEN_REASONS)
+            and bool(http_error_reasons(error) & RETRYABLE_FORBIDDEN_REASONS)
         )
     if isinstance(error, (TimeoutError, ConnectionError)):
         return True
@@ -66,7 +85,14 @@ def is_retryable_exception(error: BaseException) -> bool:
     )
 
 
-def _http_error_reasons(error: HttpError) -> set[str]:
+def is_rate_limit_exception(error: BaseException) -> bool:
+    if not isinstance(error, HttpError):
+        return False
+    status = int(getattr(error.resp, "status", 0) or 0)
+    return status == 429 or bool(http_error_reasons(error) & RETRYABLE_FORBIDDEN_REASONS)
+
+
+def http_error_reasons(error: HttpError) -> set[str]:
     reasons: set[str] = set()
     details = getattr(error, "error_details", None)
     if isinstance(details, list):
