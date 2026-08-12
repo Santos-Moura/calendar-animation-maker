@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 
 from calendar_anim.calendar.models import CalendarDeleteResult, CalendarInfo
 from calendar_anim.calendar.recurrence_validation.gateway import (
@@ -20,6 +21,7 @@ from calendar_anim.calendar.recurrence_validation.ordering import (
     OrderingValidationStore,
     analyze_snapshots,
     build_ordering_validation_plan,
+    extract_rendered_slot_colors,
 )
 from calendar_anim.calendar.recurrence_validation.service import RecurrenceValidationService
 from calendar_anim.calendar.subcolumn_ordering import (
@@ -90,8 +92,16 @@ def test_every_slot_has_matching_parent_control_and_three_recurring_instances() 
         assert parent.recurrence == ["RDATE;TZID=America/Sao_Paulo:20300414T060000,20300421T060000"]
 
 
-def _snapshot(label: str, *, shift: float = 0, swapped: bool = False) -> OrderingDomSnapshot:
+def _snapshot(
+    label: str,
+    *,
+    shift: float = 0,
+    swapped: bool = False,
+    transparent_outer_slot: int | None = None,
+    rendered_overrides: dict[int, str] | None = None,
+) -> OrderingDomSnapshot:
     validation = plan()
+    rendered_overrides = rendered_overrides or {}
     events = [
         OrderingDomEvent(
             slot_index=slot,
@@ -104,7 +114,15 @@ def _snapshot(label: str, *, shift: float = 0, swapped: bool = False) -> Orderin
             width=9,
             y=100,
             height=80,
-            css_background_color="rgb(121, 134, 203)",
+            css_background_color=(
+                "rgba(0, 0, 0, 0)"
+                if slot == transparent_outer_slot
+                else rendered_overrides.get(slot, f"rgb({slot % 4}, 0, 0)")
+            ),
+            rendered_color=rendered_overrides.get(slot, f"rgb({slot % 4}, 0, 0)"),
+            rendered_color_source=(
+                "descendant-background" if slot == transparent_outer_slot else "element-background"
+            ),
         )
         for slot in range(18)
     ]
@@ -158,6 +176,76 @@ def test_capture_result_is_no_go_when_standalone_slot_order_changes(tmp_path: Pa
     assert result.result == "NO-GO"
     assert not result.recurring_equals_standalone
     assert not result.strict_x_ordering
+
+
+def test_transparent_outer_wrapper_with_colored_child_is_not_false_no_go(
+    tmp_path: Path,
+) -> None:
+    validation = plan()
+    result = analyze_snapshots(
+        validation,
+        [
+            _snapshot("recurring-initial", transparent_outer_slot=0),
+            _snapshot("recurring-refresh", transparent_outer_slot=0),
+            _snapshot("recurring-navigation", transparent_outer_slot=0),
+            _snapshot("standalone", transparent_outer_slot=0),
+        ],
+        tmp_path / "comparison.png",
+    )
+
+    assert result.result == "PASS"
+    assert result.rendered_colors_match
+    assert result.color_preserved
+    assert result.color_comparisons[0].recurring_rendered_color == "rgb(0, 0, 0)"
+
+
+def test_different_rendered_color_between_recurring_and_standalone_is_real_failure(
+    tmp_path: Path,
+) -> None:
+    validation = plan()
+    result = analyze_snapshots(
+        validation,
+        [
+            _snapshot("recurring-initial"),
+            _snapshot("recurring-refresh"),
+            _snapshot("recurring-navigation"),
+            _snapshot("standalone", rendered_overrides={7: "rgb(99, 88, 77)"}),
+        ],
+        tmp_path / "comparison.png",
+    )
+
+    assert result.result == "NO-GO"
+    assert not result.rendered_colors_match
+    assert not result.color_comparisons[7].match
+
+
+def test_existing_screenshot_pixels_recover_all_18_equal_width_colors(tmp_path: Path) -> None:
+    colors = [
+        (130, 139, 194),
+        (167, 90, 186),
+        (85, 176, 128),
+        (214, 131, 122),
+    ]
+    image = Image.new("RGB", (180, 40), "#131314")
+    for slot in range(18):
+        for x in range(slot * 10, (slot + 1) * 10):
+            for y in range(5, 35):
+                image.putpixel((x, y), colors[slot % 4])
+    screenshot = tmp_path / "rendered.png"
+    image.save(screenshot)
+    image.close()
+    rendered = {slot: f"rgb{colors[slot % 4]}" for slot in range(18)}
+    snapshots = [
+        _snapshot(
+            "recurring-initial",
+            transparent_outer_slot=0,
+            rendered_overrides=rendered,
+        )
+    ]
+
+    extracted = extract_rendered_slot_colors(screenshot, snapshots)
+
+    assert extracted == [f"rgb{colors[slot % 4]}" for slot in range(18)]
 
 
 def test_ordering_store_round_trip_preserves_exact_unicode(tmp_path: Path) -> None:
