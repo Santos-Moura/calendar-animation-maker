@@ -41,6 +41,7 @@ def initial_upload_state(plan: MultiFramePlan) -> AnimationUploadState:
     return AnimationUploadState(
         run_id=plan.run_id,
         animation_id=plan.animation_id,
+        calendar_profile=plan.calendar_profile,
         frames=[
             FrameUploadState(
                 frame_index=frame.frame_index,

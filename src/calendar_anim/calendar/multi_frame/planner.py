@@ -39,6 +39,7 @@ def build_multi_frame_plan(
     max_events_per_frame: int,
     fit: FitMode = "contain",
     calendar_name: str = "Calendar Animation Lab",
+    calendar_profile: str = "account-a",
     mapping_mode: FrameMappingMode = FrameMappingMode.FULL_GRID,
     event_compression: EventCompressionMode = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: str | None = None,
@@ -95,6 +96,7 @@ def build_multi_frame_plan(
                 frame_run_id=single.run_id,
                 planned_events=single.event_count,
                 artifact_directory=f"frames/frame-{selected_index:04d}",
+                calendar_profile=calendar_profile,
             )
         )
     first = frame_plans[0]
@@ -104,6 +106,7 @@ def build_multi_frame_plan(
             animation_id=manifest.animation_id,
             run_id=run_id,
             calendar_name=calendar_name,
+            calendar_profile=calendar_profile,
             timezone=profile.calendar_ui.timezone,
             source_file=manifest.source.file_name,
             clip_start_seconds=manifest.source.start_seconds,

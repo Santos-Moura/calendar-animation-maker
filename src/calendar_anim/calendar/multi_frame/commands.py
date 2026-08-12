@@ -29,7 +29,6 @@ from calendar_anim.calendar.high_detail import (
     quota_wait_policy_for_run,
 )
 from calendar_anim.calendar.lab import LabCalendarService
-from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.artifacts import (
     AnimationRunStore,
     initialize_animation_run,
@@ -49,6 +48,12 @@ from calendar_anim.calendar.multi_frame.service import (
     MultiFrameUploadService,
     normalize_legacy_calendar_usage_quota_pause,
 )
+from calendar_anim.calendar.profiles.service import CalendarProfileService
+from calendar_anim.calendar.profiles.store import (
+    DEFAULT_PROFILE_NAME,
+    CalendarProfileStore,
+    ProfileCalendarConfigStore,
+)
 from calendar_anim.calendar.subcolumn_ordering import (
     SubcolumnOrderStrategy,
     format_summary_key,
@@ -63,7 +68,18 @@ def _fail(error: Exception) -> Never:
 
 
 def _google_gateway() -> GoogleCalendarGateway:
+    """Legacy account-a gateway retained for backward-compatible runs and tests."""
     return GoogleCalendarGateway(GoogleOAuthClient().build_service())
+
+
+def _profile_gateway(
+    profile_name: str,
+) -> tuple[CalendarProfileService, GoogleCalendarGateway]:
+    profiles = CalendarProfileService(CalendarProfileStore())
+    if profile_name == DEFAULT_PROFILE_NAME:
+        return profiles, _google_gateway()
+    _profile, gateway = profiles.gateway(profile_name)
+    return profiles, gateway
 
 
 def _valid_run_id(value: str) -> str:
@@ -128,6 +144,7 @@ def plan_animation_command(
         DEFAULT_SINGLE_FRAME_MAX_EVENTS
     ),
     calendar_name: Annotated[str, typer.Option("--calendar-name")] = DEFAULT_CALENDAR_NAME,
+    calendar_profile: Annotated[str, typer.Option("--calendar-profile")] = "account-a",
 ) -> None:
     """Build immutable multi-frame plans and pending state using local files only."""
     try:
@@ -160,6 +177,7 @@ def plan_animation_command(
             max_events_per_frame=max_events,
             fit=fit,
             calendar_name=calendar_name,
+            calendar_profile=calendar_profile,
             mapping_mode=mapping_mode,
             event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
@@ -174,6 +192,7 @@ def plan_animation_command(
     except (CalendarAnimError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Animation ID: {plan.animation_id}")
+    typer.echo(f"Calendar profile: {plan.calendar_profile}")
     typer.echo(f"Run ID: {plan.run_id}")
     typer.echo(f"Source: {plan.source_file}")
     typer.echo(
@@ -260,6 +279,21 @@ def upload_animation_command(
         return
     if not plan.profile_ready:
         _fail(CalendarAnimError("Mapper is NOT READY; real animation upload is blocked"))
+    try:
+        profiles = CalendarProfileService(CalendarProfileStore())
+        calendar_profile = profiles.store.load(plan.calendar_profile)
+        if calendar_profile.calendar_name != plan.calendar_name:
+            raise CalendarAnimError(
+                f"Plan targets {plan.calendar_name!r}, but profile {plan.calendar_profile!r} "
+                f"selects {calendar_profile.calendar_name!r}"
+            )
+    except (CalendarAnimError, HttpError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"PROFILE: {calendar_profile.profile_name}")
+    typer.echo(f"ACCOUNT: {calendar_profile.authenticated_google_account}")
+    typer.echo(f"CALENDAR: {calendar_profile.calendar_name}")
+    typer.echo(f"CALENDAR ID: {calendar_profile.calendar_id or 'not selected'}")
+    typer.echo("EXECUTION: REAL")
     partial = [
         frame.frame_index
         for frame in state.frames
@@ -274,6 +308,10 @@ def upload_animation_command(
                 + ", ".join(str(index) for index in partial)
             )
         typer.confirm("Continue?", default=False, abort=True)
+    try:
+        profiles, gateway = _profile_gateway(plan.calendar_profile)
+    except (CalendarAnimError, HttpError, OSError, ValueError) as error:
+        _fail(error)
     positions = {frame.frame_index: position for position, frame in enumerate(plan.frames, start=1)}
 
     def progress(frame_index: int, created: int, planned: int) -> None:
@@ -315,13 +353,15 @@ def upload_animation_command(
         typer.echo("Resume later with --resume if desired.")
 
     try:
-        gateway = _google_gateway()
         write_interval = minimum_write_interval_for_run(plan.run_id)
         if write_interval:
             gateway.configure_write_pacing(write_interval)
         service = MultiFrameUploadService(
             gateway,
-            LabCalendarService(gateway, CalendarConfigStore()),
+            LabCalendarService(
+                gateway,
+                ProfileCalendarConfigStore(profiles.store, plan.calendar_profile),
+            ),
             store,
             progress=progress,
             frame_complete=frame_complete,
@@ -427,9 +467,18 @@ def cleanup_animation_command(
             typer.echo("--yes has no effect without --execute.")
         return
     try:
-        gateway = _google_gateway()
+        profiles, gateway = _profile_gateway(plan.calendar_profile)
+        profile = profiles.store.load(plan.calendar_profile)
+        typer.echo(f"PROFILE: {profile.profile_name}")
+        typer.echo(f"ACCOUNT: {profile.authenticated_google_account}")
+        typer.echo(f"CALENDAR: {profile.calendar_name}")
+        typer.echo(f"CALENDAR ID: {profile.calendar_id or 'not selected'}")
         service = MultiFrameCleanupService(
-            LabCalendarService(gateway, CalendarConfigStore()), store
+            LabCalendarService(
+                gateway,
+                ProfileCalendarConfigStore(profiles.store, plan.calendar_profile),
+            ),
+            store,
         )
         match = service.find_matches(plan, frame_index)
         typer.echo(f"Matching events: {match.event_count}")
@@ -450,6 +499,7 @@ def cleanup_animation_command(
 
 def _print_upload_summary(plan: MultiFramePlan, state: AnimationUploadState, execute: bool) -> None:
     typer.echo(f"Calendar: {plan.calendar_name}")
+    typer.echo(f"Calendar profile: {plan.calendar_profile}")
     typer.echo(f"Run: {plan.run_id}")
     if plan.source_file is not None:
         typer.echo(f"Source: {plan.source_file}")

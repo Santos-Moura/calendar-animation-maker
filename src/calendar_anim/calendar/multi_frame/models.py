@@ -53,6 +53,8 @@ class FrameUploadPlan(BaseModel):
     frame_run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     planned_events: int = Field(ge=0)
     artifact_directory: str = Field(pattern=r"^frames/frame-[0-9]{4,}$")
+    calendar_profile: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    calendar_id: str | None = None
 
 
 class MultiFramePlan(BaseModel):
@@ -60,6 +62,7 @@ class MultiFramePlan(BaseModel):
     animation_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     calendar_name: str = "Calendar Animation Lab"
+    calendar_profile: str = Field(default="account-a", pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     timezone: str
     source_file: str | None = None
     clip_start_seconds: float | None = Field(default=None, ge=0)
@@ -173,6 +176,7 @@ class AnimationUploadState(BaseModel):
     schema_version: str = "1.0"
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     animation_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    calendar_profile: str = "account-a"
     calendar_id: str | None = None
     calendar_created: bool = False
     pause: UploadPauseMetadata | None = None

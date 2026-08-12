@@ -13,11 +13,15 @@ from calendar_anim.calendar.capture.models import (
     BrowserChannel,
     CalendarCaptureConfig,
 )
-from calendar_anim.calendar.google_auth import GoogleOAuthClient
 from calendar_anim.calendar.lab import LabCalendarService
-from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.models import CalendarInfo
 from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
+from calendar_anim.calendar.profiles.service import CalendarProfileService
+from calendar_anim.calendar.profiles.store import (
+    DEFAULT_PROFILE_NAME,
+    CalendarProfileStore,
+    ProfileCalendarConfigStore,
+)
 from calendar_anim.calendar.recurrence_validation.artifacts import (
     RecurrenceValidationStore,
     compose_comparison,
@@ -49,8 +53,19 @@ def _validation_id(value: str) -> str:
     return value
 
 
-def _gateway() -> GoogleRecurrenceValidationGateway:
-    return GoogleRecurrenceValidationGateway(GoogleOAuthClient().build_service())
+def _profile_service() -> CalendarProfileService:
+    return CalendarProfileService(
+        CalendarProfileStore(), gateway_factory=GoogleRecurrenceValidationGateway
+    )
+
+
+def _selected_profile(requested: str | None, planned: str) -> str:
+    selected = requested or planned
+    if selected != planned:
+        raise CalendarAnimError(
+            f"Validation belongs to profile {planned!r}, not requested profile {selected!r}"
+        )
+    return selected
 
 
 def prepare_recurrence_validation_command(
@@ -59,6 +74,8 @@ def prepare_recurrence_validation_command(
     source_frame_index: Annotated[int, typer.Option("--source-frame-index", min=0)] = 23,
     source_event_index: Annotated[int, typer.Option("--source-event-index", min=0)] = 0,
     start_week_value: Annotated[str, typer.Option("--start-week")] = DEFAULT_START_WEEK,
+    profile_name: Annotated[str, typer.Option("--profile")] = DEFAULT_PROFILE_NAME,
+    calendar_name: Annotated[str | None, typer.Option("--calendar-name")] = None,
     animation_output_root: Annotated[Path, typer.Option("--animation-output-root")] = Path(
         "output/animation-runs"
     ),
@@ -76,12 +93,16 @@ def prepare_recurrence_validation_command(
             source_frame_index=source_frame_index,
             source_event_index=source_event_index,
             start_week=date.fromisoformat(start_week_value),
+            calendar_profile=profile_name,
+            calendar_name=calendar_name,
         )
         store = RecurrenceValidationStore(output_root)
         plan_path = store.save_plan(plan)
     except (CalendarAnimError, HttpError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Validation: {plan.validation_id}")
+    typer.echo(f"Profile: {plan.calendar_profile}")
+    typer.echo(f"Calendar: {plan.calendar_name}")
     typer.echo(f"Weeks: {plan.first_week} through {plan.last_week}")
     typer.echo("Recurring: 1 parent, 3 displayed instances (DTSTART + 2 RDATE values)")
     typer.echo("Controls: 3 standalone events")
@@ -92,6 +113,7 @@ def prepare_recurrence_validation_command(
 
 def upload_recurrence_validation_command(
     validation_id: Annotated[str, typer.Option("--validation-id")],
+    profile_name: Annotated[str | None, typer.Option("--profile")] = None,
     output_root: Annotated[Path, typer.Option("--output-root")] = Path(
         "output/recurrence-validation"
     ),
@@ -104,9 +126,11 @@ def upload_recurrence_validation_command(
         resolved_id = _validation_id(validation_id)
         store = RecurrenceValidationStore(output_root)
         plan = store.load_plan(resolved_id)
+        selected_profile = _selected_profile(profile_name, plan.calendar_profile)
     except (CalendarAnimError, HttpError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Validation: {plan.validation_id}")
+    typer.echo(f"PROFILE: {selected_profile}")
     typer.echo(f"Weeks: {plan.first_week} through {plan.last_week}")
     typer.echo("Resources: 1 recurring parent + 3 standalone controls")
     typer.echo("Displayed instances: 3 recurring + 3 standalone")
@@ -117,17 +141,39 @@ def upload_recurrence_validation_command(
         typer.echo("No authentication or Calendar API call was performed.")
         return
     typer.echo("\nThis writes only the four metadata-scoped validation resources.")
-    typer.confirm("Continue?", default=False, abort=True)
     try:
-        gateway = _gateway()
-        lab = LabCalendarService(gateway, CalendarConfigStore())
+        profiles = _profile_service()
+        profile, base_gateway = profiles.gateway(selected_profile)
+        if profile.calendar_name != plan.calendar_name:
+            raise CalendarAnimError(
+                f"Profile calendar is {profile.calendar_name!r}, but validation targets "
+                f"{plan.calendar_name!r}"
+            )
+        gateway = base_gateway
+        if not isinstance(gateway, GoogleRecurrenceValidationGateway):
+            raise CalendarAnimError("Profile gateway does not support recurrence validation")
+        lab = LabCalendarService(
+            gateway,
+            ProfileCalendarConfigStore(profiles.store, selected_profile),
+        )
 
         def resolve_existing(name: str, _timezone: str) -> tuple[CalendarInfo, bool]:
             calendar = lab.find(name)
             if calendar is None:
                 raise CalendarAnimError("Configured laboratory calendar was not found")
+            if selected_profile != DEFAULT_PROFILE_NAME and calendar.access_role != "owner":
+                raise CalendarAnimError(
+                    "Secondary profile does not own the selected validation calendar"
+                )
             return calendar, False
 
+        calendar, _created = resolve_existing(plan.calendar_name, plan.timezone)
+        typer.echo(f"PROFILE: {profile.profile_name}")
+        typer.echo(f"ACCOUNT: {profile.authenticated_google_account}")
+        typer.echo(f"CALENDAR: {calendar.name}")
+        typer.echo(f"CALENDAR ID: {calendar.id}")
+        typer.echo("EXECUTION: REAL")
+        typer.confirm("Create only this profile-scoped four-resource validation?", abort=True)
         state = RecurrenceValidationService(gateway, store, resolve_existing).upload(plan)
     except (CalendarAnimError, HttpError, OSError, ValueError) as error:
         _fail(error)
@@ -140,12 +186,11 @@ def upload_recurrence_validation_command(
 
 def capture_recurrence_validation_command(
     validation_id: Annotated[str, typer.Option("--validation-id")],
+    profile_name: Annotated[str | None, typer.Option("--profile")] = None,
     output_root: Annotated[Path, typer.Option("--output-root")] = Path(
         "output/recurrence-validation"
     ),
-    profile_directory: Annotated[Path, typer.Option("--profile-directory")] = Path(
-        ".calendar-anim/browser-profile"
-    ),
+    profile_directory: Annotated[Path | None, typer.Option("--profile-directory")] = None,
     execute: Annotated[
         bool, typer.Option("--execute", help="Open Playwright and capture all six weeks.")
     ] = False,
@@ -155,10 +200,13 @@ def capture_recurrence_validation_command(
         resolved_id = _validation_id(validation_id)
         store = RecurrenceValidationStore(output_root)
         plan = store.load_plan(resolved_id)
+        selected_profile = _selected_profile(profile_name, plan.calendar_profile)
+        calendar_profile = CalendarProfileStore().load(selected_profile)
         state = store.load_state(resolved_id)
     except (CalendarAnimError, HttpError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Validation: {plan.validation_id}")
+    typer.echo(f"Profile: {selected_profile}")
     typer.echo("Screenshots: 6 (3 recurring/control pairs)")
     typer.echo(f"Execution: {'REAL BROWSER' if execute else 'DRY RUN'}")
     typer.echo(f"Output: {store.capture_directory(plan.validation_id)}")
@@ -168,7 +216,7 @@ def capture_recurrence_validation_command(
     if state is None or state.status.value != "completed":
         _fail(CalendarAnimError("Validation upload must be completed before capture"))
     config = CalendarCaptureConfig(
-        profile_directory=profile_directory,
+        profile_directory=profile_directory or calendar_profile.browser_profile_directory,
         browser_channel=BrowserChannel.CHROME,
         browser_zoom_percent=33,
         visible_start_hour=6,
@@ -193,6 +241,7 @@ def capture_recurrence_validation_command(
         comparison = compose_comparison(plan, store)
         capture_report = {
             "validation_id": plan.validation_id,
+            "calendar_profile": plan.calendar_profile,
             "screenshots": hashes,
             "comparison": str(comparison),
             "browser_zoom_percent": 33,
@@ -210,6 +259,7 @@ def capture_recurrence_validation_command(
 
 def cleanup_recurrence_validation_command(
     validation_id: Annotated[str, typer.Option("--validation-id")],
+    profile_name: Annotated[str | None, typer.Option("--profile")] = None,
     output_root: Annotated[Path, typer.Option("--output-root")] = Path(
         "output/recurrence-validation"
     ),
@@ -222,23 +272,40 @@ def cleanup_recurrence_validation_command(
         resolved_id = _validation_id(validation_id)
         store = RecurrenceValidationStore(output_root)
         plan = store.load_plan(resolved_id)
+        selected_profile = _selected_profile(profile_name, plan.calendar_profile)
     except (CalendarAnimError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Validation: {plan.validation_id}")
+    typer.echo(f"PROFILE: {selected_profile}")
     typer.echo(
         "Cleanup filter: generated_by=calendar-anim-recurrence-validation + "
-        f"validation_id={plan.validation_id}"
+        f"validation_id={plan.validation_id} + calendar_profile={selected_profile}"
     )
     typer.echo(f"Execution: {'REAL DELETE' if execute else 'DRY RUN'}")
     if not execute:
         typer.echo("No authentication, Calendar lookup, or deletion was performed.")
         return
-    typer.confirm("Delete only resources carrying this exact validation metadata?", abort=True)
     try:
-        gateway = _gateway()
-        calendar = LabCalendarService(gateway, CalendarConfigStore()).find(plan.calendar_name)
+        profiles = _profile_service()
+        profile, base_gateway = profiles.gateway(selected_profile)
+        gateway = base_gateway
+        if not isinstance(gateway, GoogleRecurrenceValidationGateway):
+            raise CalendarAnimError("Profile gateway does not support recurrence validation")
+        calendar = LabCalendarService(
+            gateway,
+            ProfileCalendarConfigStore(profiles.store, selected_profile),
+        ).find(plan.calendar_name)
         if calendar is None:
             raise CalendarAnimError("Configured laboratory calendar was not found")
+        if selected_profile != DEFAULT_PROFILE_NAME and calendar.access_role != "owner":
+            raise CalendarAnimError("Secondary profile does not own the cleanup calendar")
+        if profile.calendar_id != calendar.id:
+            raise CalendarAnimError("Profile calendar ID changed during cleanup preflight")
+        typer.echo(f"ACCOUNT: {profile.authenticated_google_account}")
+        typer.echo(f"CALENDAR: {calendar.name}")
+        typer.echo(f"CALENDAR ID: {calendar.id}")
+        typer.echo("EXECUTION: REAL DELETE")
+        typer.confirm("Delete only this profile-scoped validation?", abort=True)
         result = RecurrenceValidationService(
             gateway,
             store,

@@ -242,6 +242,9 @@ class MultiFrameUploadService:
         recover_partial: bool,
     ) -> AnimationUploadState:
 
+        if state.calendar_profile != plan.calendar_profile:
+            raise CalendarAnimError("Animation state refers to a different Calendar profile")
+
         calendar, calendar_created = self.lab.resolve(plan.calendar_name, plan.timezone)
         if state.calendar_id is not None and state.calendar_id != calendar.id:
             raise CalendarAnimError("Animation state refers to a different Calendar")

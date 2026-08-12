@@ -84,6 +84,7 @@ class RecurrenceValidationPlan(BaseModel):
     source_run_id: str
     source_frame_index: int = Field(ge=0)
     source_event_index: int = Field(ge=0)
+    calendar_profile: str = Field(default="account-a", pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     calendar_name: str
     timezone: str
     visual_properties: ValidationVisualProperties
@@ -133,6 +134,7 @@ class RecurrenceValidationPlan(BaseModel):
 class ValidationUploadState(BaseModel):
     schema_version: str = "1.0"
     validation_id: str
+    calendar_profile: str = "account-a"
     status: ValidationStatus = ValidationStatus.PENDING
     calendar_id: str | None = None
     created_resource_ids: list[str] = Field(default_factory=list)

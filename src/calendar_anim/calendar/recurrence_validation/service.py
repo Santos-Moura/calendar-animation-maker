@@ -50,10 +50,11 @@ class RecurrenceValidationService:
         self.resolve_calendar = resolve_calendar
 
     @staticmethod
-    def metadata(validation_id: str) -> dict[str, str]:
+    def metadata(validation_id: str, calendar_profile: str = "account-a") -> dict[str, str]:
         return {
             "generated_by": "calendar-anim-recurrence-validation",
             "validation_id": validation_id,
+            "calendar_profile": calendar_profile,
         }
 
     def upload(self, plan: RecurrenceValidationPlan) -> ValidationUploadState:
@@ -62,7 +63,7 @@ class RecurrenceValidationService:
             raise CalendarAnimError(
                 "Refusing smallest-real-validation because its lab calendar did not already exist"
             )
-        expected_metadata = self.metadata(plan.validation_id)
+        expected_metadata = self.metadata(plan.validation_id, plan.calendar_profile)
         zone = ZoneInfo(plan.timezone)
         window_start = datetime.combine(plan.first_week, datetime.min.time(), zone)
         window_end = datetime.combine(plan.last_week + timedelta(days=7), datetime.min.time(), zone)
@@ -81,9 +82,14 @@ class RecurrenceValidationService:
         remote_ids = {resource.event_id for resource in remote}
         state = self.store.load_state(plan.validation_id) or ValidationUploadState(
             validation_id=plan.validation_id,
+            calendar_profile=plan.calendar_profile,
             calendar_id=calendar.id,
             updated_at=datetime.now(UTC),
         )
+        if state.calendar_profile != plan.calendar_profile:
+            raise CalendarAnimError("Validation checkpoint belongs to a different Calendar profile")
+        if state.calendar_id is not None and state.calendar_id != calendar.id:
+            raise CalendarAnimError("Validation checkpoint belongs to a different Calendar ID")
         state.calendar_id = calendar.id
         state.reconciled_resource_ids = sorted(remote_ids)
         state.created_resource_ids = sorted(set(state.created_resource_ids) | remote_ids)
@@ -117,7 +123,7 @@ class RecurrenceValidationService:
         plan: RecurrenceValidationPlan,
         calendar: CalendarInfo,
     ) -> ValidationCleanupResult:
-        metadata = self.metadata(plan.validation_id)
+        metadata = self.metadata(plan.validation_id, plan.calendar_profile)
         resources = self.gateway.find_validation_resources(calendar.id, metadata)
         resource_ids = sorted({resource.event_id for resource in resources})
         deletion = self.gateway.delete_events(calendar.id, resource_ids)

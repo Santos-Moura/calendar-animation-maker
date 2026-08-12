@@ -66,6 +66,7 @@ class RecurrenceValidationStore:
             existing = self.load_plan(plan.validation_id)
             if existing != plan:
                 raise CalendarAnimError(f"Validation plan already differs: {path}")
+            _write_atomic(self.report_path(plan.validation_id), build_plan_report(plan))
             return path
         _write_atomic(path, serialized)
         _write_atomic(self.report_path(plan.validation_id), build_plan_report(plan))
@@ -109,6 +110,7 @@ def build_plan_report(plan: RecurrenceValidationPlan) -> str:
         "===================================",
         "",
         f"Validation ID: {plan.validation_id}",
+        f"Calendar profile: {plan.calendar_profile}",
         f"Source: {plan.source_run_id}, frame {plan.source_frame_index}, "
         f"event {plan.source_event_index}",
         f"Summary: {plan.visual_properties.summary_codepoints}",
@@ -138,7 +140,8 @@ def build_plan_report(plan: RecurrenceValidationPlan) -> str:
             "------",
             "Plan generation performs no Calendar call.",
             "Upload preflight refuses any unrelated event in the six weeks.",
-            "Cleanup filters generated_by + validation_id and never uses source run metadata.",
+            "Cleanup filters generated_by + validation_id + calendar_profile and never uses "
+            "source run metadata.",
             "Google Calendar writes: NO",
             "",
         ]

@@ -62,6 +62,8 @@ class _Occurrence:
     role: OccurrenceRole
     original_event_id: str
     signature: RecurrenceSignature
+    calendar_profile: str = "account-a"
+    calendar_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +177,14 @@ def _load_occurrences(plan: MultiFramePlan, store: AnimationRunStore) -> list[_O
     occurrences: list[_Occurrence] = []
     for frame in plan.frames:
         frame_plan = store.load_frame_plan(plan, frame.frame_index)
-        occurrences.extend(_frame_occurrences(plan.timezone, frame_plan))
+        occurrences.extend(
+            _frame_occurrences(
+                plan.timezone,
+                frame_plan,
+                frame.calendar_profile or plan.calendar_profile,
+                frame.calendar_id,
+            )
+        )
     return occurrences
 
 
@@ -198,6 +207,8 @@ def _missing_occurrences(
 def _frame_occurrences(
     timezone: str,
     frame_plan: SingleFrameCalendarPlan,
+    calendar_profile: str = "account-a",
+    calendar_id: str | None = None,
 ) -> Iterable[_Occurrence]:
     for event in frame_plan.events:
         frame_index = event.frame_index if event.frame_index is not None else frame_plan.frame_index
@@ -216,6 +227,8 @@ def _frame_occurrences(
             role=role,
             original_event_id=original_id,
             signature=signature,
+            calendar_profile=calendar_profile,
+            calendar_id=calendar_id,
         )
 
 
@@ -235,14 +248,20 @@ def recurrence_signature(
 
 
 def _recurrence_groups(occurrences: Sequence[_Occurrence]) -> list[list[_Occurrence]]:
-    by_signature: dict[RecurrenceSignature, list[_Occurrence]] = defaultdict(list)
+    by_signature: dict[tuple[str, str | None, RecurrenceSignature], list[_Occurrence]] = (
+        defaultdict(list)
+    )
     for occurrence in occurrences:
-        by_signature[occurrence.signature].append(occurrence)
+        key = (occurrence.calendar_profile, occurrence.calendar_id, occurrence.signature)
+        by_signature[key].append(occurrence)
 
     groups: list[list[_Occurrence]] = []
-    for signature in sorted(by_signature, key=_signature_canonical):
+    for key in sorted(
+        by_signature,
+        key=lambda item: (item[0], item[1] or "", _signature_canonical(item[2])),
+    ):
         by_start: dict[datetime, list[_Occurrence]] = defaultdict(list)
-        for occurrence in by_signature[signature]:
+        for occurrence in by_signature[key]:
             by_start[occurrence.start].append(occurrence)
         lanes: list[list[_Occurrence]] = []
         for start in sorted(by_start):
@@ -284,6 +303,7 @@ def _build_parents(
                 "recurrence_group_id": recurrence_group_id,
                 "signature_hash": signature_hash,
                 "chunk_index": str(chunk_index),
+                "calendar_profile": chunk[0].calendar_profile,
             }
             payload = {
                 "id": parent_id,
@@ -321,6 +341,8 @@ def _build_parents(
                             "utf-8"
                         )
                     ),
+                    calendar_profile=chunk[0].calendar_profile,
+                    calendar_id=chunk[0].calendar_id,
                 )
             )
     return parents
@@ -447,4 +469,6 @@ def occurrence_model(occurrence: _Occurrence) -> PlannedOccurrence:
         end=occurrence.end,
         role=occurrence.role,
         original_event_id=occurrence.original_event_id,
+        calendar_profile=occurrence.calendar_profile,
+        calendar_id=occurrence.calendar_id,
     )

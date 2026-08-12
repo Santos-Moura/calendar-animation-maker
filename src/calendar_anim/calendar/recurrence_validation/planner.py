@@ -52,6 +52,8 @@ def build_recurrence_validation_plan(
     source_frame_index: int,
     source_event_index: int,
     start_week: date,
+    calendar_profile: str = "account-a",
+    calendar_name: str | None = None,
 ) -> RecurrenceValidationPlan:
     animation_plan = store.load_plan(source_run_id)
     source_plan: SingleFrameCalendarPlan = store.load_frame_plan(animation_plan, source_frame_index)
@@ -84,6 +86,7 @@ def build_recurrence_validation_plan(
         "source_run_id": source_run_id,
         "source_frame_index": str(source_frame_index),
         "source_event_index": str(source_event_index),
+        "calendar_profile": calendar_profile,
         "subcolumn_order_strategy": "zero-width",
     }
     parent_start = recurring_starts[0]
@@ -140,7 +143,8 @@ def build_recurrence_validation_plan(
         source_run_id=source_run_id,
         source_frame_index=source_frame_index,
         source_event_index=source_event_index,
-        calendar_name=source_plan.calendar_name,
+        calendar_profile=calendar_profile,
+        calendar_name=calendar_name or source_plan.calendar_name,
         timezone=source_plan.timezone,
         visual_properties=ValidationVisualProperties(
             summary=source.summary,

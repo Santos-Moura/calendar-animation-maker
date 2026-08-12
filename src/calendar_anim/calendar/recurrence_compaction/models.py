@@ -27,6 +27,8 @@ class PlannedOccurrence(BaseModel):
     end: datetime
     role: OccurrenceRole
     original_event_id: str
+    calendar_profile: str = "account-a"
+    calendar_id: str | None = None
 
 
 class RecurringParentPlan(BaseModel):
@@ -42,6 +44,8 @@ class RecurringParentPlan(BaseModel):
     covered_frame_indices: list[int]
     private_metadata: dict[str, str]
     estimated_insert_payload_bytes: int = Field(ge=0)
+    calendar_profile: str = "account-a"
+    calendar_id: str | None = None
 
     @property
     def occurrence_count(self) -> int:
