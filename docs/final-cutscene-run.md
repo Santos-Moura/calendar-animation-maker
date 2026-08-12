@@ -41,8 +41,21 @@ toward the `0.75s` baseline. Other run IDs retain their existing write behavior.
 The first confirmed `quotaExceeded` opens a circuit breaker. No new event write is submitted,
 already-created events are preserved, and the current frame is atomically checkpointed as
 `partial` with the HTTP status, Google reason, frame index, timestamp, created count, and planned
-count. The whole invocation then stops and reports the unchanged resume command. It performs no
-immediate quota retry and no cleanup.
+count. The final run then enters unattended quota wait mode. Cooldowns progress through 15
+minutes, 30 minutes, 60 minutes, 2 hours, and 4 hours; later attempts remain at 4 hours. A small
+jitter avoids perfectly periodic probes.
+
+At the end of each cooldown, exactly one missing deterministic event from the current frame is
+submitted as the recovery probe. A successful probe belongs to the frame normally, after which
+the partial frame is reconciled and normal serial upload resumes. Another `quotaExceeded`
+checkpoints the next absolute retry time and returns to long sleep. There is no artificial probe,
+short quota retry, batch burst, or cleanup.
+
+Quota wait state and the adaptive write interval survive Ctrl+C, process loss, and restart. After
+recovery, the interval is the greater of its persisted value and the conservative `1.5s`
+recovery interval, then decays only through the normal successful-write ramp. Automatic waiting
+is isolated to this final run and stops safely after 48 continuous hours. The performance report
+separates active upload time, quota wait time, wall-clock time, and their ETAs.
 
 On resume, completed frames are skipped. Partial, interrupted, and failed frames are reconciled
 against their deterministic event IDs and only missing drafts are submitted. Unknown legacy

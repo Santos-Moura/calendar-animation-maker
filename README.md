@@ -242,8 +242,9 @@ python -m calendar_anim calendar upload-animation --run-id animation-bands-01 --
 
 Temporary `rateLimitExceeded` responses retain adaptive pacing, cooldown, and retry. A Calendar
 usage-limit `quotaExceeded` response opens a circuit breaker instead: it preserves the partial
-frame, checkpoints pause metadata, stops the run, and must be resumed later with the ordinary
-`--resume --execute` command.
+frame and checkpoints pause metadata. The approved final run automatically waits for 15 minutes,
+30 minutes, 60 minutes, 2 hours, then 4 hours between single-event deterministic recovery probes.
+It resumes automatically when the probe succeeds and stops safely after 48 continuous hours.
 
 Cleanup is local by default and can target one frame or the whole run:
 
