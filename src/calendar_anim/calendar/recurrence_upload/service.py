@@ -123,6 +123,18 @@ class RecurrenceUploadService:
             ParentUploadStatus.PARTIAL,
         } and self._reconcile(parent, parent_state, state, calendar_id):
             return
+        if state.quota_wait is not None:
+            if state.quota_wait.frame_index != index:
+                raise CalendarAnimError("Persisted quota wait belongs to another parent index")
+            if state.quota_wait.exhausted:
+                # Starting the command again after the 48h circuit-breaker stop is
+                # the explicit manual resume that opens a fresh attempt window.
+                state.quota_wait = None
+            else:
+                parent_state.status = ParentUploadStatus.PARTIAL
+                self._wait_for_quota(parent, parent_state, state, calendar_id, index)
+                if parent_state.status is ParentUploadStatus.COMPLETED:
+                    return
         parent_state.status = ParentUploadStatus.UPLOADING
         attempt = 0
         while True:

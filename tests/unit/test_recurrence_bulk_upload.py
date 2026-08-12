@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from calendar_anim.calendar.models import CalendarWritePacingSnapshot
+from calendar_anim.calendar.multi_frame.models import QuotaWaitState
 from calendar_anim.calendar.multi_frame.quota_wait import QuotaWaitPolicy
 from calendar_anim.calendar.multi_frame.retry import UploadRetryPolicy
 from calendar_anim.calendar.recurrence_compaction.models import (
@@ -366,3 +367,27 @@ def test_state_is_compact_atomic_and_rejects_changed_artifacts(tmp_path: Path) -
     assert store.load_state(state_value.run_id).parents[0].status is ParentUploadStatus.PENDING
     with pytest.raises(CalendarAnimError, match="artifacts changed"):
         store.validate_state(state_value, plan_value, {"plan": "b" * 64})
+
+
+def test_restart_preserves_quota_stage_and_next_retry(tmp_path: Path) -> None:
+    plan_value = plan(1)
+    state_value = state(plan_value)
+    state_value.parents[0].status = ParentUploadStatus.PARTIAL
+    clock = FakeClock()
+    state_value.quota_wait = QuotaWaitState(
+        frame_index=0,
+        entered_at=clock.now(),
+        last_accounted_at=clock.now(),
+        next_retry_at=clock.now() + timedelta(seconds=10),
+        max_wait_until=clock.now() + timedelta(seconds=100),
+        stage_index=2,
+        last_cooldown_seconds=10,
+    )
+    gateway = FakeGateway()
+
+    uploaded = service(tmp_path, gateway, clock).upload(plan_value, state_value, "calendar-b")
+
+    assert clock.seconds >= 10
+    assert uploaded.completed_count == 1
+    assert uploaded.quota_wait_attempts == 1
+    assert uploaded.quota_wait is None
