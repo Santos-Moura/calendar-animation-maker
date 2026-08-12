@@ -29,12 +29,14 @@ from calendar_anim.calendar.frame_mapping.models import (
 )
 from calendar_anim.calendar.hybrid_capture.artifacts import (
     HybridCaptureStore,
+    compose_output_mode,
     normalize_grid,
 )
 from calendar_anim.calendar.hybrid_capture.media import build_final_visual_command
 from calendar_anim.calendar.hybrid_capture.models import (
     HybridCapturePlan,
     HybridFramePlan,
+    HybridOutputMode,
     HybridSanityReport,
     SanityFrameResult,
 )
@@ -96,6 +98,67 @@ def test_normalization_is_exact_504x288_nearest_neighbor(tmp_path: Path) -> None
     with Image.open(output) as normalized:
         assert normalized.size == (504, 288)
         assert normalized.getpixel((503, 287)) == (171, 71, 188)
+
+
+@pytest.mark.parametrize(
+    ("mode", "letterbox", "stretch", "header"),
+    [
+        (HybridOutputMode.PIXEL_FAITHFUL, False, False, False),
+        (HybridOutputMode.HEADER_PRESERVED_LETTERBOX, True, False, True),
+        (HybridOutputMode.HEADER_PRESERVED_FILL, False, True, True),
+    ],
+)
+def test_output_modes_have_explicit_geometry_tradeoffs(
+    tmp_path: Path,
+    mode: HybridOutputMode,
+    letterbox: bool,
+    stretch: bool,
+    header: bool,
+) -> None:
+    logical = tmp_path / "logical.png"
+    header_source = tmp_path / "header.png"
+    output = tmp_path / f"{mode.value}.png"
+    Image.new("RGB", (126, 72), "#7986CB").save(logical)
+    Image.new("RGB", (126, 90), "#7986CB").save(header_source)
+
+    report = compose_output_mode(logical, header_source, output, mode)
+
+    with Image.open(output) as image:
+        assert image.size == (504, 288)
+    assert report["letterbox"] is letterbox
+    assert report["stretch"] is stretch
+    assert report["header_included"] is header
+    assert report["vertical_interval"] == "06:00-00:00"
+    assert report["resampling"] == "nearest-neighbor"
+    assert report["blur_or_sharpen"] is False
+
+
+def test_pixel_faithful_matches_current_logical_grid_normalization(tmp_path: Path) -> None:
+    source = tmp_path / "real-debug-proportions.png"
+    output = tmp_path / "output.png"
+    Image.new("RGB", (1768, 777), "#7986CB").save(source)
+
+    report = compose_output_mode(
+        source,
+        None,
+        output,
+        HybridOutputMode.PIXEL_FAITHFUL,
+    )
+
+    assert report["logical_grid_normalization"] is True
+    assert report["stretch"] is False
+    with Image.open(output) as image:
+        assert image.size == (504, 288)
+
+
+def test_mode_directories_and_checkpoints_are_isolated(tmp_path: Path) -> None:
+    plan = _hybrid_plan(tmp_path)
+    store = HybridCaptureStore(tmp_path / "runs")
+    states = {mode: store.initialize_state(plan, mode) for mode in HybridOutputMode}
+
+    assert len({store.state_path(plan.run_id, mode) for mode in HybridOutputMode}) == 3
+    assert len({store.final_frames_directory(plan.run_id, mode) for mode in HybridOutputMode}) == 3
+    assert {state.output_mode for state in states.values()} == set(HybridOutputMode)
 
 
 def test_final_visual_command_uses_all_frames_in_order_and_approved_codec(tmp_path: Path) -> None:
@@ -181,6 +244,24 @@ class ReadOnlyFakeGateway:
             "logical_cell_width": 4.0,
             "logical_cell_height": 4.0,
             "logical_clip": {"x": 0.0, "y": 0.0, "width": 504.0, "height": 288.0},
+        }
+
+    def capture_header_event_grid(self, output_path: Path) -> dict[str, object]:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (504, 360), "#7986CB").save(output_path)
+        return {
+            "header_grid_bounds": {
+                "header_clip": {"x": 0.0, "y": 0.0, "width": 504.0, "height": 72.0},
+                "event_grid_clip": {
+                    "x": 0.0,
+                    "y": 72.0,
+                    "width": 504.0,
+                    "height": 288.0,
+                },
+                "composite_dimensions": [504, 360],
+            },
+            "header_included": True,
+            "vertical_interval": "06:00-00:00",
         }
 
 
@@ -636,3 +717,28 @@ def test_one_frame_debug_capture_writes_all_artifacts(tmp_path: Path) -> None:
     assert (directory / "grid-crop.png").is_file()
     assert (directory / "normalized.png").is_file()
     assert (directory / "debug.json").is_file()
+
+
+def test_one_frame_mode_comparison_uses_one_read_only_browser_capture(
+    tmp_path: Path,
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    gateway = ReadOnlyFakeGateway()
+    store = HybridCaptureStore(tmp_path / "runs")
+
+    report = HybridCaptureService(store, lambda _p, _z: gateway).capture_debug_modes(
+        plan, 60, "account-b"
+    )
+
+    directory = store.debug_frame_directory(plan.run_id, 60)
+    assert gateway.opened == [date(2028, 1, 2)]
+    assert report["google_calendar_writes"] is False
+    assert set(report["modes"]) == {mode.value for mode in HybridOutputMode}  # type: ignore[arg-type]
+    assert (directory / "raw-browser.png").is_file()
+    assert (directory / "mode-a-pixel-faithful.png").is_file()
+    assert (directory / "mode-b-header-preserved-letterbox.png").is_file()
+    assert (directory / "mode-c-header-preserved-fill.png").is_file()
+    assert (directory / "comparison-contact-sheet.png").is_file()
+    assert (directory / "debug.json").is_file()
+    assert not (directory / ".pixel-faithful-source.png").exists()
+    assert not (directory / ".header-preserved-source.png").exists()
