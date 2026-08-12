@@ -2,8 +2,16 @@ from datetime import date, datetime
 from pathlib import Path
 from types import TracebackType
 
+import pytest
 from PIL import Image
 
+from calendar_anim.browser.playwright_gateway import (
+    CaptureReadinessError,
+    EventPopulationAudit,
+    deduplicate_event_records,
+    logical_grid_clip,
+    wait_for_stable_population,
+)
 from calendar_anim.calendar.capture.final_media import (
     FFmpegTools,
     build_extract_audio_command,
@@ -30,6 +38,7 @@ from calendar_anim.calendar.hybrid_capture.models import (
 )
 from calendar_anim.calendar.hybrid_capture.service import HybridCaptureService
 from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
+from calendar_anim.exceptions import CalendarAnimError
 
 
 def _hybrid_plan(tmp_path: Path) -> HybridCapturePlan:
@@ -122,6 +131,8 @@ class ReadOnlyFakeGateway:
     def __init__(self) -> None:
         self.opened: list[date] = []
         self.waited: list[tuple[date, int]] = []
+        self.population_waits: list[int] = []
+        self.reloads: list[date] = []
 
     def __enter__(self) -> "ReadOnlyFakeGateway":
         return self
@@ -139,6 +150,13 @@ class ReadOnlyFakeGateway:
 
     def wait_until_ready(self, week_start: date, minimum_event_count: int) -> None:
         self.waited.append((week_start, minimum_event_count))
+
+    def wait_for_animation_events(self, expected_count: int) -> object:
+        self.population_waits.append(expected_count)
+        return object()
+
+    def reload_current_week(self, week_start: date, minimum_event_count: int) -> None:
+        self.reloads.append(week_start)
 
     def capture_viewport(self, output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,6 +240,7 @@ def test_sanity_capture_uses_only_read_browser_methods_and_builds_artifacts(
     assert report.google_calendar_writes is False
     assert gateway.opened == [date(2028, 1, 2)]
     assert gateway.waited == [(date(2028, 1, 2), 1)]
+    assert gateway.population_waits == [1]
     sanity = store.sanity_directory(plan.run_id)
     assert (sanity / "frame-024/raw.png").is_file()
     assert (sanity / "frame-024/normalized.png").is_file()
@@ -284,3 +303,181 @@ def test_seam_uses_frame_23_a_and_frame_24_b_with_equal_normalized_geometry(
     assert report.geometry_result == "PASS"
     assert report.google_calendar_writes is False
     assert (store.seam_directory(plan.run_id) / "a-b-transition-geometry.png").is_file()
+
+
+def _dom_record(
+    index: int,
+    *,
+    wrapper: bool = False,
+    structural: bool = False,
+    event_id: str | None = None,
+) -> dict[str, object]:
+    return {
+        "raw_index": index,
+        "contains_matching_descendant": wrapper,
+        "matching_descendant_count": 1 if wrapper else 0,
+        "data_eventid": event_id,
+        "data_eventchip": None,
+        "data_dragsource_type": "4" if structural else None,
+        "href": None,
+        "aria_label": f"event-{index}",
+        "text": "",
+        "visible_color": "rgb(121, 134, 203)",
+        "x": float(index % 126) * 4,
+        "y": float(index // 126) * 4,
+        "width": 500.0 if structural else 4.0,
+        "height": 4.0,
+        "viewport_width": 1920.0,
+        "viewport_height": 1080.0,
+        "in_viewport": True,
+    }
+
+
+@pytest.mark.parametrize(("raw_count", "expected"), [(1945, 972), (901, 450)])
+def test_dom_wrapper_chip_pairs_are_deduplicated(raw_count: int, expected: int) -> None:
+    wrappers = [_dom_record(index, wrapper=True) for index in range(expected)]
+    chips = [_dom_record(index, event_id=f"event-{index}") for index in range(expected)]
+    records = [*wrappers, *chips, _dom_record(raw_count - 1, structural=True)]
+
+    audit = deduplicate_event_records(records)
+
+    assert len(records) == raw_count
+    assert audit.raw_node_count == raw_count
+    assert audit.wrapper_nodes_removed == expected
+    assert audit.structural_nodes_removed == 1
+    assert audit.unique_event_count == expected
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+    def sleep(self, seconds: float) -> None:
+        self.value += seconds
+
+
+def _audit(count: int) -> EventPopulationAudit:
+    return EventPopulationAudit(
+        raw_node_count=count * 2 + 1,
+        leaf_node_count=count + 1,
+        unique_event_count=count,
+        identity_digest=f"digest-{count}",
+        wrapper_nodes_removed=count,
+        structural_nodes_removed=1,
+        duplicate_leaf_nodes_removed=0,
+        rendered_color_counts={"rgb(121, 134, 203)": count},
+    )
+
+
+def test_population_polling_waits_for_complete_stable_dom() -> None:
+    clock = FakeClock()
+    values = iter([1, 500, 972, 972, 972])
+
+    result = wait_for_stable_population(
+        lambda: (_audit(next(values)), 0.9, {"left": 72.0, "width": 1764.0}),
+        expected_count=972,
+        timeout_seconds=10,
+        interval_seconds=1,
+        stable_samples=3,
+        expected_coordinate_scale=0.9,
+        clock=clock,
+        sleeper=clock.sleep,
+    )
+
+    assert result.unique_event_count == 972
+    assert len(result.samples) == 5
+    assert result.samples[-1]["stable_sequence"] == 3
+
+
+def test_population_timeout_is_capture_load_failure() -> None:
+    clock = FakeClock()
+
+    with pytest.raises(CalendarAnimError, match="CAPTURE LOAD FAILURE") as captured:
+        wait_for_stable_population(
+            lambda: (_audit(1), 0.9, {"left": 72.0, "width": 1764.0}),
+            expected_count=972,
+            timeout_seconds=2,
+            interval_seconds=1,
+            stable_samples=3,
+            expected_coordinate_scale=0.9,
+            clock=clock,
+            sleeper=clock.sleep,
+        )
+
+    assert isinstance(captured.value, CaptureReadinessError)
+    assert len(captured.value.samples) == 3
+    assert captured.value.samples[-1]["unique_event_chips"] == 1
+
+
+def test_structural_grid_clip_does_not_depend_on_sparse_or_dense_events() -> None:
+    structural = {"left": 72.0, "right": 1836.0, "width": 1764.0}
+    time_bounds = {"x": 0.0, "y": 300.0, "width": 1900.0, "height": 800.0}
+
+    dense_clip = logical_grid_clip(structural, time_bounds, 0.9, 0.9)
+    sparse_clip = logical_grid_clip(structural, time_bounds, 0.9, 0.9)
+
+    assert dense_clip == sparse_clip
+    assert dense_clip["width"] / 126 == pytest.approx(12.6)
+
+
+def test_previous_sanity_is_archived_before_replacement(tmp_path: Path) -> None:
+    store = HybridCaptureStore(tmp_path / "runs")
+    old = store.sanity_directory("run") / "sanity-report.json"
+    old.parent.mkdir(parents=True)
+    old.write_text("old", encoding="utf-8")
+
+    archived = store.archive_sanity("run")
+
+    assert archived is not None
+    assert (archived / "sanity-report.json").read_text(encoding="utf-8") == "old"
+    assert not store.sanity_directory("run").exists()
+
+
+class RetryTwiceGateway(ReadOnlyFakeGateway):
+    def wait_for_animation_events(self, expected_count: int) -> object:
+        self.population_waits.append(expected_count)
+        if len(self.population_waits) < 3:
+            raise CalendarAnimError("CAPTURE LOAD FAILURE: transient DOM")
+        return object()
+
+
+def test_sanity_capture_reloads_twice_then_accepts_third_stable_attempt(
+    tmp_path: Path,
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    _write_uniform_frame_plan(Path(plan.frames[23].source_frame_plan), 23)
+    gateway = RetryTwiceGateway()
+    service = HybridCaptureService(HybridCaptureStore(tmp_path / "runs"), lambda _p, _z: gateway)
+
+    report = service.capture_sanity(plan, [24])
+
+    assert report.automated_result == "PASS"
+    assert gateway.population_waits == [1, 1, 1]
+    assert gateway.reloads == [date(2028, 1, 2), date(2028, 1, 2)]
+    assert report.results[0].capture_retry_cycles == 2
+
+
+class NeverReadyGateway(ReadOnlyFakeGateway):
+    def wait_for_animation_events(self, expected_count: int) -> object:
+        self.population_waits.append(expected_count)
+        raise CalendarAnimError("CAPTURE LOAD FAILURE: only one DOM event")
+
+
+def test_exhausted_loading_retries_are_capture_error_not_recurrence_no_go(
+    tmp_path: Path,
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    _write_uniform_frame_plan(Path(plan.frames[23].source_frame_plan), 23)
+    gateway = NeverReadyGateway()
+    service = HybridCaptureService(HybridCaptureStore(tmp_path / "runs"), lambda _p, _z: gateway)
+
+    report = service.capture_sanity(plan, [24])
+
+    assert report.automated_result == "CAPTURE ERROR"
+    assert gateway.population_waits == [1, 1, 1]
+    assert report.results[0].capture_load_success is False
+    assert report.results[0].capture_retry_cycles == 2
+    assert report.results[0].unique_event_population_valid is False
