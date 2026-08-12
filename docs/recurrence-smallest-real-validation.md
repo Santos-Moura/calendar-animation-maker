@@ -116,6 +116,18 @@ DOM x/width/y/height, initial ordering, refresh ordering, away/back ordering, tw
 recurring occurrences, and the standalone control. It emits `PASS` only when all 18
 summaries and positions match and remain stable.
 
+Color validation uses the rendered chip rather than assuming the outer event wrapper owns
+`background-color`. The DOM audit records element and descendant backgrounds, borders, inline
+styles, CSS custom properties, and pseudo-element backgrounds. The capture also samples the
+persisted screenshots so recurring/standalone rendered-color equivalence is a separate gate from
+the diagnostic `colorId -> CSS` mapping.
+
+Existing capture artifacts can be reprocessed without opening a browser or contacting Calendar:
+
+```powershell
+.\.venv\Scripts\python.exe -m calendar_anim calendar reprocess-recurrence-ordering-validation --validation-id recurrence-zero-width-ordering-account-b-01
+```
+
 Cleanup is explicit and metadata scoped; inspect the comparison first:
 
 ```powershell
