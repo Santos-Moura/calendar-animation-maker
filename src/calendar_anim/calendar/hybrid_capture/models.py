@@ -86,6 +86,7 @@ class SanityFrameResult(BaseModel):
     capture_error: str | None = None
     capture_retry_cycles: int = 0
     capture_timestamp: datetime | None = None
+    navigation_complete: bool = False
     stabilization_seconds: float = 0
     raw_dom_nodes: int = 0
     unique_event_chips: int = 0
@@ -94,6 +95,10 @@ class SanityFrameResult(BaseModel):
     normalized_height: int
     logical_cell_width: float
     logical_cell_height: float
+    grid_left: float = 0
+    grid_top: float = 0
+    grid_right: float = 0
+    grid_bottom: float = 0
     expected_color_distribution: dict[str, int]
     rendered_color_distribution: dict[str, int]
     logical_cell_match_ratio: float = Field(ge=0, le=1)

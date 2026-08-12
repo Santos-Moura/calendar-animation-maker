@@ -273,9 +273,12 @@ def sanity_text(report: HybridSanityReport) -> str:
                 f"  Unique event chips: {item.unique_event_chips}",
                 f"  Capture success: {item.capture_success}",
                 f"  Capture load success: {item.capture_load_success}",
+                f"  Navigation complete: {item.navigation_complete}",
                 f"  Capture retry cycles: {item.capture_retry_cycles}",
                 f"  Capture error: {item.capture_error or 'none'}",
                 f"  Normalized geometry: {item.normalized_width}x{item.normalized_height}",
+                f"  Grid bounds: {item.grid_left:.3f}, {item.grid_top:.3f}, "
+                f"{item.grid_right:.3f}, {item.grid_bottom:.3f}",
                 f"  Logical cell match: {item.logical_cell_match_ratio:.3%}",
                 f"  Obvious missing content: {item.obvious_missing_content}",
                 f"  Obvious color mismatch: {item.obvious_color_mismatch}",

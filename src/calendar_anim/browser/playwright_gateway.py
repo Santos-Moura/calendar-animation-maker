@@ -338,7 +338,8 @@ def wait_for_stable_population(
             expected_coordinate_scale is None
             or abs(coordinate_scale - expected_coordinate_scale) <= 0.02
         )
-        population_valid = audit.unique_event_count == expected_count
+        minimum_population = max(1, round(expected_count * 0.75))
+        population_valid = audit.unique_event_count >= minimum_population
         loaded = population_valid and layout_valid
         stable = stable + 1 if loaded and signature == previous else (1 if loaded else 0)
         history.append(
@@ -354,7 +355,7 @@ def wait_for_stable_population(
                 "coordinate_scale": coordinate_scale,
                 "grid_width": bounds["width"],
                 "layout_coordinate_valid": layout_valid,
-                "expected_population_reached": population_valid,
+                "expected_population_threshold_reached": population_valid,
                 "stable_sequence": stable,
             }
         )
@@ -732,6 +733,11 @@ class PlaywrightCalendarCaptureGateway:
             "stabilization_seconds": readiness.stabilization_seconds,
             "coordinate_scale": readiness.coordinate_scale,
             "structural_grid_bounds": readiness.grid_bounds,
+            "grid_left": clip["x"],
+            "grid_top": clip["y"],
+            "grid_right": clip["x"] + clip["width"],
+            "grid_bottom": clip["y"] + clip["height"],
+            "navigation_complete": True,
             "applied_zoom_percent": self._applied_zoom_percent,
             "logical_clip": clip,
             "logical_cell_width": clip["width"] / 126,

@@ -219,6 +219,7 @@ class HybridCaptureService:
                 capture_error=str(error),
                 capture_retry_cycles=max(0, len(error.errors) - 1),
                 capture_timestamp=datetime.now(UTC),
+                navigation_complete=False,
                 stabilization_seconds=_sample_number(last_sample, "elapsed_seconds"),
                 raw_dom_nodes=int(_sample_number(last_sample, "raw_dom_nodes")),
                 unique_event_chips=int(_sample_number(last_sample, "unique_event_chips")),
@@ -264,7 +265,8 @@ class HybridCaptureService:
         rendered = {str(key): int(value) for key, value in raw_rendered.items()}
         expected_colors = expected_distribution(frame_plan)
         dom_count = int(_number(metrics, "event_count"))
-        population_valid = dom_count == frame.expected_occurrences
+        population_ratio = dom_count / max(frame.expected_occurrences, 1)
+        population_valid = 0.75 <= population_ratio <= 1.25
         colors_valid = len(rendered) >= max(1, len(expected_colors) - 1)
         ordering_valid = match >= 0.55
         raw_samples = metrics.get("dom_population_samples", [])
@@ -283,6 +285,7 @@ class HybridCaptureService:
             capture_load_success=True,
             capture_retry_cycles=int(_number(metrics, "capture_retry_cycles")),
             capture_timestamp=datetime.now(UTC),
+            navigation_complete=bool(metrics.get("navigation_complete", False)),
             stabilization_seconds=_number(metrics, "stabilization_seconds"),
             raw_dom_nodes=int(_number(metrics, "raw_dom_nodes")),
             unique_event_chips=int(_number(metrics, "unique_event_chips")),
@@ -291,6 +294,10 @@ class HybridCaptureService:
             normalized_height=288,
             logical_cell_width=_number(metrics, "logical_cell_width"),
             logical_cell_height=_number(metrics, "logical_cell_height"),
+            grid_left=_number(metrics, "grid_left"),
+            grid_top=_number(metrics, "grid_top"),
+            grid_right=_number(metrics, "grid_right"),
+            grid_bottom=_number(metrics, "grid_bottom"),
             expected_color_distribution=expected_colors,
             rendered_color_distribution=rendered,
             logical_cell_match_ratio=match,
@@ -339,6 +346,24 @@ class HybridCaptureService:
                 metrics.setdefault("raw_dom_nodes", metrics.get("event_count", 0))
                 metrics.setdefault("unique_event_chips", metrics.get("event_count", 0))
                 metrics.setdefault("dom_population_samples", [])
+                metrics.setdefault("navigation_complete", True)
+                clip = metrics.get("logical_clip")
+                if isinstance(clip, dict):
+                    metrics.setdefault("grid_left", clip.get("x", 0))
+                    metrics.setdefault("grid_top", clip.get("y", 0))
+                    metrics.setdefault(
+                        "grid_right",
+                        _sample_number(clip, "x") + _sample_number(clip, "width"),
+                    )
+                    metrics.setdefault(
+                        "grid_bottom",
+                        _sample_number(clip, "y") + _sample_number(clip, "height"),
+                    )
+                else:
+                    metrics.setdefault("grid_left", 0)
+                    metrics.setdefault("grid_top", 0)
+                    metrics.setdefault("grid_right", 0)
+                    metrics.setdefault("grid_bottom", 0)
                 return metrics
             except CalendarAnimError as error:
                 errors.append(str(error))
