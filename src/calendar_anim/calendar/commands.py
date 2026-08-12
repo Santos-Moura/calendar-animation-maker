@@ -65,6 +65,7 @@ from calendar_anim.calendar.horizontal_band_compression.commands import (
 from calendar_anim.calendar.lab import LAB_CALENDAR_DESCRIPTION, LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.commands import register_multi_frame_commands
+from calendar_anim.calendar.profiles.commands import register_profile_commands
 from calendar_anim.calendar.recurrence_compaction.commands import (
     register_recurrence_compaction_commands,
 )
@@ -911,6 +912,7 @@ def register_calendar_commands(app: typer.Typer) -> None:
     app.command("calibration-summary")(calibration_summary_command)
     app.command("map-frame")(map_frame_command)
     register_multi_frame_commands(app)
+    register_profile_commands(app)
     register_recurrence_compaction_commands(app)
     register_recurrence_validation_commands(app)
     register_capture_commands(app)

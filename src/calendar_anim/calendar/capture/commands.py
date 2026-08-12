@@ -34,6 +34,7 @@ from calendar_anim.calendar.capture.models import (
 )
 from calendar_anim.calendar.capture.service import CalendarWeekCaptureService
 from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
+from calendar_anim.calendar.profiles.store import DEFAULT_PROFILE_NAME, CalendarProfileStore
 from calendar_anim.exceptions import CalendarAnimError
 
 
@@ -72,17 +73,22 @@ def _capture_config(
 
 
 def browser_login_command(
-    profile_directory: Annotated[Path, typer.Option("--profile-directory")] = Path(
-        ".calendar-anim/browser-profile"
-    ),
+    profile_name: Annotated[str, typer.Option("--profile")] = DEFAULT_PROFILE_NAME,
+    profile_directory: Annotated[Path | None, typer.Option("--profile-directory")] = None,
     browser_executable: Annotated[Path | None, typer.Option("--browser-executable")] = None,
 ) -> None:
     """Open normal Chrome for a one-time manual Google login and UI setup."""
-    typer.echo(f"Persistent browser profile: {profile_directory}")
+    try:
+        calendar_profile = CalendarProfileStore().load(profile_name)
+        resolved_directory = profile_directory or calendar_profile.browser_profile_directory
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Calendar profile: {profile_name}")
+    typer.echo(f"Persistent browser profile: {resolved_directory}")
     typer.echo("Browser mode: normal Google Chrome (not controlled by Playwright).")
     typer.echo("No Google credentials will be read or typed by this command.")
     try:
-        launch_manual_login_browser(profile_directory, browser_executable)
+        launch_manual_login_browser(resolved_directory, browser_executable)
         typer.echo("Log in manually and configure week view, dark theme, and hidden sidebar.")
         typer.echo("Close that Chrome window completely when Calendar is ready.")
         typer.prompt("Press Enter here after closing Chrome", default="", show_default=False)

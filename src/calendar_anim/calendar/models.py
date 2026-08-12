@@ -35,6 +35,7 @@ class CalendarInfo(BaseModel):
     description: str = ""
     timezone: str
     primary: bool = False
+    access_role: str | None = None
 
 
 class CalendarColor(BaseModel):

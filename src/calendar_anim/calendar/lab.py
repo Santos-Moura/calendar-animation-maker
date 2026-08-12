@@ -1,7 +1,7 @@
 from typing import Final
 
 from calendar_anim.calendar.gateway import CalendarGateway
-from calendar_anim.calendar.local_config import CalendarConfigStore, CalendarLocalConfig
+from calendar_anim.calendar.local_config import CalendarConfigRepository, CalendarLocalConfig
 from calendar_anim.calendar.models import CalendarInfo
 from calendar_anim.exceptions import CalendarAnimError
 
@@ -12,7 +12,7 @@ LAB_CALENDAR_DESCRIPTION: Final = (
 
 
 class LabCalendarService:
-    def __init__(self, gateway: CalendarGateway, store: CalendarConfigStore) -> None:
+    def __init__(self, gateway: CalendarGateway, store: CalendarConfigRepository) -> None:
         self.gateway = gateway
         self.store = store
 

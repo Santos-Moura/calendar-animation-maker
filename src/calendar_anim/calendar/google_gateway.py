@@ -89,6 +89,7 @@ class GoogleCalendarGateway:
             description=str(item.get("description", "")),
             timezone=str(item.get("timeZone", "UTC")),
             primary=bool(item.get("primary", False)),
+            access_role=(str(item["accessRole"]) if item.get("accessRole") else None),
         )
 
     def get_calendar(self, calendar_id: str) -> CalendarInfo | None:
