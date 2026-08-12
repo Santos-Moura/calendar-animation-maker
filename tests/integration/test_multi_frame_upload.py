@@ -18,10 +18,17 @@ from calendar_anim.calendar.multi_frame.artifacts import (
     AnimationRunStore,
     initialize_animation_run,
 )
-from calendar_anim.calendar.multi_frame.models import FrameUploadStatus
+from calendar_anim.calendar.multi_frame.models import (
+    FrameUploadStatus,
+    UploadPauseReason,
+)
 from calendar_anim.calendar.multi_frame.planner import build_multi_frame_plan
 from calendar_anim.calendar.multi_frame.retry import UploadRetryPolicy
-from calendar_anim.calendar.multi_frame.service import MultiFrameUploadService
+from calendar_anim.calendar.multi_frame.service import (
+    CalendarUsageQuotaPause,
+    MultiFrameUploadService,
+    normalize_legacy_calendar_usage_quota_pause,
+)
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.frame import AnimationFrame, Block
 from tests.factories import make_manifest, make_ready_calibration_profile
@@ -95,8 +102,9 @@ class PermanentFailureGateway(FakeCalendarGateway):
 
 
 class RateLimitOnceGateway(FakeCalendarGateway):
-    def __init__(self) -> None:
+    def __init__(self, status_code: int) -> None:
         super().__init__()
+        self.status_code = status_code
         self.rate_limited = False
 
     def create_events(
@@ -113,11 +121,51 @@ class RateLimitOnceGateway(FakeCalendarGateway):
                         event_index=index,
                         message="simulated rateLimitExceeded",
                         retryable=True,
-                        status_code=403,
+                        status_code=self.status_code,
                         reason="rateLimitExceeded",
                     )
                     for index in range(len(events))
                 ],
+                rate_limit_exceeded_count=1,
+            )
+        return super().create_events(calendar_id, events)
+
+
+class QuotaAfterSuccessfulCreationsGateway(FakeCalendarGateway):
+    def __init__(self, quota_frame_index: int = 1, successes_before_quota: int = 7) -> None:
+        super().__init__()
+        self.quota_frame_index = quota_frame_index
+        self.successes_before_quota = successes_before_quota
+        self.quota_enabled = True
+        self.submitted_lengths: list[tuple[int, int]] = []
+
+    def create_events(
+        self, calendar_id: str, events: Sequence[CalendarEventDraft]
+    ) -> CalendarWriteResult:
+        frame_index = events[0].frame_index if events else -1
+        assert frame_index is not None
+        self.submitted_lengths.append((frame_index, len(events)))
+        if frame_index == self.quota_frame_index and self.quota_enabled:
+            self.quota_enabled = False
+            successful = super().create_events(calendar_id, events[: self.successes_before_quota])
+            failures = [
+                CalendarWriteFailure(
+                    event_index=index,
+                    message="Calendar usage limits exceeded",
+                    retryable=False,
+                    status_code=403,
+                    reason="quotaExceeded",
+                )
+                for index in range(self.successes_before_quota, len(events))
+            ]
+            return CalendarWriteResult(
+                created_event_ids=successful.created_event_ids,
+                created_event_indexes=successful.created_event_indexes,
+                failed_events=len(failures),
+                errors=["Calendar usage limits exceeded (quotaExceeded)"],
+                failures=failures,
+                quota_exceeded_count=1,
+                quota_circuit_breaker_count=1,
             )
         return super().create_events(calendar_id, events)
 
@@ -221,9 +269,12 @@ def test_retryable_partial_chunk_retries_only_missing_events_without_duplicates(
     assert len(attempt.attempts) == 1
 
 
-def test_rate_limit_uses_long_cooldown_then_resumes_missing_events(tmp_path: Path) -> None:
+@pytest.mark.parametrize("status_code", [403, 429])
+def test_rate_limit_uses_long_cooldown_then_resumes_missing_events(
+    tmp_path: Path, status_code: int
+) -> None:
     plan, state, store = _initialized_run(tmp_path, frame_count=1)
-    gateway = RateLimitOnceGateway()
+    gateway = RateLimitOnceGateway(status_code)
     sleeps: list[float] = []
     service = _service(
         gateway,
@@ -237,9 +288,114 @@ def test_rate_limit_uses_long_cooldown_then_resumes_missing_events(tmp_path: Pat
 
     assert uploaded.frames[0].status is FrameUploadStatus.COMPLETED
     assert uploaded.frames[0].event_retry_count == 1
+    assert uploaded.frames[0].rate_limit_exceeded_count == 1
+    assert uploaded.frames[0].adaptive_rate_limit_cooldowns == 1
+    assert uploaded.frames[0].quota_exceeded_count == 0
     assert sleeps[0] == 32.0
     calendar_id = uploaded.calendar_id or ""
     assert len(gateway.events[calendar_id]) == 1008
+    performance = store.load_performance(plan.run_id)
+    assert performance.rate_limit_exceeded_count == 1
+    assert performance.adaptive_rate_limit_cooldowns == 1
+    assert performance.quota_exceeded_count == 0
+
+
+def test_quota_circuit_breaker_preserves_partial_frame_without_cleanup(
+    tmp_path: Path,
+) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=2)
+    gateway = QuotaAfterSuccessfulCreationsGateway()
+    service = _service(gateway, store, tmp_path, chunk_size=50)
+
+    with pytest.raises(CalendarUsageQuotaPause) as raised:
+        service.upload(plan, state)
+
+    saved = store.load_state(plan.run_id)
+    assert saved.frames[0].status is FrameUploadStatus.COMPLETED
+    assert saved.frames[1].status is FrameUploadStatus.PARTIAL
+    assert saved.frames[1].created_events == 7
+    assert saved.frames[1].failed_events == 0
+    assert saved.frames[1].quota_exceeded_count == 1
+    assert saved.frames[1].quota_circuit_breaker_count == 1
+    assert saved.frames[1].event_retry_count == 0
+    assert saved.frames[1].recovery_cycles == 0
+    assert saved.pause is not None
+    assert saved.pause.reason is UploadPauseReason.CALENDAR_USAGE_QUOTA_EXCEEDED
+    assert saved.pause.http_status == 403
+    assert saved.pause.google_reason == "quotaExceeded"
+    assert saved.pause.frame_index == 1
+    assert saved.pause.created_before_pause == 7
+    assert saved.pause.remaining_events == 1001
+    assert raised.value.pause == saved.pause
+    assert gateway.delete_event_calls == 0
+    assert sum(frame == 1 for frame, _ in gateway.submitted_lengths) == 1
+    assert not store.state_path(plan.run_id).with_name(".animation-state.json.tmp").exists()
+
+    performance = store.load_performance(plan.run_id)
+    assert performance.invocations[-1].status == "stopped"
+    assert performance.quota_exceeded_count == 1
+    assert performance.quota_circuit_breaker_count == 1
+    assert performance.rate_limit_exceeded_count == 0
+    assert performance.adaptive_rate_limit_cooldowns == 0
+    assert performance.pause == saved.pause
+    assert performance.pause_history == saved.pause_history
+
+
+def test_resume_after_quota_pause_reconciles_only_missing_events(tmp_path: Path) -> None:
+    plan, state, store = _initialized_run(tmp_path, frame_count=2)
+    gateway = QuotaAfterSuccessfulCreationsGateway()
+    service = _service(gateway, store, tmp_path, chunk_size=50)
+
+    with pytest.raises(CalendarUsageQuotaPause):
+        service.upload(plan, state)
+
+    submissions_before_resume = len(gateway.submitted_lengths)
+    completed_frame_calls_before_resume = sum(frame == 0 for frame, _ in gateway.submitted_lengths)
+    resumed = service.upload(plan, store.load_state(plan.run_id))
+    resume_submissions = gateway.submitted_lengths[submissions_before_resume:]
+    calendar_id = resumed.calendar_id or ""
+
+    assert all(frame.status is FrameUploadStatus.COMPLETED for frame in resumed.frames)
+    assert resumed.pause is None
+    assert len(resumed.pause_history) == 1
+    assert sum(frame == 0 for frame, _ in gateway.submitted_lengths) == (
+        completed_frame_calls_before_resume
+    )
+    assert all(frame == 1 for frame, _ in resume_submissions)
+    assert sum(length for _, length in resume_submissions) == 1001
+    assert len(gateway.events[calendar_id]) == 2016
+    assert len({event.id for event in gateway.events[calendar_id]}) == 2016
+    assert gateway.delete_event_calls == 0
+
+    performance = store.load_performance(plan.run_id)
+    invocation = performance.invocations[-1]
+    assert invocation.frames_previously_completed == [0]
+    assert invocation.frames_uploaded_this_invocation == [1]
+    assert performance.pause is None
+    assert len(performance.pause_history) == 1
+    assert performance.quota_exceeded_count == 1
+    assert performance.quota_circuit_breaker_count == 1
+
+
+def test_legacy_quota_failure_is_normalized_to_partial_pause(tmp_path: Path) -> None:
+    _plan, state, _store = _initialized_run(tmp_path, frame_count=1)
+    frame = state.frames[0]
+    frame.status = FrameUploadStatus.FAILED
+    frame.created_events = 12
+    frame.failed_events = 3
+    frame.errors = ["403 quotaExceeded: Calendar usage limits exceeded"]
+
+    changed = normalize_legacy_calendar_usage_quota_pause(state)
+
+    assert changed is True
+    assert frame.status is FrameUploadStatus.PARTIAL
+    assert frame.created_events == 12
+    assert frame.failed_events == 0
+    assert frame.quota_exceeded_count == 1
+    assert frame.quota_circuit_breaker_count == 1
+    assert state.pause is not None
+    assert state.pause.frame_index == 0
+    assert state.pause.created_before_pause == 12
 
 
 def test_response_loss_after_persistence_is_idempotent(tmp_path: Path) -> None:

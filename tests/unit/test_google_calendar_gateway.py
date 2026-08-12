@@ -124,6 +124,7 @@ def test_google_gateway_classifies_event_failures(status: int, retryable: bool) 
     [
         ("rateLimitExceeded", True),
         ("userRateLimitExceeded", True),
+        ("quotaExceeded", False),
         ("forbidden", False),
         (None, False),
     ],
@@ -148,8 +149,9 @@ def test_google_gateway_only_retries_temporary_403_reasons(
     assert result.failures[0].retryable is retryable
 
 
-def test_google_gateway_stops_batch_after_first_rate_limit() -> None:
-    service = FailingGoogleService(403, "rateLimitExceeded")
+@pytest.mark.parametrize("status", [403, 429])
+def test_google_gateway_stops_batch_after_first_rate_limit(status: int) -> None:
+    service = FailingGoogleService(status, "rateLimitExceeded")
     gateway = GoogleCalendarGateway(service)
     gateway.configure_write_pacing(0.75)
     start = datetime(2026, 9, 21, 6, 0, tzinfo=ZoneInfo("America/Sao_Paulo"))
@@ -170,7 +172,39 @@ def test_google_gateway_stops_batch_after_first_rate_limit() -> None:
     assert len(result.failures) == 50
     assert all(failure.retryable for failure in result.failures)
     assert all(failure.reason == "rateLimitExceeded" for failure in result.failures)
+    assert result.rate_limit_exceeded_count == 1
+    assert result.quota_exceeded_count == 0
+    assert result.quota_circuit_breaker_count == 0
     assert gateway.current_write_interval_seconds == pytest.approx(1.125)
+
+
+def test_google_gateway_opens_quota_circuit_without_request_storm() -> None:
+    service = FailingGoogleService(403, "quotaExceeded")
+    gateway = GoogleCalendarGateway(service)
+    gateway.configure_write_pacing(0.75)
+    start = datetime(2026, 9, 21, 6, 0, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    drafts = [
+        CalendarEventDraft(
+            start=start + timedelta(minutes=index),
+            end=start + timedelta(minutes=index + 1),
+            summary="",
+            private_metadata={"event": str(index)},
+        )
+        for index in range(50)
+    ]
+
+    result = gateway.create_events("calendar-id", drafts)
+
+    assert len(service.events_resource.calls) == 1
+    assert result.failed_events == 50
+    assert len(result.failures) == 50
+    assert all(not failure.retryable for failure in result.failures)
+    assert all(failure.reason == "quotaExceeded" for failure in result.failures)
+    assert result.rate_limit_exceeded_count == 0
+    assert result.quota_exceeded_count == 1
+    assert result.adaptive_rate_limit_cooldowns == 0
+    assert result.quota_circuit_breaker_count == 1
+    assert gateway.current_write_interval_seconds == pytest.approx(0.75)
 
 
 def test_google_gateway_spaces_write_starts_at_configured_interval() -> None:
