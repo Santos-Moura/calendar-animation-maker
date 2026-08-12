@@ -4,6 +4,20 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, model_validator
 
 
+class HybridOutputMode(StrEnum):
+    PIXEL_FAITHFUL = "pixel_faithful"
+    HEADER_PRESERVED_LETTERBOX = "header_preserved_letterbox"
+    HEADER_PRESERVED_FILL = "header_preserved_fill"
+
+    @property
+    def directory_name(self) -> str:
+        return self.value.replace("_", "-")
+
+    @property
+    def includes_header(self) -> bool:
+        return self is not HybridOutputMode.PIXEL_FAITHFUL
+
+
 class HybridFrameStatus(StrEnum):
     PENDING = "pending"
     CAPTURING = "capturing"
@@ -65,8 +79,9 @@ class HybridFrameState(BaseModel):
 
 
 class HybridCaptureState(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = "2.0"
     run_id: str
+    output_mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL
     frames: list[HybridFrameState]
     updated_at: datetime
 

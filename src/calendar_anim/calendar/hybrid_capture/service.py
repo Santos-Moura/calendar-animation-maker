@@ -12,6 +12,8 @@ from calendar_anim.calendar.frame_mapping.models import SingleFrameCalendarPlan
 from calendar_anim.calendar.hybrid_capture.artifacts import (
     HybridCaptureStore,
     compare_logical_cells,
+    compose_mode_contact_sheet,
+    compose_output_mode,
     compose_sanity_contact_sheet,
     compose_seam_geometry,
     expected_distribution,
@@ -24,6 +26,7 @@ from calendar_anim.calendar.hybrid_capture.models import (
     HybridCaptureState,
     HybridFramePlan,
     HybridFrameStatus,
+    HybridOutputMode,
     HybridSanityReport,
     HybridSeamReport,
     SanityFrameResult,
@@ -39,6 +42,8 @@ class HybridBrowserGateway(Protocol):
     def capture_viewport(self, output_path: Path) -> None: ...
 
     def capture_logical_event_grid(self, output_path: Path) -> dict[str, object]: ...
+
+    def capture_header_event_grid(self, output_path: Path) -> dict[str, object]: ...
 
     def wait_for_animation_events(self, expected_count: int) -> object: ...
 
@@ -173,9 +178,110 @@ class HybridCaptureService:
         write_atomic(debug_json, json.dumps(payload, indent=2) + "\n")
         return payload
 
+    def capture_debug_modes(
+        self, plan: HybridCapturePlan, human_frame: int, profile: str
+    ) -> dict[str, object]:
+        """Capture one browser view and derive all three output modes locally."""
+
+        if not 1 <= human_frame <= len(plan.frames):
+            raise CalendarAnimError(f"Human frame must be between 1 and {len(plan.frames)}")
+        frame = plan.frames[human_frame - 1]
+        if frame.calendar_profile != profile:
+            raise CalendarAnimError(
+                f"Frame {human_frame} belongs to {frame.calendar_profile}, not {profile}"
+            )
+        directory = self.store.debug_frame_directory(plan.run_id, human_frame)
+        raw = directory / "raw-browser.png"
+        logical_source = directory / ".pixel-faithful-source.png"
+        header_source = directory / ".header-preserved-source.png"
+        debug_json = directory / "debug.json"
+        mode_paths = {
+            HybridOutputMode.PIXEL_FAITHFUL: directory / "mode-a-pixel-faithful.png",
+            HybridOutputMode.HEADER_PRESERVED_LETTERBOX: (
+                directory / "mode-b-header-preserved-letterbox.png"
+            ),
+            HybridOutputMode.HEADER_PRESERVED_FILL: (
+                directory / "mode-c-header-preserved-fill.png"
+            ),
+        }
+        try:
+            with self.gateway_factory(profile, frame.capture_zoom_percent) as gateway:
+                metrics = self._browser_capture(
+                    gateway,
+                    frame,
+                    raw,
+                    logical_source,
+                    header=header_source,
+                    debug_directory=directory,
+                )
+            modes: dict[str, object] = {}
+            logical_clip = metrics.get("logical_clip")
+            header_clip = metrics.get("header_grid_bounds")
+            for mode, output in mode_paths.items():
+                composition = compose_output_mode(
+                    logical_source,
+                    header_source,
+                    output,
+                    mode,
+                )
+                composition["bounds"] = (
+                    logical_clip if mode is HybridOutputMode.PIXEL_FAITHFUL else header_clip
+                )
+                composition["source"] = "temporary structural browser crop (removed)"
+                composition["artifact"] = str(output)
+                modes[mode.value] = composition
+            contact_sheet = compose_mode_contact_sheet(
+                list(mode_paths.items()), directory / "comparison-contact-sheet.png"
+            )
+            payload: dict[str, object] = {
+                "success": True,
+                "run_id": plan.run_id,
+                "human_frame": human_frame,
+                "frame_index": frame.frame_index,
+                "week_start": frame.week_start.isoformat(),
+                "profile": profile,
+                "capture_zoom_percent": frame.capture_zoom_percent,
+                "vertical_interval": "06:00-00:00",
+                "bounds_source": "content-independent structural week grid",
+                "modes": modes,
+                "artifacts": {
+                    "raw_browser": str(raw),
+                    "comparison_contact_sheet": str(contact_sheet),
+                    "debug_json": str(debug_json),
+                },
+                "capture": metrics,
+                "google_calendar_writes": False,
+            }
+            write_atomic(debug_json, json.dumps(payload, indent=2) + "\n")
+            return payload
+        except CaptureLoadFailure as error:
+            payload = {
+                "success": False,
+                "run_id": plan.run_id,
+                "human_frame": human_frame,
+                "frame_index": frame.frame_index,
+                "week_start": frame.week_start.isoformat(),
+                "profile": profile,
+                "errors": error.errors,
+                "debug_screenshots": [str(path) for path in error.diagnostic_paths],
+                "debug_attempt_json": [str(path) for path in error.diagnostic_json_paths],
+                "google_calendar_writes": False,
+            }
+            write_atomic(debug_json, json.dumps(payload, indent=2) + "\n")
+            raise
+        finally:
+            for temporary in (logical_source, header_source):
+                if temporary.exists():
+                    temporary.unlink()
+
     def capture_final(
-        self, plan: HybridCapturePlan, state: HybridCaptureState
+        self,
+        plan: HybridCapturePlan,
+        state: HybridCaptureState,
+        mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
     ) -> HybridCaptureState:
+        if state.output_mode is not mode:
+            raise CalendarAnimError("Hybrid capture state does not match selected output mode")
         sanity = self.store.load_sanity_report(plan.run_id)
         if sanity.automated_result != "PASS":
             raise CalendarAnimError("Hybrid sanity is NO-GO; full capture is blocked")
@@ -187,7 +293,7 @@ class HybridCaptureService:
             with self.gateway_factory(profile, zoom) as gateway:
                 for frame in frames:
                     state_frame = state.frame(frame.frame_index)
-                    output = self.store.final_frame_path(plan.run_id, frame.frame_index)
+                    output = self.store.final_frame_path(plan.run_id, frame.frame_index, mode)
                     if state_frame.status is HybridFrameStatus.COMPLETED and output.is_file():
                         continue
                     state_frame.status = HybridFrameStatus.CAPTURING
@@ -195,10 +301,17 @@ class HybridCaptureService:
                     state_frame.error = None
                     self.store.save_state(state)
                     try:
-                        raw = self.store.final_raw_path(plan.run_id, frame.frame_index)
-                        logical = self.store.final_logical_path(plan.run_id, frame.frame_index)
-                        self._browser_capture(gateway, frame, raw, logical)
-                        normalize_grid(logical, output)
+                        raw = self.store.final_raw_path(plan.run_id, frame.frame_index, mode)
+                        logical = self.store.final_logical_path(
+                            plan.run_id, frame.frame_index, mode
+                        )
+                        header = (
+                            self.store.final_header_path(plan.run_id, frame.frame_index, mode)
+                            if mode.includes_header
+                            else None
+                        )
+                        self._browser_capture(gateway, frame, raw, logical, header=header)
+                        compose_output_mode(logical, header, output, mode)
                         with Image.open(output) as image:
                             if image.size != (504, 288):
                                 raise CalendarAnimError("Final normalized frame is not 504x288")
@@ -210,11 +323,14 @@ class HybridCaptureService:
                     state_frame.status = HybridFrameStatus.COMPLETED
                     state_frame.completed_at = datetime.now(UTC)
                     self.store.save_state(state)
-        self._validate_final_sequence(plan)
+        self._validate_final_sequence(plan, mode)
         compose_seam_geometry(
-            self.store.final_frame_path(plan.run_id, 22),
-            self.store.final_frame_path(plan.run_id, 23),
-            self.store.run_directory(plan.run_id) / "seam" / "a-b-transition-geometry.png",
+            self.store.final_frame_path(plan.run_id, 22, mode),
+            self.store.final_frame_path(plan.run_id, 23, mode),
+            self.store.run_directory(plan.run_id)
+            / "seam"
+            / mode.directory_name
+            / "a-b-transition-geometry.png",
         )
         return state
 
@@ -397,6 +513,7 @@ class HybridCaptureService:
         frame: HybridFramePlan,
         raw: Path,
         logical: Path,
+        header: Path | None = None,
         debug_directory: Path | None = None,
     ) -> dict[str, object]:
         errors: list[str] = []
@@ -413,6 +530,8 @@ class HybridCaptureService:
                 gateway.wait_for_animation_events(frame.expected_occurrences)
                 gateway.capture_viewport(raw)
                 metrics = gateway.capture_logical_event_grid(logical)
+                if header is not None:
+                    metrics.update(gateway.capture_header_event_grid(header))
                 metrics["browser_debug"] = gateway.capture_debug_state()
                 metrics["capture_retry_cycles"] = attempt - 1
                 metrics.setdefault("stabilization_seconds", 0)
@@ -468,8 +587,8 @@ class HybridCaptureService:
                     pass
         raise CaptureLoadFailure(errors, diagnostics, diagnostic_json_paths, population_samples)
 
-    def _validate_final_sequence(self, plan: HybridCapturePlan) -> None:
-        paths = [self.store.final_frame_path(plan.run_id, index) for index in range(108)]
+    def _validate_final_sequence(self, plan: HybridCapturePlan, mode: HybridOutputMode) -> None:
+        paths = [self.store.final_frame_path(plan.run_id, index, mode) for index in range(108)]
         if len(paths) != len(set(paths)) or any(not path.is_file() for path in paths):
             raise CalendarAnimError("Final hybrid frames contain a gap or duplicate")
         for path in paths:

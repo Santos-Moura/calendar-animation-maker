@@ -11,6 +11,7 @@ from calendar_anim.calendar.hybrid_capture.models import (
     HybridCapturePlan,
     HybridCaptureState,
     HybridFrameState,
+    HybridOutputMode,
     HybridSanityReport,
     HybridSeamReport,
 )
@@ -42,8 +43,12 @@ class HybridCaptureStore:
     def plan_path(self, run_id: str) -> Path:
         return self.run_directory(run_id) / "hybrid-capture-plan.json"
 
-    def state_path(self, run_id: str) -> Path:
-        return self.run_directory(run_id) / "final-capture-state.json"
+    def state_path(
+        self,
+        run_id: str,
+        mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+    ) -> Path:
+        return self.run_directory(run_id) / "final-capture-state" / f"{mode.value}.json"
 
     def sanity_directory(self, run_id: str) -> Path:
         return self.run_directory(run_id) / "sanity"
@@ -66,22 +71,50 @@ class HybridCaptureStore:
         shutil.move(str(source), str(destination))
         return destination
 
-    def final_frames_directory(self, run_id: str) -> Path:
-        return self.run_directory(run_id) / "final-frames"
+    def final_frames_directory(
+        self,
+        run_id: str,
+        mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+    ) -> Path:
+        return self.run_directory(run_id) / "final-frames" / mode.directory_name
 
-    def final_frame_path(self, run_id: str, frame_index: int) -> Path:
-        return self.final_frames_directory(run_id) / f"frame_{frame_index:03d}.png"
+    def final_frame_path(
+        self,
+        run_id: str,
+        frame_index: int,
+        mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+    ) -> Path:
+        return self.final_frames_directory(run_id, mode) / f"frame_{frame_index:03d}.png"
 
-    def final_raw_path(self, run_id: str, frame_index: int) -> Path:
-        return self.run_directory(run_id) / "final-capture" / "raw" / f"frame_{frame_index:03d}.png"
-
-    def final_logical_path(self, run_id: str, frame_index: int) -> Path:
+    def final_raw_path(self, run_id: str, frame_index: int, mode: HybridOutputMode) -> Path:
         return (
             self.run_directory(run_id)
             / "final-capture"
+            / mode.directory_name
+            / "raw"
+            / f"frame_{frame_index:03d}.png"
+        )
+
+    def final_logical_path(self, run_id: str, frame_index: int, mode: HybridOutputMode) -> Path:
+        return (
+            self.run_directory(run_id)
+            / "final-capture"
+            / mode.directory_name
             / "logical"
             / f"frame_{frame_index:03d}.png"
         )
+
+    def final_header_path(self, run_id: str, frame_index: int, mode: HybridOutputMode) -> Path:
+        return (
+            self.run_directory(run_id)
+            / "final-capture"
+            / mode.directory_name
+            / "header-grid"
+            / f"frame_{frame_index:03d}.png"
+        )
+
+    def final_directory(self, run_id: str, mode: HybridOutputMode) -> Path:
+        return self.run_directory(run_id) / "final" / mode.directory_name
 
     def save_plan(self, plan: HybridCapturePlan) -> Path:
         path = self.plan_path(plan.run_id)
@@ -98,10 +131,16 @@ class HybridCaptureStore:
         except (OSError, ValueError) as error:
             raise CalendarAnimError("Invalid or missing hybrid capture plan") from error
 
-    def initialize_state(self, plan: HybridCapturePlan) -> HybridCaptureState:
-        path = self.state_path(plan.run_id)
+    def initialize_state(
+        self,
+        plan: HybridCapturePlan,
+        mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+    ) -> HybridCaptureState:
+        path = self.state_path(plan.run_id, mode)
         if path.exists():
             state = HybridCaptureState.model_validate_json(path.read_text(encoding="utf-8"))
+            if state.output_mode is not mode:
+                raise CalendarAnimError("Hybrid capture state output mode differs")
             expected = [(item.frame_index, item.calendar_profile) for item in plan.frames]
             actual = [(item.frame_index, item.profile) for item in state.frames]
             if actual != expected:
@@ -109,6 +148,7 @@ class HybridCaptureStore:
             return state
         state = HybridCaptureState(
             run_id=plan.run_id,
+            output_mode=mode,
             frames=[
                 HybridFrameState(frame_index=item.frame_index, profile=item.calendar_profile)
                 for item in plan.frames
@@ -120,7 +160,10 @@ class HybridCaptureStore:
 
     def save_state(self, state: HybridCaptureState) -> Path:
         state.updated_at = datetime.now(UTC)
-        return write_atomic(self.state_path(state.run_id), state.model_dump_json(indent=2) + "\n")
+        return write_atomic(
+            self.state_path(state.run_id, state.output_mode),
+            state.model_dump_json(indent=2) + "\n",
+        )
 
     def save_sanity_report(self, report: HybridSanityReport) -> tuple[Path, Path]:
         directory = self.sanity_directory(report.run_id)
@@ -167,6 +210,103 @@ def normalize_grid(source: Path, destination: Path) -> Path:
     except OSError as error:
         raise CalendarAnimError(f"Could not normalize Calendar grid: {source}") from error
     return destination
+
+
+def compose_output_mode(
+    logical_source: Path,
+    header_source: Path | None,
+    destination: Path,
+    mode: HybridOutputMode,
+) -> dict[str, object]:
+    """Compose one Calendar capture mode using nearest-neighbor pixels only."""
+
+    source_path = logical_source if mode is HybridOutputMode.PIXEL_FAITHFUL else header_source
+    if source_path is None:
+        raise CalendarAnimError(f"Mode {mode.value} requires a week-header capture")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with Image.open(source_path) as opened:
+            source = opened.convert("RGB")
+            source_width, source_height = source.size
+            if source_width <= 0 or source_height <= 0:
+                raise CalendarAnimError("Calendar mode source has invalid dimensions")
+            if mode is HybridOutputMode.HEADER_PRESERVED_LETTERBOX:
+                scale = min(504 / source_width, 288 / source_height)
+                content_size = (
+                    max(1, round(source_width * scale)),
+                    max(1, round(source_height * scale)),
+                )
+                resized = source.resize(content_size, Image.Resampling.NEAREST)
+                output = Image.new("RGB", (504, 288), "#202124")
+                offset = ((504 - content_size[0]) // 2, (288 - content_size[1]) // 2)
+                output.paste(resized, offset)
+                resized.close()
+                letterbox = content_size != (504, 288)
+                stretch = False
+            else:
+                content_size = (504, 288)
+                offset = (0, 0)
+                output = source.resize(content_size, Image.Resampling.NEAREST)
+                letterbox = False
+                stretch = (
+                    mode is HybridOutputMode.HEADER_PRESERVED_FILL
+                    and abs(source_width / source_height - 504 / 288) > 1e-6
+                )
+            output.save(destination)
+            output.close()
+            source.close()
+    except OSError as error:
+        raise CalendarAnimError(f"Could not compose Calendar mode: {source_path}") from error
+    return {
+        "mode": mode.value,
+        "source": str(source_path),
+        "source_dimensions": [source_width, source_height],
+        "content_dimensions": list(content_size),
+        "content_offset": list(offset),
+        "final_dimensions": [504, 288],
+        "header_included": mode.includes_header,
+        "vertical_interval": "06:00-00:00",
+        "letterbox": letterbox,
+        "stretch": stretch,
+        "logical_grid_normalization": mode is HybridOutputMode.PIXEL_FAITHFUL,
+        "resampling": "nearest-neighbor",
+        "blur_or_sharpen": False,
+        "notes": _mode_notes(mode),
+    }
+
+
+def compose_mode_contact_sheet(
+    artifacts: list[tuple[HybridOutputMode, Path]], output: Path
+) -> Path:
+    if len(artifacts) != 3:
+        raise CalendarAnimError("Mode comparison requires exactly three artifacts")
+    canvas = Image.new("RGB", (1512, 324), "#202124")
+    draw = ImageDraw.Draw(canvas)
+    for column, (mode, path) in enumerate(artifacts):
+        x = column * 504
+        draw.text((x + 8, 9), mode.value, fill="white")
+        try:
+            with Image.open(path) as image:
+                if image.size != (504, 288):
+                    raise CalendarAnimError(f"Mode artifact is not 504x288: {path}")
+                canvas.paste(image.convert("RGB"), (x, 36))
+        except OSError as error:
+            raise CalendarAnimError(f"Unreadable mode artifact: {path}") from error
+    output.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output)
+    canvas.close()
+    return output
+
+
+def _mode_notes(mode: HybridOutputMode) -> str:
+    if mode is HybridOutputMode.PIXEL_FAITHFUL:
+        return (
+            "Events-only structural crop normalized by the locked 126x72 logical grid; "
+            "no header, gutter, visual fill stretch, blur, or sharpening."
+        )
+    if mode is HybridOutputMode.HEADER_PRESERVED_LETTERBOX:
+        return "Header and 06:00-00:00 retained with aspect-preserving nearest-neighbor scaling."
+    return "Header and 06:00-00:00 retained; non-uniform scaling is allowed to fill the frame."
 
 
 def render_expected_frame(plan: SingleFrameCalendarPlan, destination: Path) -> Path:

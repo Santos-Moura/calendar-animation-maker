@@ -758,6 +758,7 @@ class PlaywrightCalendarCaptureGateway:
         self._header_clip: dict[str, float] | None = None
         self._time_window_clip: dict[str, float] | None = None
         self._logical_grid_clip: dict[str, float] | None = None
+        self._week_header_grid_clip: dict[str, float] | None = None
         self._last_animation_readiness: AnimationReadiness | None = None
         self._last_grid_diagnostics: dict[str, object] | None = None
         self._last_visible_window_diagnostics: dict[str, object] | None = None
@@ -821,6 +822,7 @@ class PlaywrightCalendarCaptureGateway:
         self._header_clip = None
         self._time_window_clip = None
         self._logical_grid_clip = None
+        self._week_header_grid_clip = None
         self._last_animation_readiness = None
         self._last_grid_diagnostics = None
         self._last_visible_window_diagnostics = None
@@ -839,6 +841,7 @@ class PlaywrightCalendarCaptureGateway:
         self._header_clip = None
         self._time_window_clip = None
         self._logical_grid_clip = None
+        self._week_header_grid_clip = None
         self._last_animation_readiness = None
         self._last_grid_diagnostics = None
         self._last_visible_window_diagnostics = None
@@ -950,6 +953,48 @@ class PlaywrightCalendarCaptureGateway:
             "logical_cell_height": clip["height"] / 72,
         }
 
+    def capture_header_event_grid(self, output_path: Path) -> dict[str, object]:
+        """Capture the structural week header plus the exact 06:00-00:00 grid."""
+
+        if self._week_header_grid_clip is None or self._logical_grid_clip is None:
+            raise CalendarAnimError("Calendar header grid is not ready for capture")
+        header_clip = self._week_header_grid_clip
+        event_grid_clip = self._logical_grid_clip
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        page = self._require_page()
+        header_bytes = page.screenshot(animations="disabled", scale="css", clip=header_clip)
+        event_grid_bytes = page.screenshot(animations="disabled", scale="css", clip=event_grid_clip)
+        header: Image.Image | None = None
+        event_grid: Image.Image | None = None
+        composed: Image.Image | None = None
+        try:
+            with Image.open(BytesIO(header_bytes)) as opened:
+                header = opened.convert("RGB")
+            with Image.open(BytesIO(event_grid_bytes)) as opened:
+                event_grid = opened.convert("RGB")
+            if header.width != event_grid.width:
+                raise CalendarAnimError("Calendar header and event-grid structural widths differ")
+            composed = Image.new("RGB", (header.width, header.height + event_grid.height))
+            composed.paste(header, (0, 0))
+            composed.paste(event_grid, (0, header.height))
+            composed.save(output_path)
+            dimensions = [composed.width, composed.height]
+        finally:
+            for image in (header, event_grid, composed):
+                if image is not None:
+                    image.close()
+        return {
+            "header_grid_bounds": {
+                "header_clip": header_clip,
+                "event_grid_clip": event_grid_clip,
+                "composite_dimensions": dimensions,
+            },
+            "header_included": True,
+            "vertical_interval": "06:00-00:00",
+            "horizontal_bounds_source": "structural-week-grid",
+            "empty_pre_06_interval_removed": True,
+        }
+
     def animation_event_audit(self) -> EventPopulationAudit:
         """Return unique visible animation chips with wrapper diagnostics."""
 
@@ -1032,9 +1077,16 @@ class PlaywrightCalendarCaptureGateway:
         time_bounds = time_window_clip(
             metrics, self.config.visible_start_hour, self.config.visible_end_hour
         )
+        header_bounds = week_header_clip(metrics)
         scale_x, scale_y = self._coordinate_scale()
         bounds = self._structural_grid_bounds(region)
         self._logical_grid_clip = logical_grid_clip(bounds, time_bounds, scale_x, scale_y)
+        self._week_header_grid_clip = {
+            "x": bounds["left"] * scale_x,
+            "y": header_bounds["y"] * scale_y,
+            "width": bounds["width"] * scale_x,
+            "height": header_bounds["height"] * scale_y,
+        }
         self._time_window_clip = {
             "x": time_bounds["x"] * scale_x,
             "y": time_bounds["y"] * scale_y,
@@ -1071,6 +1123,7 @@ class PlaywrightCalendarCaptureGateway:
             "applied_zoom_percent": self._applied_zoom_percent,
             "time_window_clip": self._time_window_clip,
             "logical_grid_clip": self._logical_grid_clip,
+            "week_header_grid_clip": self._week_header_grid_clip,
             "scroll_position": self._last_visible_window_diagnostics,
             "grid_diagnostics": self._last_grid_diagnostics,
             "events": event_state,
