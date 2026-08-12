@@ -26,6 +26,7 @@ from calendar_anim.calendar.high_detail import (
     apply_high_detail_grid,
     high_detail_max_events_for_run,
     minimum_write_interval_for_run,
+    quota_wait_policy_for_run,
 )
 from calendar_anim.calendar.lab import LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
@@ -39,6 +40,7 @@ from calendar_anim.calendar.multi_frame.models import (
     FrameUploadState,
     FrameUploadStatus,
     MultiFramePlan,
+    QuotaWaitState,
 )
 from calendar_anim.calendar.multi_frame.performance import FrameUploadPerformance
 from calendar_anim.calendar.multi_frame.planner import build_multi_frame_plan
@@ -298,6 +300,20 @@ def upload_animation_command(
         typer.echo(f"Rate limit exceeded: {performance.rate_limit_exceeded_count}")
         typer.echo(f"Quota exceeded: {performance.quota_exceeded_count}")
 
+    def quota_wait(wait: QuotaWaitState, remaining: float) -> None:
+        frame = state.frame(wait.frame_index)
+        next_retry = wait.next_retry_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+        typer.secho("\nGoogle Calendar usage quota reached.", fg=typer.colors.YELLOW)
+        typer.echo("Run checkpointed safely.")
+        typer.echo(f"Frame: {wait.frame_index + 1}/{plan.frame_count}")
+        typer.echo(f"Created in frame: {frame.created_events}/{frame.planned_events}")
+        typer.echo("Automatic quota recovery enabled.")
+        typer.echo(f"Next retry: {next_retry}")
+        typer.echo(f"Wait stage: {wait.stage_index + 1}")
+        typer.echo(f"Sleeping for: {_long_duration(remaining)}")
+        typer.echo("Press Ctrl+C to exit safely.")
+        typer.echo("Resume later with --resume if desired.")
+
     try:
         gateway = _google_gateway()
         write_interval = minimum_write_interval_for_run(plan.run_id)
@@ -309,6 +325,8 @@ def upload_animation_command(
             store,
             progress=progress,
             frame_complete=frame_complete,
+            quota_wait_policy=quota_wait_policy_for_run(plan.run_id),
+            quota_wait_callback=quota_wait,
         )
         state = service.upload(plan, state, recover_partial=recover_partial)
     except CalendarUsageQuotaPause as error:
@@ -318,7 +336,10 @@ def upload_animation_command(
         typer.echo(f"Created: {pause.created_before_pause}/{pause.planned_events}")
         typer.echo(f"Remaining: {pause.remaining_events}")
         typer.echo("Run checkpointed safely.")
-        typer.echo("Do not retry immediately.")
+        if error.automatic_wait_exhausted:
+            typer.echo("Maximum automatic quota wait reached (48 hours).")
+        else:
+            typer.echo("Do not retry immediately.")
         typer.echo("Resume later with:")
         typer.echo(
             f".\\.venv\\Scripts\\python.exe -m calendar_anim calendar upload-animation "
@@ -357,6 +378,17 @@ def upload_animation_command(
     typer.echo(f"Quota exceeded count: {performance.quota_exceeded_count}")
     typer.echo(f"Adaptive rate-limit cooldowns: {performance.adaptive_rate_limit_cooldowns}")
     typer.echo(f"Quota circuit breakers: {performance.quota_circuit_breaker_count}")
+    typer.echo(f"Quota wait entries: {performance.quota_wait_entries}")
+    typer.echo(f"Quota wait seconds: {_seconds(performance.quota_wait_total_seconds)}")
+    typer.echo(f"Quota wait attempts: {performance.quota_wait_attempts}")
+    typer.echo(f"Quota recoveries: {performance.quota_recoveries}")
+    typer.echo("Largest quota cooldown: " + _seconds(performance.largest_quota_cooldown_seconds))
+    typer.echo(f"Active upload elapsed: {_seconds(performance.active_upload_elapsed_seconds)}")
+    typer.echo(f"Wall-clock elapsed: {_seconds(performance.wall_clock_elapsed_seconds)}")
+    typer.echo(f"Active throughput ETA: {_seconds(performance.active_throughput_eta_seconds)}")
+    typer.echo(f"Wall-clock ETA: {_seconds(performance.wall_clock_eta_seconds)}")
+    typer.echo("Current write interval: " + _seconds(performance.current_write_interval_seconds))
+    typer.echo("Last write interval: " + _seconds(performance.last_write_interval_seconds))
     typer.echo(f"Performance report: {store.performance_json_path(plan.run_id)}")
     if any(
         frame.status in {FrameUploadStatus.PARTIAL, FrameUploadStatus.FAILED}
@@ -438,6 +470,10 @@ def _print_upload_summary(plan: MultiFramePlan, state: AnimationUploadState, exe
         typer.echo(f"Write pacing: adaptive, minimum {write_interval:.2f}s between event starts")
     else:
         typer.echo("Write pacing: default")
+    quota_policy = quota_wait_policy_for_run(plan.run_id)
+    if quota_policy:
+        cooldowns = " -> ".join(_long_duration(value) for value in quota_policy.cooldown_seconds)
+        typer.echo(f"Automatic quota recovery: {cooldowns} (48h maximum)")
     typer.echo(f"Current state: {_status_counts(state)}")
     typer.echo(f"Execution: {'REAL' if execute else 'DRY RUN'}")
 
@@ -481,6 +517,20 @@ def _selected_states(
 
 def _seconds(value: float | None) -> str:
     return "pending" if value is None else f"{value:.2f}s"
+
+
+def _long_duration(value: float) -> str:
+    seconds = max(0, round(value))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if seconds or not parts:
+        parts.append(f"{seconds}s")
+    return " ".join(parts)
 
 
 def _rate(value: float | None) -> str:

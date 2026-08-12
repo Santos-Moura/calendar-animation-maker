@@ -51,6 +51,8 @@ class UploadInvocationPerformance(BaseModel):
     started_at: datetime
     finished_at: datetime | None = None
     elapsed_seconds: float | None = Field(default=None, ge=0)
+    active_upload_elapsed_seconds: float | None = Field(default=None, ge=0)
+    quota_wait_elapsed_seconds: float = Field(default=0.0, ge=0)
     status: InvocationStatus = "running"
     frames_previously_completed: list[int] = Field(default_factory=list)
     frames_uploaded_this_invocation: list[int] = Field(default_factory=list)
@@ -72,6 +74,9 @@ class UploadPerformanceReport(BaseModel):
     upload_started_at: datetime | None = None
     upload_finished_at: datetime | None = None
     total_elapsed_seconds: float = Field(default=0, ge=0)
+    active_upload_elapsed_seconds: float = Field(default=0, ge=0)
+    quota_wait_total_seconds: float = Field(default=0, ge=0)
+    wall_clock_elapsed_seconds: float = Field(default=0, ge=0)
     total_planned_events: int = Field(ge=0)
     total_created_events: int = Field(default=0, ge=0)
     total_failed_events: int = Field(default=0, ge=0)
@@ -81,6 +86,14 @@ class UploadPerformanceReport(BaseModel):
     quota_exceeded_count: int = Field(default=0, ge=0)
     adaptive_rate_limit_cooldowns: int = Field(default=0, ge=0)
     quota_circuit_breaker_count: int = Field(default=0, ge=0)
+    quota_wait_entries: int = Field(default=0, ge=0)
+    quota_wait_attempts: int = Field(default=0, ge=0)
+    quota_recoveries: int = Field(default=0, ge=0)
+    largest_quota_cooldown_seconds: float = Field(default=0, ge=0)
+    current_write_interval_seconds: float | None = Field(default=None, ge=0)
+    last_write_interval_seconds: float | None = Field(default=None, ge=0)
+    active_throughput_eta_seconds: float | None = Field(default=None, ge=0)
+    wall_clock_eta_seconds: float | None = Field(default=None, ge=0)
     pause: UploadPauseMetadata | None = None
     pause_history: list[UploadPauseMetadata] = Field(default_factory=list)
     frames: list[FrameUploadPerformance] = Field(default_factory=list)
@@ -201,10 +214,16 @@ def finish_upload_invocation(
     *,
     finished_at: datetime,
     elapsed_seconds: float,
+    quota_wait_elapsed_seconds: float = 0.0,
     status: InvocationStatus,
 ) -> UploadPerformanceReport:
     invocation.finished_at = finished_at
     invocation.elapsed_seconds = max(0.0, elapsed_seconds)
+    invocation.quota_wait_elapsed_seconds = max(0.0, quota_wait_elapsed_seconds)
+    invocation.active_upload_elapsed_seconds = max(
+        0.0,
+        invocation.elapsed_seconds - invocation.quota_wait_elapsed_seconds,
+    )
     invocation.status = status
     refreshed = refresh_performance_report(report, plan, state)
     if all(frame.status is FrameUploadStatus.COMPLETED for frame in state.frames):
@@ -220,21 +239,27 @@ def refresh_performance_report(
     report.frames = [_frame_from_state(plan, frame_state) for frame_state in state.frames]
     attempts = [frame for invocation in report.invocations for frame in invocation.frames]
     measured_invocations = [
-        invocation
-        for invocation in report.invocations
-        if invocation.frames_uploaded_this_invocation and invocation.elapsed_seconds is not None
+        invocation for invocation in report.invocations if invocation.elapsed_seconds is not None
     ]
     report.total_planned_events = plan.total_events
     report.total_created_events = sum(frame.created_events for frame in attempts)
     report.total_failed_events = sum(frame.failed_events for frame in attempts)
-    report.total_elapsed_seconds = sum(
-        invocation.elapsed_seconds or 0.0 for invocation in measured_invocations
+    report.quota_wait_total_seconds = state.quota_wait_total_seconds
+    report.active_upload_elapsed_seconds = sum(
+        invocation.active_upload_elapsed_seconds
+        if invocation.active_upload_elapsed_seconds is not None
+        else invocation.elapsed_seconds or 0.0
+        for invocation in measured_invocations
     )
+    report.wall_clock_elapsed_seconds = (
+        report.active_upload_elapsed_seconds + report.quota_wait_total_seconds
+    )
+    report.total_elapsed_seconds = report.wall_clock_elapsed_seconds
     report.overall_events_per_second = calculate_events_per_second(
-        report.total_created_events, report.total_elapsed_seconds
+        report.total_created_events, report.active_upload_elapsed_seconds
     )
     report.average_seconds_per_frame = (
-        report.total_elapsed_seconds / len(attempts) if attempts else None
+        report.active_upload_elapsed_seconds / len(attempts) if attempts else None
     )
     report.rate_limit_exceeded_count = sum(
         frame.rate_limit_exceeded_count for frame in state.frames
@@ -248,6 +273,35 @@ def refresh_performance_report(
     )
     report.pause = state.pause
     report.pause_history = list(state.pause_history)
+    report.quota_wait_entries = state.quota_wait_entries
+    report.quota_wait_attempts = state.quota_wait_attempts
+    report.quota_recoveries = state.quota_recoveries
+    report.largest_quota_cooldown_seconds = state.largest_quota_cooldown_seconds
+    report.current_write_interval_seconds = (
+        state.write_pacing.current_interval_seconds if state.write_pacing else None
+    )
+    report.last_write_interval_seconds = (
+        state.write_pacing.previous_interval_seconds if state.write_pacing else None
+    )
+    remaining_events = max(
+        0,
+        plan.total_events - sum(frame.created_events for frame in state.frames),
+    )
+    report.active_throughput_eta_seconds = (
+        remaining_events / report.overall_events_per_second
+        if report.overall_events_per_second
+        else None
+    )
+    active_ratio = (
+        report.wall_clock_elapsed_seconds / report.active_upload_elapsed_seconds
+        if report.active_upload_elapsed_seconds > 0
+        else None
+    )
+    report.wall_clock_eta_seconds = (
+        report.active_throughput_eta_seconds * active_ratio
+        if report.active_throughput_eta_seconds is not None and active_ratio is not None
+        else None
+    )
     return report
 
 
@@ -305,6 +359,8 @@ def build_performance_text(report: UploadPerformanceReport) -> str:
                 f"  Started: {_datetime(invocation.started_at)}",
                 f"  Finished: {_datetime(invocation.finished_at)}",
                 f"  Elapsed seconds: {_number(invocation.elapsed_seconds)}",
+                "  Active upload seconds: " + _number(invocation.active_upload_elapsed_seconds),
+                f"  Quota wait seconds: {_number(invocation.quota_wait_elapsed_seconds)}",
                 "  Previously completed: " + _indexes(invocation.frames_previously_completed),
                 "  Uploaded this invocation: "
                 + _indexes(invocation.frames_uploaded_this_invocation),
@@ -319,12 +375,23 @@ def build_performance_text(report: UploadPerformanceReport) -> str:
             f"Created events: {report.total_created_events}",
             f"Failed events: {report.total_failed_events}",
             f"Elapsed seconds: {_number(report.total_elapsed_seconds)}",
+            f"Active upload seconds: {_number(report.active_upload_elapsed_seconds)}",
+            f"Quota wait seconds: {_number(report.quota_wait_total_seconds)}",
+            f"Wall-clock seconds: {_number(report.wall_clock_elapsed_seconds)}",
             f"Events/second: {_number(report.overall_events_per_second)}",
             f"Average seconds/frame: {_number(report.average_seconds_per_frame)}",
             f"Rate limit exceeded count: {report.rate_limit_exceeded_count}",
             f"Quota exceeded count: {report.quota_exceeded_count}",
             f"Adaptive rate-limit cooldowns: {report.adaptive_rate_limit_cooldowns}",
             f"Quota circuit breaker count: {report.quota_circuit_breaker_count}",
+            f"Quota wait entries: {report.quota_wait_entries}",
+            f"Quota wait attempts: {report.quota_wait_attempts}",
+            f"Quota recoveries: {report.quota_recoveries}",
+            "Largest quota cooldown seconds: " + _number(report.largest_quota_cooldown_seconds),
+            "Current write interval seconds: " + _number(report.current_write_interval_seconds),
+            "Last write interval seconds: " + _number(report.last_write_interval_seconds),
+            "Active throughput ETA seconds: " + _number(report.active_throughput_eta_seconds),
+            "Wall-clock ETA seconds: " + _number(report.wall_clock_eta_seconds),
             f"Quota pause history: {len(report.pause_history)}",
             "Active pause: " + _pause(report.pause),
             "",

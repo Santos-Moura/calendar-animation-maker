@@ -4,6 +4,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, model_validator
 
 from calendar_anim.calendar.frame_mapping.models import EventCompressionMode, FrameMappingMode
+from calendar_anim.calendar.models import CalendarWritePacingSnapshot
 from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 
 
@@ -31,6 +32,18 @@ class UploadPauseMetadata(BaseModel):
     @property
     def remaining_events(self) -> int:
         return max(0, self.planned_events - self.created_before_pause)
+
+
+class QuotaWaitState(BaseModel):
+    frame_index: int = Field(ge=0)
+    entered_at: datetime
+    last_accounted_at: datetime
+    next_retry_at: datetime
+    max_wait_until: datetime
+    stage_index: int = Field(ge=0)
+    attempts: int = Field(default=0, ge=0)
+    last_cooldown_seconds: float = Field(gt=0)
+    exhausted: bool = False
 
 
 class FrameUploadPlan(BaseModel):
@@ -164,6 +177,13 @@ class AnimationUploadState(BaseModel):
     calendar_created: bool = False
     pause: UploadPauseMetadata | None = None
     pause_history: list[UploadPauseMetadata] = Field(default_factory=list)
+    quota_wait: QuotaWaitState | None = None
+    quota_wait_entries: int = Field(default=0, ge=0)
+    quota_wait_total_seconds: float = Field(default=0.0, ge=0)
+    quota_wait_attempts: int = Field(default=0, ge=0)
+    quota_recoveries: int = Field(default=0, ge=0)
+    largest_quota_cooldown_seconds: float = Field(default=0.0, ge=0)
+    write_pacing: CalendarWritePacingSnapshot | None = None
     frames: list[FrameUploadState]
     updated_at: datetime
 

@@ -301,8 +301,30 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
             "are recreated; legacy/inconsistent frames use metadata-scoped cleanup as fallback.",
             "Retryable event failures use bounded exponential backoff with jitter.",
             "Calendar quotaExceeded opens a circuit breaker: the current frame remains "
-            "partial, existing events are preserved, and the whole run stops safely.",
+            "partial and existing events are preserved.",
+            "When enabled for the run, long quota waits use one real deterministic missing "
+            "event as the recovery probe and resume automatically after success.",
             "The upload stops on the first frame failure.",
+            "",
+            "Quota wait metrics",
+            "------------------",
+            f"Entries: {state.quota_wait_entries}",
+            f"Wait seconds: {state.quota_wait_total_seconds:.2f}",
+            f"Probe attempts: {state.quota_wait_attempts}",
+            f"Recoveries: {state.quota_recoveries}",
+            f"Largest cooldown seconds: {state.largest_quota_cooldown_seconds:.2f}",
+            "Current write interval seconds: "
+            + (
+                f"{state.write_pacing.current_interval_seconds:.2f}"
+                if state.write_pacing
+                else "not persisted"
+            ),
+            "Last write interval seconds: "
+            + (
+                f"{state.write_pacing.previous_interval_seconds:.2f}"
+                if state.write_pacing and state.write_pacing.previous_interval_seconds is not None
+                else "not persisted"
+            ),
             "",
             "Active pause",
             "------------",
@@ -321,9 +343,16 @@ def _pause_text(state: AnimationUploadState) -> str:
     pause = state.pause
     if pause is None:
         return "none"
-    return (
+    value = (
         f"{pause.reason.value}; status={pause.http_status}; "
         f"google_reason={pause.google_reason}; frame={pause.frame_index}; "
         f"created={pause.created_before_pause}/{pause.planned_events}; "
         f"timestamp={pause.timestamp.isoformat()}"
     )
+    if state.quota_wait is not None:
+        value += (
+            f"; wait_stage={state.quota_wait.stage_index + 1}; "
+            f"next_retry_at={state.quota_wait.next_retry_at.isoformat()}; "
+            f"max_wait_until={state.quota_wait.max_wait_until.isoformat()}"
+        )
+    return value

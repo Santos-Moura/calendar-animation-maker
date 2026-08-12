@@ -1,6 +1,7 @@
 from typing import Final
 
 from calendar_anim.calendar.calibration.models import CalibrationProfile
+from calendar_anim.calendar.multi_frame.quota_wait import QuotaWaitPolicy
 from calendar_anim.exceptions import CalendarAnimError
 
 HIGH_DETAIL_GRID: Final = "126x72"
@@ -13,6 +14,12 @@ HIGH_DETAIL_EXPERIMENTAL_MAX_EVENTS: Final = 2500
 FINAL_CUTSCENE_RUN_ID: Final = "cayde-final-126x72-3fps-36s-01"
 FINAL_CUTSCENE_MAX_EVENTS: Final = 5200
 FINAL_CUTSCENE_MIN_WRITE_INTERVAL_SECONDS: Final = 0.75
+FINAL_CUTSCENE_QUOTA_WAIT_POLICY: Final = QuotaWaitPolicy(
+    cooldown_seconds=(900.0, 1800.0, 3600.0, 7200.0, 14400.0),
+    jitter_seconds=180.0,
+    max_auto_wait_seconds=48 * 60 * 60,
+    conservative_recovery_interval_seconds=1.5,
+)
 
 
 def high_detail_max_events_for_run(run_id: str) -> int:
@@ -29,6 +36,14 @@ def minimum_write_interval_for_run(run_id: str) -> float:
     if run_id == FINAL_CUTSCENE_RUN_ID:
         return FINAL_CUTSCENE_MIN_WRITE_INTERVAL_SECONDS
     return 0.0
+
+
+def quota_wait_policy_for_run(run_id: str) -> QuotaWaitPolicy | None:
+    """Enable unattended long quota waits only for the approved final run."""
+
+    if run_id == FINAL_CUTSCENE_RUN_ID:
+        return FINAL_CUTSCENE_QUOTA_WAIT_POLICY
+    return None
 
 
 def is_high_detail_geometry(
