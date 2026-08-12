@@ -170,6 +170,7 @@ class ReadOnlyFakeGateway:
             "rendered_color_counts": {"rgb(121, 134, 203)": 1},
             "logical_cell_width": 4.0,
             "logical_cell_height": 4.0,
+            "logical_clip": {"x": 0.0, "y": 0.0, "width": 504.0, "height": 288.0},
         }
 
 
@@ -390,6 +391,23 @@ def test_population_polling_waits_for_complete_stable_dom() -> None:
     assert result.unique_event_count == 972
     assert len(result.samples) == 5
     assert result.samples[-1]["stable_sequence"] == 3
+
+
+def test_population_polling_does_not_require_an_exact_unique_count() -> None:
+    clock = FakeClock()
+
+    result = wait_for_stable_population(
+        lambda: (_audit(970), 0.9, {"left": 72.0, "width": 1764.0}),
+        expected_count=972,
+        timeout_seconds=5,
+        interval_seconds=1,
+        stable_samples=3,
+        expected_coordinate_scale=0.9,
+        clock=clock,
+        sleeper=clock.sleep,
+    )
+
+    assert result.unique_event_count == 970
 
 
 def test_population_timeout_is_capture_load_failure() -> None:
