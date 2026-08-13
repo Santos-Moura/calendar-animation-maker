@@ -227,3 +227,44 @@ class HybridSeamReport(BaseModel):
     geometry_result: str
     visual_approval_required: bool = True
     google_calendar_writes: bool = False
+
+
+class SingleProfilePreviewFrameResult(BaseModel):
+    human_frame: int = Field(ge=1, le=108)
+    frame_index: int = Field(ge=0, le=107)
+    expected_week: date
+    visible_week: date | None = None
+    week_validation: str
+    output: str
+    output_size: tuple[int, int]
+    header_present: bool
+    pre_06_blank_gap_present: bool
+    vertical_interval: str
+    capture: str
+    native_browser_viewport: dict[str, object]
+    native_composed_crop_dimensions: tuple[int, int]
+    header_source_rect: list[int]
+    grid_source_rect: list[int]
+    header_output_rect: list[int]
+    grid_output_rect: list[int]
+    current_url: str | None = None
+
+
+class SingleProfilePreviewReport(BaseModel):
+    schema_version: str = "1.0"
+    run_id: str
+    profile: str = "account-b"
+    zoom_percent: int = 90
+    mode: HybridOutputMode = HybridOutputMode.HEADER_PRESERVED_FILL
+    resolution: tuple[int, int] = (1512, 864)
+    navigation_version: str = CURRENT_PROFILE_NAVIGATION_VERSION
+    capture_implementation_version: str = CURRENT_CAPTURE_IMPLEMENTATION_VERSION
+    frames: list[SingleProfilePreviewFrameResult]
+    frame_23_to_24_delta_days: int | None = None
+    geometry_consistent: bool
+    geometry_warning: str | None = None
+    checkpoint_touched: bool = False
+    full_capture_outputs_touched: bool = False
+    account_a_opened: bool = False
+    google_calendar_writes: bool = False
+    preview: str

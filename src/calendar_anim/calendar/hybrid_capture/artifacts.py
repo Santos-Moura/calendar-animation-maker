@@ -443,6 +443,24 @@ class AccountBSingleCaptureStore(HybridCaptureStore):
             / f"frame_{frame_index:03d}.png"
         )
 
+    def preview_directory(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "single-profile-preview"
+
+    def preview_frame_path(self, run_id: str, frame_index: int) -> Path:
+        return self.preview_directory(run_id) / f"frame_{frame_index:03d}.png"
+
+    def preview_component_path(self, run_id: str, frame_index: int, component: str) -> Path:
+        return self.preview_directory(run_id) / component / f"frame_{frame_index:03d}.png"
+
+    def preview_debug_directory(self, run_id: str, frame_index: int) -> Path:
+        return self.preview_directory(run_id) / "debug" / f"frame-{frame_index:03d}"
+
+    def preview_report_path(self, run_id: str) -> Path:
+        return self.preview_directory(run_id) / "report.json"
+
+    def preview_report_text_path(self, run_id: str) -> Path:
+        return self.preview_directory(run_id) / "report.txt"
+
 
 def normalize_grid(source: Path, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -476,6 +494,10 @@ def compose_output_mode(
             target_width, target_height = resolution
             if source_width <= 0 or source_height <= 0:
                 raise CalendarAnimError("Calendar mode source has invalid dimensions")
+            header_source_rect: list[int] | None = None
+            grid_source_rect: list[int] | None = None
+            header_output_rect: list[int] | None = None
+            grid_output_rect: list[int] | None = None
             if mode is HybridOutputMode.HEADER_PRESERVED_LETTERBOX:
                 scale = min(target_width / source_width, target_height / source_height)
                 content_size = (
@@ -503,6 +525,20 @@ def compose_output_mode(
                     1, round(target_height * native_header_height / source_height)
                 )
                 target_grid_height = target_height - target_header_height
+                header_source_rect = [0, 0, source_width, native_header_height]
+                grid_source_rect = [
+                    0,
+                    native_header_height,
+                    source_width,
+                    source_height - native_header_height,
+                ]
+                header_output_rect = [0, 0, target_width, target_header_height]
+                grid_output_rect = [
+                    0,
+                    target_header_height,
+                    target_width,
+                    target_grid_height,
+                ]
                 native_header = source.crop((0, 0, source_width, native_header_height))
                 native_grid = source.crop((0, native_header_height, source_width, source_height))
                 resized_header = native_header.resize(
@@ -555,6 +591,10 @@ def compose_output_mode(
         "resize_passes": 1,
         "header_resample_method": header_method,
         "grid_resample_method": grid_method,
+        "header_source_rect": header_source_rect,
+        "grid_source_rect": grid_source_rect,
+        "header_output_rect": header_output_rect,
+        "grid_output_rect": grid_output_rect,
         "resampling": (header_method if header_method == grid_method else "hybrid"),
         "blur_or_sharpen": False,
         "notes": _mode_notes(mode),

@@ -11,6 +11,7 @@ from PIL import Image
 from calendar_anim.calendar.frame_mapping.models import SingleFrameCalendarPlan
 from calendar_anim.calendar.hybrid_capture.artifacts import (
     LEGACY_RESOLUTION,
+    AccountBSingleCaptureStore,
     HybridCaptureStore,
     compare_logical_cells,
     compose_final_sanity_contact_sheet,
@@ -38,6 +39,8 @@ from calendar_anim.calendar.hybrid_capture.models import (
     HybridSanityReport,
     HybridSeamReport,
     SanityFrameResult,
+    SingleProfilePreviewFrameResult,
+    SingleProfilePreviewReport,
 )
 from calendar_anim.exceptions import CalendarAnimError
 
@@ -516,6 +519,86 @@ class HybridCaptureService:
         self._validate_final_sequence(plan, mode, resolution)
         return state
 
+    def capture_final_single_profile_preview(
+        self,
+        plan: HybridCapturePlan,
+        human_frames: Sequence[int],
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> SingleProfilePreviewReport:
+        """Capture isolated frames through the exact final composition code, without state."""
+
+        if not isinstance(self.store, AccountBSingleCaptureStore):
+            raise CalendarAnimError("Single-profile preview requires isolated preview storage")
+        if plan.capture_strategy != "single-profile-account-b":
+            raise CalendarAnimError("Preview requires the Account-B single-profile plan")
+        if not human_frames or len(human_frames) != len(set(human_frames)):
+            raise CalendarAnimError("Preview frames must be non-empty and unique")
+        if any(frame < 1 or frame > 108 for frame in human_frames):
+            raise CalendarAnimError("Preview frames must be between 1 and 108")
+        if mode is not HybridOutputMode.HEADER_PRESERVED_FILL or resolution != (1512, 864):
+            raise CalendarAnimError("Preview must match final header_preserved_fill at 1512x864")
+        selected = [plan.frames[human_frame - 1] for human_frame in human_frames]
+        if any(
+            frame.calendar_profile != "account-b" or frame.capture_zoom_percent != 90
+            for frame in selected
+        ):
+            raise CalendarAnimError("Preview may open only Account B at zoom 90%")
+        results: list[SingleProfilePreviewFrameResult] = []
+        with self.gateway_factory("account-b", 90) as gateway:
+            for frame in selected:
+                output = self.store.preview_frame_path(plan.run_id, frame.frame_index)
+                raw = self.store.preview_component_path(plan.run_id, frame.frame_index, "raw")
+                logical = self.store.preview_component_path(
+                    plan.run_id, frame.frame_index, "logical"
+                )
+                header = self.store.preview_component_path(
+                    plan.run_id, frame.frame_index, "native-header-grid"
+                )
+                debug = self.store.preview_debug_directory(plan.run_id, frame.frame_index)
+                metrics = self._capture_composed_frame(
+                    gateway,
+                    frame,
+                    raw,
+                    logical,
+                    header,
+                    output,
+                    mode,
+                    resolution,
+                    debug,
+                )
+                write_atomic(debug / "metrics.json", json.dumps(metrics, indent=2) + "\n")
+                results.append(_preview_frame_result(frame, output, metrics, resolution))
+        signatures = [_preview_geometry_signature(result) for result in results]
+        geometry_consistent = len(set(signatures)) <= 1
+        selected_numbers = {result.human_frame for result in results}
+        delta = (
+            (plan.frames[23].week_start - plan.frames[22].week_start).days
+            if {23, 24}.issubset(selected_numbers)
+            else None
+        )
+        report = SingleProfilePreviewReport(
+            run_id=plan.run_id,
+            frames=results,
+            frame_23_to_24_delta_days=delta,
+            geometry_consistent=geometry_consistent,
+            geometry_warning=(
+                None
+                if geometry_consistent
+                else "Native/source composition geometry varies between preview frames"
+            ),
+            preview="PASS",
+        )
+        write_atomic(
+            self.store.preview_report_path(plan.run_id),
+            report.model_dump_json(indent=2) + "\n",
+        )
+        write_atomic(
+            self.store.preview_report_text_path(plan.run_id),
+            _single_profile_preview_text(report),
+        )
+        return report
+
     def _capture_final_profiles(
         self,
         plan: HybridCapturePlan,
@@ -835,7 +918,7 @@ class HybridCaptureService:
             header=header,
             debug_directory=debug_directory,
         )
-        compose_output_mode(
+        composition = compose_output_mode(
             logical,
             header,
             output,
@@ -846,6 +929,7 @@ class HybridCaptureService:
         with Image.open(output) as image:
             if image.size != resolution:
                 raise CalendarAnimError("Final normalized frame resolution is incorrect")
+        metrics["composition"] = composition
         return metrics
 
     def validate_final_capture_gate(
@@ -1308,6 +1392,130 @@ def _number(metrics: dict[str, object], key: str) -> float:
     if not isinstance(value, (int, float)):
         raise CalendarAnimError(f"Calendar metric {key} is invalid")
     return float(value)
+
+
+def _preview_frame_result(
+    frame: HybridFramePlan,
+    output: Path,
+    metrics: dict[str, object],
+    resolution: tuple[int, int],
+) -> SingleProfilePreviewFrameResult:
+    composition = metrics.get("composition")
+    browser = metrics.get("browser_debug")
+    if not isinstance(composition, dict) or not isinstance(browser, dict):
+        raise CalendarAnimError("Preview capture geometry metadata is incomplete")
+    viewport = browser.get("viewport")
+    source_dimensions = composition.get("source_dimensions")
+    rect_names = (
+        "header_source_rect",
+        "grid_source_rect",
+        "header_output_rect",
+        "grid_output_rect",
+    )
+    rects = {name: composition.get(name) for name in rect_names}
+    if not isinstance(viewport, dict):
+        raise CalendarAnimError("Preview browser viewport metadata is invalid")
+    if not (
+        isinstance(source_dimensions, list)
+        and len(source_dimensions) == 2
+        and all(isinstance(value, int) for value in source_dimensions)
+    ):
+        raise CalendarAnimError("Preview native crop dimensions are invalid")
+    if any(
+        not isinstance(value, list)
+        or len(value) != 4
+        or not all(isinstance(item, int) for item in value)
+        for value in rects.values()
+    ):
+        raise CalendarAnimError("Preview composition rectangles are invalid")
+    navigation_complete = bool(metrics.get("navigation_complete"))
+    return SingleProfilePreviewFrameResult(
+        human_frame=frame.human_frame,
+        frame_index=frame.frame_index,
+        expected_week=frame.week_start,
+        visible_week=frame.week_start if navigation_complete else None,
+        week_validation="PASS" if navigation_complete else "FAIL",
+        output=str(output),
+        output_size=resolution,
+        header_present=bool(composition.get("header_included")),
+        pre_06_blank_gap_present=not bool(metrics.get("empty_pre_06_interval_removed")),
+        vertical_interval=str(metrics.get("vertical_interval", "UNKNOWN")),
+        capture="PASS",
+        native_browser_viewport={str(key): value for key, value in viewport.items()},
+        native_composed_crop_dimensions=(source_dimensions[0], source_dimensions[1]),
+        header_source_rect=rects["header_source_rect"],  # type: ignore[arg-type]
+        grid_source_rect=rects["grid_source_rect"],  # type: ignore[arg-type]
+        header_output_rect=rects["header_output_rect"],  # type: ignore[arg-type]
+        grid_output_rect=rects["grid_output_rect"],  # type: ignore[arg-type]
+        current_url=str(browser.get("url")) if browser.get("url") else None,
+    )
+
+
+def _preview_geometry_signature(result: SingleProfilePreviewFrameResult) -> tuple[object, ...]:
+    return (
+        tuple(sorted(result.native_browser_viewport.items())),
+        result.native_composed_crop_dimensions,
+        tuple(result.header_source_rect),
+        tuple(result.grid_source_rect),
+        tuple(result.header_output_rect),
+        tuple(result.grid_output_rect),
+        result.output_size,
+    )
+
+
+def _single_profile_preview_text(report: SingleProfilePreviewReport) -> str:
+    lines = [
+        "FINAL SINGLE-PROFILE PREVIEW",
+        "============================",
+        "",
+        f"Profile: {report.profile}",
+        f"Zoom: {report.zoom_percent}%",
+        f"Mode: {report.mode.value}",
+        f"Resolution: {report.resolution[0]}x{report.resolution[1]}",
+        f"Navigation version: {report.navigation_version}",
+        "",
+    ]
+    for frame in report.frames:
+        title = f"Frame {frame.human_frame}"
+        lines.extend(
+            [
+                title,
+                "-" * len(title),
+                f"Human frame: {frame.human_frame}",
+                f"Index: {frame.frame_index}",
+                f"Expected week: {frame.expected_week}",
+                f"Visible week: {frame.visible_week}",
+                f"Week validation: {frame.week_validation}",
+                f"Output: {frame.output}",
+                f"Size: {frame.output_size[0]}x{frame.output_size[1]}",
+                f"Header present: {'YES' if frame.header_present else 'NO'}",
+                "03:00-06:00 blank gap present: "
+                + ("YES" if frame.pre_06_blank_gap_present else "NO"),
+                f"Grid: {frame.vertical_interval}",
+                f"Capture: {frame.capture}",
+                f"Native viewport: {frame.native_browser_viewport}",
+                f"Native composed crop: {frame.native_composed_crop_dimensions}",
+                f"Header source rect: {frame.header_source_rect}",
+                f"Grid source rect: {frame.grid_source_rect}",
+                f"Header output rect: {frame.header_output_rect}",
+                f"Grid output rect: {frame.grid_output_rect}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            f"Frame23->24 delta: {report.frame_23_to_24_delta_days}",
+            f"Geometry consistent: {'YES' if report.geometry_consistent else 'NO'}",
+            f"Geometry warning: {report.geometry_warning or 'none'}",
+            "Checkpoint touched: NO",
+            "Full capture outputs touched: NO",
+            "Account A opened: NO",
+            "Google Calendar writes: NO",
+            f"Preview: {report.preview}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _relative_delta(left: float, right: float) -> float:

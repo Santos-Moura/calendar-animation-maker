@@ -150,3 +150,15 @@ def parse_human_frames(value: str) -> list[int]:
     if any(frame < 24 or frame > 108 for frame in frames):
         raise CalendarAnimError("Account-B sanity frames must be in human range 24-108")
     return frames
+
+
+def parse_single_profile_preview_frames(value: str) -> list[int]:
+    try:
+        frames = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as error:
+        raise CalendarAnimError("--frames must be comma-separated human frame numbers") from error
+    if not frames or len(frames) != len(set(frames)):
+        raise CalendarAnimError("--frames must contain unique human frame numbers")
+    if any(frame < 1 or frame > 108 for frame in frames):
+        raise CalendarAnimError("Preview frames must be in human range 1-108")
+    return frames

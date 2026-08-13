@@ -32,6 +32,7 @@ from calendar_anim.calendar.hybrid_capture.planner import (
     build_account_b_single_profile_capture_plan,
     build_final_capture_plan,
     parse_human_frames,
+    parse_single_profile_preview_frames,
 )
 from calendar_anim.calendar.hybrid_capture.service import (
     HybridBrowserGateway,
@@ -617,6 +618,78 @@ def _validate_single_profile_capture_gates() -> None:
         raise CalendarAnimError("Account-B prefix remote audit is not exact")
 
 
+def capture_final_single_profile_preview_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
+    profile: Annotated[str, typer.Option("--profile")] = "account-b",
+    frames: Annotated[str, typer.Option("--frames")] = "23,24",
+    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
+        HybridOutputMode.HEADER_PRESERVED_FILL
+    ),
+    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
+    stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
+    ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Capture isolated Account-B frames through the exact final visual pipeline."""
+
+    try:
+        if profile != "account-b":
+            raise CalendarAnimError("Single-profile preview is restricted to account-b")
+        selected = parse_single_profile_preview_frames(frames)
+        if mode is not HybridOutputMode.HEADER_PRESERVED_FILL:
+            raise CalendarAnimError("Single-profile preview requires header_preserved_fill")
+        output_resolution = parse_output_resolution(resolution)
+        if output_resolution != (1512, 864):
+            raise CalendarAnimError("Single-profile preview requires resolution 1512x864")
+        validate_input_hash(Path("input.mp4"))
+        source_store = AnimationRunStore()
+        source = source_store.load_plan(FINAL_SOURCE_RUN_ID)
+        plan = build_account_b_single_profile_capture_plan(
+            source, run_id, source_store=source_store
+        )
+        store = AccountBSingleCaptureStore()
+        store.save_plan(plan)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo("FINAL SINGLE-PROFILE PREVIEW")
+    typer.echo("Profile: account-b")
+    typer.echo("Zoom: 90%")
+    typer.echo(f"Frames: {', '.join(str(frame) for frame in selected)}")
+    for human_frame in selected:
+        frame = plan.frames[human_frame - 1]
+        typer.echo(f"Human frame {human_frame}: index {frame.frame_index}, week {frame.week_start}")
+    typer.echo(f"Mode: {mode.value}")
+    typer.echo(f"Resolution: {resolution_name(output_resolution)}")
+    typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
+    typer.echo(f"Output: {store.preview_directory(run_id)}")
+    if not execute:
+        typer.echo("Full capture checkpoint: NOT TOUCHED")
+        typer.echo("Account A browser: NOT OPENED")
+        typer.echo("Google Calendar writes: NO")
+        return
+    try:
+        report = HybridCaptureService(
+            store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
+        ).capture_final_single_profile_preview(plan, selected, mode, output_resolution)
+    except KeyboardInterrupt:
+        typer.secho("Preview interrupted; full capture checkpoint was untouched.", fg="yellow")
+        raise typer.Exit(code=130) from None
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    for result in report.frames:
+        typer.echo(
+            f"Frame {result.human_frame}: index={result.frame_index}, "
+            f"week={result.expected_week}, capture={result.capture}, output={result.output}"
+        )
+    typer.echo(f"Geometry consistent: {'YES' if report.geometry_consistent else 'NO'}")
+    if report.geometry_warning:
+        typer.secho(f"WARNING: {report.geometry_warning}", fg="yellow")
+    typer.echo(f"Report: {store.preview_report_path(run_id)}")
+    typer.echo("Full capture checkpoint: NOT TOUCHED")
+    typer.echo("Account A browser: NOT OPENED")
+    typer.echo("Google Calendar writes: NO")
+
+
 def mux_final_hybrid_audio_command(
     run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
     mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (HybridOutputMode.PIXEL_FAITHFUL),
@@ -683,5 +756,8 @@ def register_hybrid_capture_commands(app: typer.Typer) -> None:
     app.command("capture-hybrid-seam")(capture_hybrid_seam_command)
     app.command("capture-final-hybrid")(capture_final_hybrid_command)
     app.command("capture-final-single-profile")(capture_final_single_profile_command)
+    app.command("capture-final-single-profile-preview")(
+        capture_final_single_profile_preview_command
+    )
     app.command("compose-final-hybrid")(compose_final_hybrid_command)
     app.command("mux-final-hybrid-audio")(mux_final_hybrid_audio_command)
