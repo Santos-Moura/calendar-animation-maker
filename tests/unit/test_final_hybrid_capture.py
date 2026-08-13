@@ -30,6 +30,7 @@ from calendar_anim.calendar.frame_mapping.models import (
 from calendar_anim.calendar.hybrid_capture import commands as hybrid_commands
 from calendar_anim.calendar.hybrid_capture.artifacts import (
     HIGH_RESOLUTION,
+    AccountBSingleCaptureStore,
     HybridCaptureStore,
     compose_output_mode,
     normalize_grid,
@@ -1155,3 +1156,72 @@ def test_full_resume_skips_completed_account_a_profile_context(tmp_path: Path) -
     assert payload["frame_index"] == 23
     assert payload["week_start"] == "2028-01-02"
     assert payload["zoom_expected"] == 90
+
+
+def test_single_profile_preview_uses_final_capture_code_and_never_mutates_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _hybrid_plan(tmp_path)
+    source.capture_strategy = "single-profile-account-b"
+    for frame in source.frames:
+        frame.calendar_profile = "account-b"
+        frame.calendar_name = "Calendar Animation Lab B"
+        frame.capture_zoom_percent = 90
+    source = HybridCapturePlan.model_validate(source.model_dump())
+    store = AccountBSingleCaptureStore(tmp_path / "runs")
+    mode = HybridOutputMode.HEADER_PRESERVED_FILL
+    resolution = HIGH_RESOLUTION
+    state = store.initialize_state(source, mode, resolution)
+    state_before = store.state_path(source.run_id, mode, resolution).read_bytes()
+    calls: list[tuple[int, Path]] = []
+    original = HybridCaptureService._capture_composed_frame
+
+    def tracked(
+        self,
+        gateway,
+        frame,
+        raw,
+        logical,
+        header,
+        output,
+        selected_mode,
+        selected_resolution,
+        debug,
+    ):  # type: ignore[no-untyped-def]
+        calls.append((frame.frame_index, output))
+        return original(
+            self,
+            gateway,
+            frame,
+            raw,
+            logical,
+            header,
+            output,
+            selected_mode,
+            selected_resolution,
+            debug,
+        )
+
+    monkeypatch.setattr(HybridCaptureService, "_capture_composed_frame", tracked)
+    launched: list[tuple[str, int]] = []
+
+    def factory(profile: str, zoom: int) -> ReadOnlyFakeGateway:
+        launched.append((profile, zoom))
+        return ReadOnlyFakeGateway(zoom)
+
+    report = HybridCaptureService(store, factory).capture_final_single_profile_preview(
+        source, [23, 24], mode, resolution
+    )
+
+    assert calls == [
+        (22, store.preview_frame_path(source.run_id, 22)),
+        (23, store.preview_frame_path(source.run_id, 23)),
+    ]
+    assert launched == [("account-b", 90)]
+    assert report.frames[0].human_frame == 23
+    assert report.frames[0].frame_index == 22
+    assert report.frames[1].human_frame == 24
+    assert report.frames[1].frame_index == 23
+    assert store.state_path(source.run_id, mode, resolution).read_bytes() == state_before
+    assert all(item.status is HybridFrameStatus.PENDING for item in state.frames)
+    assert not store.final_frame_path(source.run_id, 22, mode, resolution).exists()
