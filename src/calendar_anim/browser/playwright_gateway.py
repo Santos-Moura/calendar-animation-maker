@@ -1243,7 +1243,11 @@ class PlaywrightCalendarCaptureGateway:
             self._week_header_grid_clip, grid_clip, time_clip
         )
         header_clip = self._week_header_grid_clip
-        timezone_clip, timezone_label = self._timezone_gutter_clip(full_header_clip, gutter_width)
+        timezone_clip, timezone_label = self._timezone_gutter_clip(
+            full_header_clip,
+            gutter_width,
+            time_grid_top=time_grid_clip["y"],
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         page = self._require_page()
         header_bytes = page.screenshot(animations="disabled", scale="css", clip=header_clip)
@@ -1269,7 +1273,7 @@ class PlaywrightCalendarCaptureGateway:
                 header.getpixel((min(4, header.width - 1), min(4, header.height - 1))),
             )
             timezone_x = max(0, round(timezone_clip["x"] - full_header_clip["x"]))
-            timezone_y = max(0, round(timezone_clip["y"] - full_header_clip["y"]))
+            timezone_y = max(0, header.height - timezone.height - 2)
             composed.paste(timezone, (timezone_x, timezone_y))
             composed.paste(header, (native_gutter_width, 0))
             composed.paste(time_grid, (0, header.height))
@@ -1309,7 +1313,11 @@ class PlaywrightCalendarCaptureGateway:
         }
 
     def _timezone_gutter_clip(
-        self, full_header_clip: dict[str, float], gutter_width: float
+        self,
+        full_header_clip: dict[str, float],
+        gutter_width: float,
+        *,
+        time_grid_top: float,
     ) -> tuple[dict[str, float], str]:
         raw = self._require_page().evaluate(TIMEZONE_GUTTER_BOUNDS_SCRIPT)
         if not isinstance(raw, dict):
@@ -1326,14 +1334,13 @@ class PlaywrightCalendarCaptureGateway:
         except (KeyError, TypeError, ValueError) as error:
             raise CalendarAnimError("Calendar timezone label geometry is invalid") from error
         header_right = full_header_clip["x"] + gutter_width
-        header_bottom = full_header_clip["y"] + full_header_clip["height"]
         if (
             clip["width"] <= 0
             or clip["height"] <= 0
             or clip["x"] < full_header_clip["x"] - 1
             or clip["x"] + clip["width"] > header_right + 1
             or clip["y"] < full_header_clip["y"] - 1
-            or clip["y"] + clip["height"] > header_bottom + 1
+            or clip["y"] + clip["height"] > time_grid_top + 1
         ):
             raise CalendarAnimError("Calendar timezone label is outside structural gutter bounds")
         return clip, label
