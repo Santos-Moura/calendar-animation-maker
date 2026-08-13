@@ -49,9 +49,14 @@ class FinalVisualProbe:
 
 
 def inspect_final_frames(
-    directory: Path, resolution: tuple[int, int] = (504, 288)
+    directory: Path,
+    resolution: tuple[int, int] = (504, 288),
+    *,
+    frame_count: int = FINAL_FRAME_COUNT,
 ) -> FinalFrameSequence:
-    expected = tuple(directory / f"frame_{index:03d}.png" for index in range(FINAL_FRAME_COUNT))
+    if frame_count <= 0:
+        raise CalendarAnimError("Final frame count must be positive")
+    expected = tuple(directory / f"frame_{index:03d}.png" for index in range(frame_count))
     expected_names = {path.name for path in expected}
     actual_pngs = tuple(sorted(directory.glob("*.png"), key=lambda path: path.name))
     actual_names = {path.name for path in actual_pngs}
@@ -81,7 +86,12 @@ def validate_final_frames(directory: Path, resolution: tuple[int, int] = (504, 2
 
 
 def build_final_visual_command(
-    tools: FFmpegTools, frame_directory: Path, output: Path
+    tools: FFmpegTools,
+    frame_directory: Path,
+    output: Path,
+    *,
+    frame_count: int = FINAL_FRAME_COUNT,
+    fps: float = FINAL_FPS,
 ) -> list[str]:
     return [
         str(tools.ffmpeg),
@@ -89,13 +99,13 @@ def build_final_visual_command(
         "-loglevel",
         "error",
         "-framerate",
-        str(int(FINAL_FPS)),
+        f"{fps:g}",
         "-start_number",
         "0",
         "-i",
         str(frame_directory / "frame_%03d.png"),
         "-frames:v",
-        str(FINAL_FRAME_COUNT),
+        str(frame_count),
         "-c:v",
         "libx264",
         "-profile:v",
@@ -117,10 +127,21 @@ def compose_final_visual(
     frame_directory: Path,
     output: Path,
     resolution: tuple[int, int] = (504, 288),
+    *,
+    frame_count: int = FINAL_FRAME_COUNT,
+    fps: float = FINAL_FPS,
 ) -> Path:
-    validate_final_frames(frame_directory, resolution)
+    inspect_final_frames(frame_directory, resolution, frame_count=frame_count)
     output.parent.mkdir(parents=True, exist_ok=True)
-    _run(build_final_visual_command(tools, frame_directory, output))
+    _run(
+        build_final_visual_command(
+            tools,
+            frame_directory,
+            output,
+            frame_count=frame_count,
+            fps=fps,
+        )
+    )
     return output
 
 
@@ -164,9 +185,12 @@ def validate_final_visual_probe(
     probe: FinalVisualProbe,
     resolution: tuple[int, int],
     *,
+    expected_frame_count: int = FINAL_FRAME_COUNT,
+    expected_fps: float = FINAL_FPS,
+    expected_duration_seconds: float | None = None,
     duration_tolerance_seconds: float = 0.05,
 ) -> None:
-    expected_duration = FINAL_FRAME_COUNT / FINAL_FPS
+    expected_duration = expected_duration_seconds or expected_frame_count / expected_fps
     failures = []
     if probe.codec != "h264":
         failures.append(f"codec={probe.codec}, expected h264")
@@ -176,10 +200,10 @@ def validate_final_visual_probe(
         failures.append(
             f"resolution={probe.width}x{probe.height}, expected {resolution[0]}x{resolution[1]}"
         )
-    if abs(probe.fps - FINAL_FPS) > 0.001:
-        failures.append(f"fps={probe.fps}, expected {FINAL_FPS}")
-    if probe.frame_count != FINAL_FRAME_COUNT:
-        failures.append(f"frames={probe.frame_count}, expected {FINAL_FRAME_COUNT}")
+    if abs(probe.fps - expected_fps) > 0.001:
+        failures.append(f"fps={probe.fps}, expected {expected_fps}")
+    if probe.frame_count != expected_frame_count:
+        failures.append(f"frames={probe.frame_count}, expected {expected_frame_count}")
     if abs(probe.duration_seconds - expected_duration) > duration_tolerance_seconds:
         failures.append(
             f"duration={probe.duration_seconds:.6f}s, expected {expected_duration:.6f}s"

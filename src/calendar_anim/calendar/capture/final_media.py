@@ -263,6 +263,8 @@ def validate_av_media(
     resolution: tuple[int, int],
     *,
     expected_duration_seconds: float = 36.0,
+    expected_fps: float = 3.0,
+    expected_video_frame_count: int = 108,
     tolerance_seconds: float = 0.050,
 ) -> None:
     failures = []
@@ -274,10 +276,12 @@ def validate_av_media(
         failures.append(
             f"resolution={probe.width}x{probe.height}, expected {resolution[0]}x{resolution[1]}"
         )
-    if abs(probe.fps - 3.0) > 0.001:
-        failures.append(f"fps={probe.fps}, expected 3")
-    if probe.video_frame_count != 108:
-        failures.append(f"video frames={probe.video_frame_count}, expected 108")
+    if abs(probe.fps - expected_fps) > 0.001:
+        failures.append(f"fps={probe.fps}, expected {expected_fps:g}")
+    if probe.video_frame_count != expected_video_frame_count:
+        failures.append(
+            f"video frames={probe.video_frame_count}, expected {expected_video_frame_count}"
+        )
     if abs(probe.video_duration_seconds - expected_duration_seconds) > tolerance_seconds:
         failures.append(
             f"video duration={probe.video_duration_seconds:.6f}s, "
