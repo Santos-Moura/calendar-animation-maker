@@ -34,6 +34,11 @@ from calendar_anim.renderer.manifest import read_manifest
 
 REPRESENTATIVE_FRAME_INDICES = (0, 31, 61, 92, 123, 154, 184, 215)
 PREVIEW_SIZE = (504, 288)
+SINGLE_FRAME_FILENAMES = {
+    "cayde-lilac-pop": "lilac-pop",
+    "cayde-indigo-flare": "indigo-flare",
+    "cayde-cyan-magenta": "cyan-magenta",
+}
 
 
 def build_palette_previews(
@@ -166,6 +171,84 @@ def build_palette_previews(
     return report, artifacts
 
 
+def build_single_frame_palette_comparison(
+    *,
+    human_frame: int = 93,
+    store: Cayde216Store | None = None,
+) -> tuple[dict[str, Any], list[Path]]:
+    """Reuse generated candidate PNGs for one isolated three-palette comparison."""
+
+    if not 1 <= human_frame <= 216:
+        raise CalendarAnimError("Palette preview frame must be between 1 and 216")
+    store = store or Cayde216Store()
+    before = protected_hashes()
+    frame_index = human_frame - 1
+    run_directory = store.run_directory(RUN_ID)
+    manifest = read_manifest(run_directory / SOURCE_MANIFEST_RELATIVE)
+    if len(manifest.frames) != 216:
+        raise CalendarAnimError("Single-frame palette preview requires the 216-frame manifest")
+    output = run_directory / "palette-single-frame"
+    output.mkdir(parents=True, exist_ok=True)
+    images: list[tuple[str, Image.Image]] = []
+    artifacts: list[Path] = []
+    image_paths: dict[str, str] = {}
+    for preset in CAYDE_216_CANDIDATES:
+        short_name = SINGLE_FRAME_FILENAMES[preset.name]
+        source = (
+            run_directory
+            / "palette-candidates"
+            / preset.name
+            / "frames"
+            / f"frame_{frame_index:03d}.png"
+        )
+        if not source.is_file():
+            raise CalendarAnimError(
+                f"Generated candidate frame is missing; run palette preview first: {source}"
+            )
+        destination = output / f"{short_name}-frame-{human_frame:03d}.png"
+        with Image.open(source) as opened:
+            image = opened.convert("RGB")
+            if image.size != PREVIEW_SIZE:
+                raise CalendarAnimError(
+                    f"Candidate frame {source} has size {image.size}, expected {PREVIEW_SIZE}"
+                )
+            image.save(destination)
+            images.append((short_name, image.copy()))
+        artifacts.append(destination)
+        image_paths[short_name] = str(destination)
+    comparison = _single_frame_contact_sheet(
+        human_frame, images, output / f"palette-comparison-frame-{human_frame:03d}.png"
+    )
+    artifacts.append(comparison)
+    after = protected_hashes()
+    if before != after:
+        raise CalendarAnimError("Protected 108-frame artifacts changed during palette comparison")
+    report: dict[str, Any] = {
+        "schema_version": "1.0",
+        "run_id": RUN_ID,
+        "human_frame": human_frame,
+        "frame_index": frame_index,
+        "timestamp_seconds": manifest.frames[frame_index].timestamp_seconds,
+        "resolution": list(PREVIEW_SIZE),
+        "same_geometry": True,
+        "source_render_reused": True,
+        "candidate_previews_reused": True,
+        "images": image_paths,
+        "comparison": str(comparison),
+        "recommendation": "cayde-lilac-pop",
+        "google_calendar_reads": False,
+        "google_calendar_writes": False,
+        "upload": False,
+        "browser_capture": False,
+        "old_artifacts_unchanged": True,
+    }
+    report_path = write_atomic(
+        output / f"report-frame-{human_frame:03d}.json", json.dumps(report, indent=2) + "\n"
+    )
+    artifacts.append(report_path)
+    return report, artifacts
+
+
 def _logical_image(plan: SingleFrameCalendarPlan) -> Image.Image:
     image = Image.new("RGB", (126, 72), "#202124")
     for cell in plan.mapped_cells:
@@ -225,6 +308,27 @@ def _comparison_contact_sheet(rows: list[tuple[str, list[Image.Image]]], output:
                 image.resize(thumb, Image.Resampling.NEAREST),
                 (label_width + column * thumb[0], top),
             )
+    canvas.save(output)
+    return output
+
+
+def _single_frame_contact_sheet(
+    human_frame: int,
+    images: list[tuple[str, Image.Image]],
+    output: Path,
+) -> Path:
+    label_height = 34
+    canvas = Image.new(
+        "RGB",
+        (PREVIEW_SIZE[0] * len(images), PREVIEW_SIZE[1] + label_height),
+        "#202124",
+    )
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default()
+    for column, (name, image) in enumerate(images):
+        left = column * PREVIEW_SIZE[0]
+        draw.text((left + 8, 11), f"{name} | frame {human_frame}", fill="white", font=font)
+        canvas.paste(image, (left, label_height))
     canvas.save(output)
     return output
 

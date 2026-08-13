@@ -19,7 +19,10 @@ from calendar_anim.calendar.cayde_216.models import (
     Cayde216RemotePreflight,
     Cayde216WindowSearchReport,
 )
-from calendar_anim.calendar.cayde_216.palette_preview import build_palette_previews
+from calendar_anim.calendar.cayde_216.palette_preview import (
+    build_palette_previews,
+    build_single_frame_palette_comparison,
+)
 from calendar_anim.calendar.cayde_216.planner import (
     FIRST_WEEK,
     FRAME_COUNT,
@@ -103,6 +106,28 @@ def preview_cayde_216_palettes_command(
     typer.echo("Final palette selected: NO")
     typer.echo("Final run replanned: NO")
     typer.echo("Google Calendar reads/writes: NO")
+
+
+def preview_cayde_216_palette_frame_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
+    frame: Annotated[int, typer.Option("--frame", min=1, max=216)] = 93,
+) -> None:
+    """Reuse one generated candidate frame for a local side-by-side comparison."""
+
+    try:
+        if run_id != RUN_ID:
+            raise CalendarAnimError(f"Palette preview requires locked run ID {RUN_ID}")
+        report, artifacts = build_single_frame_palette_comparison(human_frame=frame)
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Human frame: {report['human_frame']} (index {report['frame_index']})")
+    typer.echo(f"Timestamp: {report['timestamp_seconds']:.6f}s")
+    for artifact in artifacts:
+        typer.echo(f"Artifact: {artifact}")
+    typer.echo("Source render reused: YES")
+    typer.echo("Google Calendar writes: NO")
+    typer.echo("Upload: NO")
+    typer.echo("Browser capture: NO")
 
 
 def search_cayde_216_windows_command(
@@ -430,6 +455,7 @@ def mux_final_cayde_216_audio_command(
 def register_cayde_216_commands(app: typer.Typer) -> None:
     app.command("prepare-cayde-216")(prepare_cayde_216_command)
     app.command("preview-cayde-216-palettes")(preview_cayde_216_palettes_command)
+    app.command("preview-cayde-216-palette-frame")(preview_cayde_216_palette_frame_command)
     app.command("preflight-cayde-216")(preflight_cayde_216_command)
     app.command("search-cayde-216-windows")(search_cayde_216_windows_command)
     app.command("compose-final-cayde-216")(compose_final_cayde_216_command)
