@@ -52,6 +52,22 @@ class CalendarEventInfo(BaseModel):
     private_metadata: dict[str, str]
 
 
+class CalendarRangeEvent(BaseModel):
+    """Minimal read-only event shape used for collision-free range planning."""
+
+    id: str
+    start: datetime
+    end: datetime
+
+    @model_validator(mode="after")
+    def valid_interval(self) -> "CalendarRangeEvent":
+        if self.start.tzinfo is None or self.end.tzinfo is None:
+            raise ValueError("range event datetimes must be timezone-aware")
+        if self.start >= self.end:
+            raise ValueError("range event start must be before end")
+        return self
+
+
 class CalendarWriteFailure(BaseModel):
     event_index: int = Field(ge=0)
     message: str

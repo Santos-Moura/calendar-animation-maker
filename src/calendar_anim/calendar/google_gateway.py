@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime, time
 from time import monotonic, sleep
 from typing import Any
 
@@ -12,6 +12,7 @@ from calendar_anim.calendar.models import (
     CalendarEventDraft,
     CalendarEventInfo,
     CalendarInfo,
+    CalendarRangeEvent,
     CalendarWriteFailure,
     CalendarWritePacingSnapshot,
     CalendarWriteResult,
@@ -23,6 +24,16 @@ from calendar_anim.calendar.multi_frame.retry import (
     is_rate_limit_exception,
     is_retryable_exception,
 )
+
+
+def _range_datetime(value: Mapping[str, Any], bound: datetime) -> datetime | None:
+    date_time = value.get("dateTime")
+    if date_time:
+        return datetime.fromisoformat(str(date_time))
+    date_value = value.get("date")
+    if date_value:
+        return datetime.combine(date.fromisoformat(str(date_value)), time.min, bound.tzinfo)
+    return None
 
 
 class GoogleCalendarGateway:
@@ -341,6 +352,40 @@ class GoogleCalendarGateway:
             page_token = response.get("nextPageToken")
             if not page_token:
                 return event_ids
+
+    def list_events_in_range(
+        self,
+        calendar_id: str,
+        time_min: datetime,
+        time_max: datetime,
+    ) -> list[CalendarRangeEvent]:
+        """List minimal expanded event intervals without mutating Calendar."""
+
+        page_token: str | None = None
+        events: list[CalendarRangeEvent] = []
+        while True:
+            response = (
+                self.service.events()
+                .list(
+                    calendarId=calendar_id,
+                    timeMin=time_min.isoformat(),
+                    timeMax=time_max.isoformat(),
+                    singleEvents=True,
+                    showDeleted=False,
+                    maxResults=2500,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+            for item in response.get("items", []):
+                start = _range_datetime(item.get("start", {}), time_min)
+                end = _range_datetime(item.get("end", {}), time_min)
+                if start is None or end is None or end <= start:
+                    continue
+                events.append(CalendarRangeEvent(id=str(item["id"]), start=start, end=end))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                return events
 
     def delete_events(self, calendar_id: str, event_ids: Sequence[str]) -> CalendarDeleteResult:
         deleted = 0

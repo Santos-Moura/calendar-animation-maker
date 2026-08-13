@@ -520,6 +520,14 @@ def build_single_frame_plan(
         target_height,
         background_color.hex,
     )
+    if resolved_preset is not None and resolved_preset.source_background_hexes:
+        source_backgrounds = {value.upper() for value in resolved_preset.source_background_hexes}
+        mapping_cells = [
+            cell.model_copy(update={"cell_role": CellRole.BACKGROUND})
+            if cell.color_hex.upper() in source_backgrounds
+            else cell
+            for cell in mapping_cells
+        ]
     contrast_background = (
         background_color.hex
         if mapping_mode is FrameMappingMode.FULL_GRID
@@ -594,6 +602,12 @@ def build_single_frame_plan(
             f"{', '.join(resolved_preset.foreground_color_ids)}. "
             f"{resolved_preset.artistic_intent}"
         )
+        if resolved_preset.source_background_hexes:
+            warnings.append(
+                "Palette preset remaps source canvas color(s) to its structural background: "
+                + ", ".join(resolved_preset.source_background_hexes)
+                + "."
+            )
     else:
         warnings.append(
             "Sparse mapping cannot guarantee absolute subcolumn positions because Calendar "

@@ -14,8 +14,12 @@ from calendar_anim.calendar.capture.final_media import (
     probe_av_media,
     validate_av_media,
 )
-from calendar_anim.calendar.cayde_216.artifacts import Cayde216Store
-from calendar_anim.calendar.cayde_216.models import Cayde216RemotePreflight
+from calendar_anim.calendar.cayde_216.artifacts import Cayde216Store, write_atomic
+from calendar_anim.calendar.cayde_216.models import (
+    Cayde216RemotePreflight,
+    Cayde216WindowSearchReport,
+)
+from calendar_anim.calendar.cayde_216.palette_preview import build_palette_previews
 from calendar_anim.calendar.cayde_216.planner import (
     FIRST_WEEK,
     FRAME_COUNT,
@@ -23,6 +27,7 @@ from calendar_anim.calendar.cayde_216.planner import (
     build_cayde_216_plan,
     protected_hashes,
 )
+from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
 from calendar_anim.calendar.hybrid_capture.artifacts import parse_output_resolution
 from calendar_anim.calendar.hybrid_capture.media import (
     build_final_visual_command,
@@ -73,6 +78,155 @@ def prepare_cayde_216_command(
         typer.echo(f"Artifact: {artifact}")
     typer.echo("OLD 108 VERSION TOUCHED: NO")
     typer.echo("Google Calendar reads: NO")
+    typer.echo("Google Calendar writes: NO")
+
+
+def preview_cayde_216_palettes_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
+) -> None:
+    """Render three isolated local palette candidates; never select the final palette."""
+
+    try:
+        if run_id != RUN_ID:
+            raise CalendarAnimError(f"Palette preview requires locked run ID {RUN_ID}")
+        report, artifacts = build_palette_previews()
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    typer.echo("CAYDE 216 PALETTE CANDIDATES")
+    for candidate in report["candidates"]:
+        typer.echo(
+            f"{candidate['name']}: background={candidate['background']} "
+            f"minimum contrast={candidate['minimum_foreground_contrast']:.3f}"
+        )
+    for artifact in artifacts:
+        typer.echo(f"Artifact: {artifact}")
+    typer.echo("Final palette selected: NO")
+    typer.echo("Final run replanned: NO")
+    typer.echo("Google Calendar reads/writes: NO")
+
+
+def search_cayde_216_windows_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
+    profile: Annotated[str, typer.Option("--profile")] = "account-b",
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Find two disjoint clean 216-week ranges through one read-only API scan."""
+
+    if run_id != RUN_ID or profile != "account-b":
+        _fail(CalendarAnimError("216-frame window search is locked to its run and account-b"))
+    search_end = FIRST_WEEK + timedelta(weeks=1040)
+    typer.echo("CAYDE 216 CLEAN WINDOW SEARCH")
+    typer.echo(f"Profile: {profile}")
+    typer.echo(f"Query: {FIRST_WEEK} -> {search_end} (exclusive)")
+    typer.echo(f"Execution: {'READ-ONLY GOOGLE API' if execute else 'DRY RUN'}")
+    if not execute:
+        typer.echo("No Google API call was made.")
+        typer.echo("Google Calendar writes: NO")
+        return
+    store = Cayde216Store()
+    try:
+        before = protected_hashes()
+        account, gateway = CalendarProfileService(CalendarProfileStore()).gateway(profile)
+        if account.calendar_id is None:
+            raise CalendarAnimError("Account B has no configured Calendar ID")
+        calendar = gateway.get_calendar(account.calendar_id)
+        if calendar is None:
+            raise CalendarAnimError("Configured Account-B calendar is not remotely accessible")
+        zone = ZoneInfo("America/Sao_Paulo")
+        events = gateway.list_events_in_range(
+            account.calendar_id,
+            datetime.combine(FIRST_WEEK, time.min, zone),
+            datetime.combine(search_end, time.min, zone),
+        )
+        candidates = find_clean_windows(
+            events,
+            search_start=FIRST_WEEK,
+            search_end_exclusive=search_end,
+            timezone="America/Sao_Paulo",
+        )
+        after = protected_hashes()
+        identity_ok = (
+            account.profile_name == "account-b"
+            and account.calendar_name == "Calendar Animation Lab B"
+            and account.timezone == "America/Sao_Paulo"
+            and calendar.id == account.calendar_id
+            and calendar.name == "Calendar Animation Lab B"
+            and calendar.timezone == "America/Sao_Paulo"
+            and calendar.access_role == "owner"
+        )
+        report = Cayde216WindowSearchReport(
+            run_id=run_id,
+            profile=profile,
+            authenticated_account=account.authenticated_google_account or "unknown",
+            calendar_id=account.calendar_id,
+            calendar_name=calendar.name,
+            timezone=calendar.timezone,
+            query_start=FIRST_WEEK,
+            query_end_exclusive=search_end,
+            expanded_events_seen=len(events),
+            candidates=candidates,
+            old_artifacts_unchanged=before == after,
+            result=("PASS" if identity_ok and before == after and len(candidates) >= 2 else "STOP"),
+        )
+        artifacts = store.save_window_search(report)
+        if report.result != "PASS":
+            raise CalendarAnimError(
+                "Clean-window search STOP: identity, protected artifacts, or range search failed"
+            )
+        recommended = report.candidates[0]
+        preparation_status = {
+            "schema_version": "1.0",
+            "run_id": run_id,
+            "status": "BLOCKED_PENDING_PALETTE_APPROVAL_AND_REPLAN",
+            "bulk_upload_ready": False,
+            "selected_palette": None,
+            "palette_approval_required": True,
+            "recommended_clean_window": recommended.model_dump(mode="json"),
+            "current_local_plan_first_week": FIRST_WEEK.isoformat(),
+            "current_local_plan_is_remote_clean": False,
+            "replan_required_after_palette_approval": True,
+            "do_not_upload_current_plan": True,
+            "google_calendar_reads": True,
+            "google_calendar_writes": False,
+        }
+        artifacts.append(
+            store.save_json_report(
+                store.run_directory(run_id) / "preparation-status.json", preparation_status
+            )
+        )
+        artifacts.append(
+            write_atomic(
+                store.run_directory(run_id) / "preparation-status.txt",
+                "\n".join(
+                    [
+                        "CAYDE 216 PREPARATION STATUS",
+                        "============================",
+                        "",
+                        "Bulk upload ready: NO",
+                        "Selected palette: NONE",
+                        "Palette visual approval required: YES",
+                        f"Recommended clean frame 1: {recommended.first_week}",
+                        f"Recommended clean frame 216: {recommended.last_week}",
+                        "Replan after palette approval: YES",
+                        "Do not upload current local plan: YES",
+                        "Google Calendar writes: NO",
+                        "",
+                    ]
+                ),
+            )
+        )
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Expanded events seen: {report.expanded_events_seen}")
+    for candidate in report.candidates:
+        typer.echo(
+            f"Option {candidate.rank}: {candidate.first_week} -> {candidate.last_week} "
+            "(216 clean weeks)"
+        )
+    for artifact in artifacts:
+        typer.echo(f"Artifact: {artifact}")
+    typer.echo("Old resources touched: NO")
+    typer.echo("Google Calendar reads: YES")
     typer.echo("Google Calendar writes: NO")
 
 
@@ -275,6 +429,8 @@ def mux_final_cayde_216_audio_command(
 
 def register_cayde_216_commands(app: typer.Typer) -> None:
     app.command("prepare-cayde-216")(prepare_cayde_216_command)
+    app.command("preview-cayde-216-palettes")(preview_cayde_216_palettes_command)
     app.command("preflight-cayde-216")(preflight_cayde_216_command)
+    app.command("search-cayde-216-windows")(search_cayde_216_windows_command)
     app.command("compose-final-cayde-216")(compose_final_cayde_216_command)
     app.command("mux-final-cayde-216-audio")(mux_final_cayde_216_audio_command)

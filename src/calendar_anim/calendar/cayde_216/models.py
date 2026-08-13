@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -131,3 +131,48 @@ class Cayde216RemotePreflight(BaseModel):
     google_calendar_reads: bool = True
     google_calendar_writes: bool = False
     result: str
+
+
+class Cayde216WindowCandidate(BaseModel):
+    rank: int = Field(ge=1)
+    first_week: date
+    last_week: date
+    end_exclusive: date
+    week_count: int = 216
+    conflicting_events: int = Field(default=0, ge=0)
+    overlaps_old_run: bool = False
+
+    @model_validator(mode="after")
+    def clean_window(self) -> "Cayde216WindowCandidate":
+        if self.last_week != self.first_week + timedelta(weeks=215):
+            raise ValueError("window last week must be exactly frame 216")
+        if self.end_exclusive != self.first_week + timedelta(weeks=216):
+            raise ValueError("window end must be half-open after 216 weeks")
+        if self.conflicting_events or self.overlaps_old_run:
+            raise ValueError("window candidate must be clean and disjoint from old run")
+        return self
+
+
+class Cayde216WindowSearchReport(BaseModel):
+    schema_version: str = "1.0"
+    run_id: str
+    profile: str
+    authenticated_account: str
+    calendar_id: str
+    calendar_name: str
+    timezone: str
+    query_start: date
+    query_end_exclusive: date
+    expanded_events_seen: int = Field(ge=0)
+    candidates: list[Cayde216WindowCandidate]
+    old_artifacts_unchanged: bool
+    old_resources_touched: bool = False
+    google_calendar_reads: bool = True
+    google_calendar_writes: bool = False
+    result: str
+
+    @model_validator(mode="after")
+    def enough_clean_windows(self) -> "Cayde216WindowSearchReport":
+        if self.result == "PASS" and len(self.candidates) < 2:
+            raise ValueError("PASS requires two clean 216-week candidates")
+        return self

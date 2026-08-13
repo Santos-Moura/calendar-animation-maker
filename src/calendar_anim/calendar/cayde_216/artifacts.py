@@ -5,6 +5,7 @@ from pathlib import Path
 from calendar_anim.calendar.cayde_216.models import (
     Cayde216RemotePreflight,
     Cayde216SizingReport,
+    Cayde216WindowSearchReport,
 )
 from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
 from calendar_anim.calendar.multi_frame.models import MultiFramePlan
@@ -56,6 +57,12 @@ class Cayde216Store(AnimationRunStore):
 
     def preflight_text_path(self, run_id: str) -> Path:
         return self.run_directory(run_id) / "remote-preflight.txt"
+
+    def window_search_path(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "clean-window-search.json"
+
+    def window_search_text_path(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "clean-window-search.txt"
 
     def save_planning_artifacts(
         self,
@@ -168,6 +175,46 @@ class Cayde216Store(AnimationRunStore):
 
     def save_json_report(self, path: Path, payload: dict[str, object]) -> Path:
         return write_atomic(path, json.dumps(payload, indent=2) + "\n")
+
+    def save_window_search(self, report: Cayde216WindowSearchReport) -> list[Path]:
+        json_path = write_atomic(
+            self.window_search_path(report.run_id), report.model_dump_json(indent=2) + "\n"
+        )
+        lines = [
+            "CAYDE 216 CLEAN WINDOW SEARCH",
+            "=============================",
+            "",
+            f"Profile: {report.profile}",
+            f"Account: {report.authenticated_account}",
+            f"Calendar: {report.calendar_name}",
+            f"Query: {report.query_start} -> {report.query_end_exclusive} (exclusive)",
+            f"Expanded events seen: {report.expanded_events_seen}",
+            "",
+        ]
+        for candidate in report.candidates:
+            lines.extend(
+                [
+                    f"Option {candidate.rank}",
+                    f"Frame 1: {candidate.first_week}",
+                    f"Frame 216: {candidate.last_week}",
+                    f"End exclusive: {candidate.end_exclusive}",
+                    "Conflicts: 0",
+                    "Old run overlap: NO",
+                    "",
+                ]
+            )
+        lines.extend(
+            [
+                f"Old artifacts unchanged: {'YES' if report.old_artifacts_unchanged else 'NO'}",
+                "Old resources touched: NO",
+                "Google Calendar reads: YES",
+                "Google Calendar writes: NO",
+                f"Result: {report.result}",
+                "",
+            ]
+        )
+        text_path = write_atomic(self.window_search_text_path(report.run_id), "\n".join(lines))
+        return [json_path, text_path]
 
 
 def sizing_text(report: Cayde216SizingReport) -> str:
