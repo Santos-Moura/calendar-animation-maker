@@ -31,6 +31,31 @@ It checks Account B identity, Calendar owner/timezone, protected old-artifact ha
 entire proposed half-open date range. Any unexpected event produces `STOP`; the command never
 inserts, updates, deletes, or cleans up Calendar resources.
 
+Before selecting a final palette, generate the three isolated candidates locally:
+
+```powershell
+.\.venv\Scripts\python.exe -m calendar_anim calendar preview-cayde-216-palettes `
+  --run-id cayde-final-216f-6fps-rdate-126x72-36s-01
+```
+
+The command generates eight representative frames, one GIF and one contact sheet per
+candidate, plus a three-way comparison. Candidate presets remap the dominant source canvas
+`#7986CB` to their explicit structural background, but do not change `cayde-final` and are not
+selected automatically.
+
+Search Account B for two distinct clean windows with one read-only expanded-event query:
+
+```powershell
+.\.venv\Scripts\python.exe -m calendar_anim calendar search-cayde-216-windows `
+  --run-id cayde-final-216f-6fps-rdate-126x72-36s-01 `
+  --profile account-b `
+  --execute
+```
+
+The current local recurrence plan remains blocked after this search. It must be regenerated
+only after the user approves a palette and a clean window; no bulk upload command is exposed by
+this preparation flow.
+
 Future capture must use Account B at 90%, `header_preserved_fill`, `1512x864`, the left time
 gutter, header, and `06:00-00:00`. In addition to week/view/structural/stability readiness, a
 frame expecting occurrences must contain approved Calendar-palette visual occupancy. A
