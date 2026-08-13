@@ -39,13 +39,18 @@ from calendar_anim.calendar.hybrid_capture.media import (
     validate_final_frames,
 )
 from calendar_anim.calendar.hybrid_capture.models import (
+    CURRENT_CAPTURE_IMPLEMENTATION_VERSION,
     HybridCapturePlan,
     HybridFramePlan,
     HybridOutputMode,
     HybridSanityReport,
     SanityFrameResult,
 )
-from calendar_anim.calendar.hybrid_capture.service import HybridCaptureService
+from calendar_anim.calendar.hybrid_capture.service import (
+    HybridCaptureService,
+    final_sanity_allows_capture,
+    final_sanity_gate_status,
+)
 from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 from calendar_anim.exceptions import CalendarAnimError
 
@@ -275,7 +280,12 @@ class ReadOnlyFakeGateway:
 
     def capture_header_event_grid(self, output_path: Path) -> dict[str, object]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        Image.new("RGB", (1768, 852), "#7986CB").save(output_path)
+        image = Image.new("RGB", (1768, 852), "#7986CB")
+        for y in range(75):
+            for x in range(1768):
+                image.putpixel((x, y), (32, 33, 36))
+        image.save(output_path)
+        image.close()
         return {
             "header_grid_bounds": {
                 "header_clip": {"x": 0.0, "y": 0.0, "width": 1768.0, "height": 75.0},
@@ -291,6 +301,7 @@ class ReadOnlyFakeGateway:
             },
             "header_included": True,
             "vertical_interval": "06:00-00:00",
+            "empty_pre_06_interval_removed": True,
         }
 
 
@@ -818,3 +829,73 @@ def test_final_frame_validation_uses_selected_high_resolution(tmp_path: Path) ->
     paths = validate_final_frames(tmp_path, HIGH_RESOLUTION)
 
     assert len(paths) == 108
+
+
+def test_legacy_capture_error_sanity_is_stale_for_current_implementation(
+    tmp_path: Path,
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    store = HybridCaptureStore(tmp_path / "runs")
+    old = store.sanity_directory("hybrid-test") / "sanity-report.json"
+    old.parent.mkdir(parents=True)
+    old.write_text(
+        '{"schema_version":"1.0","automated_result":"CAPTURE ERROR"}',
+        encoding="utf-8",
+    )
+
+    status, version = final_sanity_gate_status(
+        store,
+        "hybrid-test",
+        HybridOutputMode.HEADER_PRESERVED_FILL,
+        HIGH_RESOLUTION,
+    )
+
+    assert status == "STALE LEGACY REPORT - RERUN REQUIRED"
+    assert version == "legacy-schema-1.0"
+    service = HybridCaptureService(store, lambda _p, _z: ReadOnlyFakeGateway())
+    with pytest.raises(CalendarAnimError, match="Current final sanity"):
+        service.validate_final_capture_gate(
+            plan, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+        )
+
+
+def test_current_six_frame_sanity_pass_allows_matching_full_capture_gate(
+    tmp_path: Path,
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    store = HybridCaptureStore(tmp_path / "runs")
+    gateway = ReadOnlyFakeGateway()
+    service = HybridCaptureService(store, lambda _p, _z: gateway)
+
+    report = service.capture_final_sanity(
+        plan,
+        [24, 40, 60, 80, 100, 108],
+        "account-b",
+        HybridOutputMode.HEADER_PRESERVED_FILL,
+        HIGH_RESOLUTION,
+    )
+
+    assert report.automated_result == "PASS"
+    assert report.capture_implementation_version == CURRENT_CAPTURE_IMPLEMENTATION_VERSION
+    assert report.dom_event_count_is_gate is False
+    assert all(item.passed for item in report.results)
+    assert final_sanity_allows_capture(
+        report, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+    )
+    accepted = service.validate_final_capture_gate(
+        plan, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+    )
+    assert accepted.automated_result == "PASS"
+    status, version = final_sanity_gate_status(
+        store,
+        plan.run_id,
+        HybridOutputMode.HEADER_PRESERVED_FILL,
+        HIGH_RESOLUTION,
+    )
+    assert status == "PASS"
+    assert version == CURRENT_CAPTURE_IMPLEMENTATION_VERSION
+    directory = store.final_sanity_directory(
+        plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+    )
+    assert (directory / "sanity-contact-sheet.png").is_file()
+    assert all((directory / f"frame-{frame:03d}.png").is_file() for frame in report.frames_checked)
