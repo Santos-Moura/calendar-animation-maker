@@ -23,7 +23,15 @@ from calendar_anim.calendar.hybrid_capture.artifacts import (
     resolution_name,
     write_atomic,
 )
-from calendar_anim.calendar.hybrid_capture.media import compose_final_visual
+from calendar_anim.calendar.hybrid_capture.media import (
+    FINAL_FPS,
+    FINAL_FRAME_COUNT,
+    build_final_visual_command,
+    compose_final_visual,
+    inspect_final_frames,
+    probe_final_visual,
+    validate_final_visual_probe,
+)
 from calendar_anim.calendar.hybrid_capture.models import (
     CURRENT_CAPTURE_IMPLEMENTATION_VERSION,
     HybridOutputMode,
@@ -525,6 +533,138 @@ def compose_final_hybrid_command(
     typer.echo(f"Duration: {duration:.6f}s")
 
 
+def compose_final_single_profile_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
+    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (HybridOutputMode.PIXEL_FAITHFUL),
+    resolution: Annotated[str, typer.Option("--resolution")] = "504x288",
+) -> None:
+    """Compose the 108 Account-B single-profile PNGs into a validated silent MP4."""
+
+    try:
+        store = AccountBSingleCaptureStore()
+        output_resolution = parse_output_resolution(resolution)
+        plan = store.load_plan(run_id)
+        if plan.capture_strategy != "single-profile-account-b":
+            raise CalendarAnimError("Final composition requires the single-profile Account B plan")
+        expected_duration = FINAL_FRAME_COUNT / FINAL_FPS
+        if plan.frame_count != FINAL_FRAME_COUNT or plan.fps != FINAL_FPS:
+            raise CalendarAnimError("Single-profile plan must contain 108 frames at 3 FPS")
+        frame_directory = store.final_frames_directory(run_id, mode, output_resolution)
+        sequence = inspect_final_frames(frame_directory, output_resolution)
+
+        typer.echo("INPUT FRAMES")
+        typer.echo("------------")
+        typer.echo(f"Directory: {sequence.directory}")
+        typer.echo(f"Count: {sequence.count}")
+        typer.echo(f"First: {sequence.first.name}")
+        typer.echo(f"Last: {sequence.last.name}")
+        typer.echo("Missing: 0")
+        typer.echo("Unexpected PNGs: 0")
+        typer.echo("Sequence: PASS")
+        typer.echo(f"Resolution: {resolution_name(output_resolution)}")
+
+        tools = detect_ffmpeg()
+        typer.echo("ffmpeg available: YES")
+        typer.echo("ffprobe available: YES")
+        output_directory = store.single_profile_final_directory(run_id, mode, output_resolution)
+        output = output_directory / "final-video-no-audio.mp4"
+        ffmpeg_command = build_final_visual_command(tools, frame_directory, output)
+        compose_final_visual(tools, frame_directory, output, output_resolution)
+        probe = probe_final_visual(tools, output)
+        validate_final_visual_probe(probe, output_resolution)
+        report = {
+            "schema_version": "1.0",
+            "run_id": run_id,
+            "capture_strategy": "single-profile-account-b",
+            "input_frames": {
+                "directory": str(frame_directory),
+                "count": sequence.count,
+                "first": sequence.first.name,
+                "last": sequence.last.name,
+                "missing": [],
+                "unexpected_pngs": [],
+                "sequence_validation": "PASS",
+                "resolution": resolution_name(output_resolution),
+            },
+            "ffmpeg": {
+                "available": True,
+                "ffprobe_available": True,
+                "version": tools.version,
+                "command": ffmpeg_command,
+                "codec": "libx264",
+                "profile": "High",
+                "crf": 10,
+                "preset": "slow",
+                "pixel_format": "yuv420p",
+                "sar": "1:1",
+            },
+            "validation": {
+                "result": "PASS",
+                "codec": probe.codec,
+                "profile": probe.profile,
+                "width": probe.width,
+                "height": probe.height,
+                "fps": probe.fps,
+                "frame_count": probe.frame_count,
+                "duration_seconds": probe.duration_seconds,
+                "expected_duration_seconds": expected_duration,
+                "sample_aspect_ratio": probe.sample_aspect_ratio,
+            },
+            "output": str(output),
+            "audio_muxed": False,
+            "capture_checkpoint_touched": False,
+            "calendar_touched": False,
+            "recurrence_touched": False,
+            "browser_opened": False,
+        }
+        write_atomic(
+            output_directory / "visual-composition-report.json",
+            json.dumps(report, indent=2) + "\n",
+        )
+        report_text = "\n".join(
+            [
+                "FINAL SINGLE-PROFILE VISUAL COMPOSITION",
+                "=======================================",
+                "",
+                f"Input directory: {frame_directory}",
+                f"Frames: {sequence.count}",
+                f"First: {sequence.first.name}",
+                f"Last: {sequence.last.name}",
+                "Missing: 0",
+                "Unexpected PNGs: 0",
+                "Sequence: PASS",
+                f"Resolution: {probe.width}x{probe.height}",
+                f"FPS: {probe.fps:g}",
+                f"Duration: {probe.duration_seconds:.6f}s",
+                f"Codec/profile: {probe.codec}/{probe.profile}",
+                f"Frames reported by ffprobe: {probe.frame_count}",
+                f"SAR: {probe.sample_aspect_ratio}",
+                f"Output: {output}",
+                "Audio muxed: NO",
+                "Capture checkpoint touched: NO",
+                "Google Calendar touched: NO",
+                "Browser opened: NO",
+                "",
+            ]
+        )
+        write_atomic(output_directory / "visual-composition-report.txt", report_text)
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    typer.echo("FFPROBE VALIDATION")
+    typer.echo("------------------")
+    typer.echo("Result: PASS")
+    typer.echo(f"Codec/profile: {probe.codec}/{probe.profile}")
+    typer.echo(f"Resolution: {probe.width}x{probe.height}")
+    typer.echo(f"FPS: {probe.fps:g}")
+    typer.echo(f"Frames: {probe.frame_count}")
+    typer.echo(f"Duration: {probe.duration_seconds:.6f}s")
+    typer.echo(f"SAR: {probe.sample_aspect_ratio}")
+    typer.echo(f"Visual MP4: {output}")
+    typer.echo("Audio muxed: NO")
+    typer.echo("Capture checkpoint touched: NO")
+    typer.echo("Google Calendar writes: NO")
+
+
 def capture_final_single_profile_command(
     run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
     profile: Annotated[str, typer.Option("--profile")] = "account-b",
@@ -760,4 +900,5 @@ def register_hybrid_capture_commands(app: typer.Typer) -> None:
         capture_final_single_profile_preview_command
     )
     app.command("compose-final-hybrid")(compose_final_hybrid_command)
+    app.command("compose-final-single-profile")(compose_final_single_profile_command)
     app.command("mux-final-hybrid-audio")(mux_final_hybrid_audio_command)

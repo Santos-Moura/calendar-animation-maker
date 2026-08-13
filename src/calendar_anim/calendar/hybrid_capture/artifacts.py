@@ -461,6 +461,20 @@ class AccountBSingleCaptureStore(HybridCaptureStore):
     def preview_report_text_path(self, run_id: str) -> Path:
         return self.preview_directory(run_id) / "report.txt"
 
+    def single_profile_final_directory(
+        self,
+        run_id: str,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> Path:
+        return (
+            self.run_directory(run_id)
+            / "final"
+            / "single-profile"
+            / mode.directory_name
+            / resolution_name(resolution)
+        )
+
 
 def normalize_grid(source: Path, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)

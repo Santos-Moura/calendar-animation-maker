@@ -1,4 +1,7 @@
+import json
 import subprocess
+from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 from PIL import Image
@@ -10,12 +13,57 @@ from calendar_anim.calendar.capture.composition import (
 from calendar_anim.calendar.capture.final_media import FFmpegTools
 from calendar_anim.exceptions import CalendarAnimError
 
+FINAL_FRAME_COUNT = 108
+FINAL_FPS = 3.0
 
-def validate_final_frames(directory: Path, resolution: tuple[int, int] = (504, 288)) -> list[Path]:
-    expected = [directory / f"frame_{index:03d}.png" for index in range(108)]
-    actual = sorted(directory.glob("frame_*.png"))
-    if actual != expected:
-        raise CalendarAnimError("Final composition requires exactly frame_000.png-frame_107.png")
+
+@dataclass(frozen=True)
+class FinalFrameSequence:
+    directory: Path
+    paths: tuple[Path, ...]
+    resolution: tuple[int, int]
+
+    @property
+    def count(self) -> int:
+        return len(self.paths)
+
+    @property
+    def first(self) -> Path:
+        return self.paths[0]
+
+    @property
+    def last(self) -> Path:
+        return self.paths[-1]
+
+
+@dataclass(frozen=True)
+class FinalVisualProbe:
+    codec: str
+    profile: str
+    width: int
+    height: int
+    fps: float
+    frame_count: int
+    duration_seconds: float
+    sample_aspect_ratio: str
+
+
+def inspect_final_frames(
+    directory: Path, resolution: tuple[int, int] = (504, 288)
+) -> FinalFrameSequence:
+    expected = tuple(directory / f"frame_{index:03d}.png" for index in range(FINAL_FRAME_COUNT))
+    expected_names = {path.name for path in expected}
+    actual_pngs = tuple(sorted(directory.glob("*.png"), key=lambda path: path.name))
+    actual_names = {path.name for path in actual_pngs}
+    missing = sorted(expected_names - actual_names)
+    unexpected = sorted(actual_names - expected_names)
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected: " + ", ".join(unexpected))
+        raise CalendarAnimError("Invalid final frame sequence; " + "; ".join(details))
     for path in expected:
         try:
             with Image.open(path) as image:
@@ -25,7 +73,11 @@ def validate_final_frames(directory: Path, resolution: tuple[int, int] = (504, 2
                     )
         except OSError as error:
             raise CalendarAnimError(f"Unreadable final frame: {path}") from error
-    return expected
+    return FinalFrameSequence(directory, expected, resolution)
+
+
+def validate_final_frames(directory: Path, resolution: tuple[int, int] = (504, 288)) -> list[Path]:
+    return list(inspect_final_frames(directory, resolution).paths)
 
 
 def build_final_visual_command(
@@ -37,13 +89,13 @@ def build_final_visual_command(
         "-loglevel",
         "error",
         "-framerate",
-        "3",
+        str(int(FINAL_FPS)),
         "-start_number",
         "0",
         "-i",
         str(frame_directory / "frame_%03d.png"),
         "-frames:v",
-        "108",
+        str(FINAL_FRAME_COUNT),
         "-c:v",
         "libx264",
         "-profile:v",
@@ -70,6 +122,72 @@ def compose_final_visual(
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(build_final_visual_command(tools, frame_directory, output))
     return output
+
+
+def probe_final_visual(tools: FFmpegTools, media: Path) -> FinalVisualProbe:
+    command = [
+        str(tools.ffprobe),
+        "-v",
+        "error",
+        "-count_frames",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        (
+            "stream=codec_name,profile,width,height,avg_frame_rate,nb_frames,"
+            "nb_read_frames,sample_aspect_ratio:format=duration"
+        ),
+        "-of",
+        "json",
+        str(media),
+    ]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+        payload = json.loads(completed.stdout)
+        stream = payload["streams"][0]
+        frame_count_text = stream.get("nb_read_frames") or stream["nb_frames"]
+        return FinalVisualProbe(
+            codec=str(stream["codec_name"]),
+            profile=str(stream["profile"]),
+            width=int(stream["width"]),
+            height=int(stream["height"]),
+            fps=float(Fraction(str(stream["avg_frame_rate"]))),
+            frame_count=int(frame_count_text),
+            duration_seconds=float(payload["format"]["duration"]),
+            sample_aspect_ratio=str(stream["sample_aspect_ratio"]),
+        )
+    except (subprocess.CalledProcessError, IndexError, KeyError, TypeError, ValueError) as error:
+        raise CalendarAnimError(f"ffprobe could not validate final visual MP4: {media}") from error
+
+
+def validate_final_visual_probe(
+    probe: FinalVisualProbe,
+    resolution: tuple[int, int],
+    *,
+    duration_tolerance_seconds: float = 0.05,
+) -> None:
+    expected_duration = FINAL_FRAME_COUNT / FINAL_FPS
+    failures = []
+    if probe.codec != "h264":
+        failures.append(f"codec={probe.codec}, expected h264")
+    if probe.profile.lower() != "high":
+        failures.append(f"profile={probe.profile}, expected High")
+    if (probe.width, probe.height) != resolution:
+        failures.append(
+            f"resolution={probe.width}x{probe.height}, expected {resolution[0]}x{resolution[1]}"
+        )
+    if abs(probe.fps - FINAL_FPS) > 0.001:
+        failures.append(f"fps={probe.fps}, expected {FINAL_FPS}")
+    if probe.frame_count != FINAL_FRAME_COUNT:
+        failures.append(f"frames={probe.frame_count}, expected {FINAL_FRAME_COUNT}")
+    if abs(probe.duration_seconds - expected_duration) > duration_tolerance_seconds:
+        failures.append(
+            f"duration={probe.duration_seconds:.6f}s, expected {expected_duration:.6f}s"
+        )
+    if probe.sample_aspect_ratio != "1:1":
+        failures.append(f"SAR={probe.sample_aspect_ratio}, expected 1:1")
+    if failures:
+        raise CalendarAnimError("Final visual MP4 validation failed; " + "; ".join(failures))
 
 
 def _run(command: list[str]) -> None:
