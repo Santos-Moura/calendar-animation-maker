@@ -334,6 +334,8 @@ class ReadOnlyFakeGateway:
             },
             "header_included": True,
             "left_time_gutter_included": True,
+            "timezone_label_included": True,
+            "create_button_excluded": True,
             "vertical_interval": "06:00-00:00",
             "empty_pre_06_interval_removed": True,
         }
@@ -1278,6 +1280,8 @@ def test_single_profile_preview_uses_final_capture_code_and_never_mutates_state(
     assert report.frames[1].human_frame == 24
     assert report.frames[1].frame_index == 23
     assert all(item.left_time_gutter_present for item in report.frames)
+    assert all(item.timezone_label_present for item in report.frames)
+    assert all(item.create_button_excluded for item in report.frames)
     assert report.geometry_consistent is True
     assert store.state_path(source.run_id, mode, resolution).read_bytes() == state_before
     assert all(item.status is HybridFrameStatus.PENDING for item in state.frames)

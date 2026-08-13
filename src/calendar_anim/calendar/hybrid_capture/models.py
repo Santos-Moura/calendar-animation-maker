@@ -239,6 +239,8 @@ class SingleProfilePreviewFrameResult(BaseModel):
     output_size: tuple[int, int]
     header_present: bool
     left_time_gutter_present: bool
+    timezone_label_present: bool
+    create_button_excluded: bool
     pre_06_blank_gap_present: bool
     vertical_interval: str
     capture: str
@@ -269,5 +271,6 @@ class SingleProfilePreviewReport(BaseModel):
     checkpoint_touched: bool = False
     full_capture_outputs_touched: bool = False
     account_a_opened: bool = False
+    external_ui_excluded: bool = True
     google_calendar_writes: bool = False
     preview: str
