@@ -16,6 +16,7 @@ from calendar_anim.browser.playwright_gateway import (
     wait_for_stable_visual_grid,
 )
 from calendar_anim.calendar.capture.final_media import (
+    AVMediaProbe,
     FFmpegTools,
     build_extract_audio_command,
     frame_sequence_duration,
@@ -378,6 +379,95 @@ def test_single_profile_compose_command_is_media_only(
     assert report["calendar_touched"] is False
     assert report["recurrence_touched"] is False
     assert report["browser_opened"] is False
+
+
+def test_single_profile_audio_mux_uses_existing_visual_without_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = AccountBSingleCaptureStore(tmp_path / "runs")
+    run_id = "mux-test"
+    mode = HybridOutputMode.HEADER_PRESERVED_FILL
+    resolution = (14, 8)
+    final = store.single_profile_final_directory(run_id, mode, resolution)
+    final.mkdir(parents=True)
+    visual = final / "final-video-no-audio.mp4"
+    visual.write_bytes(b"trusted visual")
+    source = tmp_path / "input.mp4"
+    source.write_bytes(b"source with audio")
+    checkpoint = store.state_path(run_id, mode, resolution)
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text("trusted checkpoint", encoding="utf-8")
+    png = store.final_frames_directory(run_id, mode, resolution) / "frame_000.png"
+    png.parent.mkdir(parents=True)
+    png.write_bytes(b"trusted png")
+    visual_probe = FinalVisualProbe("h264", "High", 14, 8, 3.0, 108, 36.0, "1:1")
+    av_probe = AVMediaProbe("h264", "aac", 14, 8, 3.0, 108, 36.0, 36.02, 36.02, "1:1")
+
+    monkeypatch.setattr(hybrid_commands, "AccountBSingleCaptureStore", lambda: store)
+    monkeypatch.setattr(hybrid_commands, "validate_input_hash", lambda path: None)
+    monkeypatch.setattr(
+        hybrid_commands,
+        "detect_ffmpeg",
+        lambda: FFmpegTools(Path("ffmpeg"), Path("ffprobe"), "ffmpeg test"),
+    )
+    monkeypatch.setattr(hybrid_commands, "probe_final_visual", lambda tools, path: visual_probe)
+    monkeypatch.setattr(hybrid_commands, "probe_audio_codec", lambda tools, path: "aac")
+
+    def fake_extract(
+        tools: FFmpegTools, source_path: Path, output: Path, start: float, end: float
+    ) -> Path:
+        assert (source_path, start, end) == (source, 114.0, 150.0)
+        output.write_bytes(b"exact aac")
+        return output
+
+    def fake_mux(tools: FFmpegTools, visual_path: Path, audio: Path, output: Path) -> Path:
+        assert visual_path == visual
+        output.write_bytes(b"copied video plus audio")
+        return output
+
+    monkeypatch.setattr(hybrid_commands, "extract_exact_audio", fake_extract)
+    monkeypatch.setattr(hybrid_commands, "mux_audio", fake_mux)
+    monkeypatch.setattr(hybrid_commands, "probe_av_media", lambda tools, path: av_probe)
+    monkeypatch.setattr(
+        hybrid_commands,
+        "compose_final_visual",
+        lambda *args, **kwargs: pytest.fail("mux must not recompose video"),
+    )
+    monkeypatch.setattr(
+        hybrid_commands,
+        "_gateway_factory",
+        lambda *args, **kwargs: pytest.fail("mux must not open a browser"),
+    )
+
+    hybrid_commands.mux_final_single_profile_audio_command(run_id, mode, "14x8", source)
+
+    assert visual.read_bytes() == b"trusted visual"
+    assert checkpoint.read_text(encoding="utf-8") == "trusted checkpoint"
+    assert png.read_bytes() == b"trusted png"
+    report = store.load_json_report(final / "single-profile-audio-mux-report.json")
+    assert report["video_copied"] is True
+    assert report["video_reencoded"] is False
+    assert report["calendar_reads"] is False
+    assert report["calendar_writes"] is False
+    assert report["recurrence_touched"] is False
+    assert report["browser_opened"] is False
+
+
+def test_single_profile_audio_mux_reports_missing_silent_video(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    store = AccountBSingleCaptureStore(tmp_path / "runs")
+    monkeypatch.setattr(hybrid_commands, "AccountBSingleCaptureStore", lambda: store)
+    monkeypatch.setattr(hybrid_commands, "validate_input_hash", lambda path: None)
+
+    with pytest.raises(hybrid_commands.typer.Exit):
+        hybrid_commands.mux_final_single_profile_audio_command(
+            "missing", HybridOutputMode.HEADER_PRESERVED_FILL, "14x8", tmp_path / "input.mp4"
+        )
+
+    assert "Single-profile silent MP4 does not exist; expected:" in capsys.readouterr().err
 
 
 def test_audio_source_is_exact_114_to_150(tmp_path: Path) -> None:
