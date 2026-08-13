@@ -9,6 +9,7 @@ from calendar_anim.browser.playwright_gateway import (
     CaptureReadinessError,
     EventPopulationAudit,
     deduplicate_event_records,
+    header_time_gutter_grid_clips,
     logical_grid_clip,
     structural_grid_bounds_from_diagnostics,
     wait_for_stable_population,
@@ -301,26 +302,38 @@ class ReadOnlyFakeGateway:
 
     def capture_header_event_grid(self, output_path: Path) -> dict[str, object]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        image = Image.new("RGB", (1768, 852), "#7986CB")
+        image = Image.new("RGB", (1841, 852), "#7986CB")
         for y in range(75):
-            for x in range(1768):
+            for x in range(1841):
+                image.putpixel((x, y), (32, 33, 36))
+        for y in range(75, 852):
+            for x in range(73):
                 image.putpixel((x, y), (32, 33, 36))
         image.save(output_path)
         image.close()
         return {
             "header_grid_bounds": {
-                "header_clip": {"x": 0.0, "y": 0.0, "width": 1768.0, "height": 75.0},
-                "event_grid_clip": {
+                "header_clip": {"x": 0.0, "y": 0.0, "width": 1841.0, "height": 75.0},
+                "time_gutter_clip": {
                     "x": 0.0,
+                    "y": 75.0,
+                    "width": 73.0,
+                    "height": 777.0,
+                },
+                "event_grid_clip": {
+                    "x": 73.0,
                     "y": 75.0,
                     "width": 1768.0,
                     "height": 777.0,
                 },
-                "composite_dimensions": [1768, 852],
+                "composite_dimensions": [1841, 852],
                 "native_header_height": 75,
+                "native_time_gutter_width": 73,
+                "native_grid_width": 1768,
                 "native_grid_height": 777,
             },
             "header_included": True,
+            "left_time_gutter_included": True,
             "vertical_interval": "06:00-00:00",
             "empty_pre_06_interval_removed": True,
         }
@@ -663,6 +676,18 @@ def test_structural_grid_clip_does_not_depend_on_sparse_or_dense_events() -> Non
     assert dense_clip["width"] / 126 == pytest.approx(12.6)
 
 
+def test_time_gutter_uses_structural_time_and_grid_bounds_only() -> None:
+    header, body, gutter = header_time_gutter_grid_clips(
+        {"x": 72.0, "y": 58.0, "width": 1768.0, "height": 75.0},
+        {"x": 72.0, "y": 288.0, "width": 1768.0, "height": 777.0},
+        {"x": 0.0, "y": 288.0, "width": 1855.0, "height": 777.0},
+    )
+
+    assert gutter == 72.0
+    assert header == {"x": 0.0, "y": 58.0, "width": 1840.0, "height": 75.0}
+    assert body == {"x": 0.0, "y": 288.0, "width": 1840.0, "height": 777.0}
+
+
 def test_wrong_week_blocks_capture_before_screenshot(tmp_path: Path) -> None:
     plan = _hybrid_plan(tmp_path)
     _write_uniform_frame_plan(Path(plan.frames[23].source_frame_plan), 23)
@@ -820,7 +845,7 @@ def test_high_resolution_debug_uses_native_crop_without_504_intermediate(
     native = directory / "mode-c-native-crop.png"
     output = directory / "mode-c-1512x864.png"
     with Image.open(native) as image:
-        assert image.size == (1768, 852)
+        assert image.size == (1841, 852)
         assert image.width > 504 and image.height > 288
     with Image.open(output) as image:
         assert image.size == HIGH_RESOLUTION
@@ -829,7 +854,7 @@ def test_high_resolution_debug_uses_native_crop_without_504_intermediate(
     assert isinstance(modes, dict)
     mode = modes[HybridOutputMode.HEADER_PRESERVED_FILL.value]
     assert isinstance(mode, dict)
-    assert mode["source_dimensions"] == [1768, 852]
+    assert mode["source_dimensions"] == [1841, 852]
     assert mode["final_dimensions"] == [1512, 864]
     assert mode["source_of_resize"] == "native browser crop"
     assert mode["intermediate_504x288"] is False
@@ -841,6 +866,36 @@ def test_high_resolution_debug_uses_native_crop_without_504_intermediate(
     assert report["vertical_interval"] == "06:00-00:00"
     assert report["logical_grid"] == [126, 72]
     assert (directory / "comparison-hires.png").is_file()
+
+
+def test_high_resolution_fill_resizes_header_and_time_gutter_with_lanczos(
+    tmp_path: Path,
+) -> None:
+    logical = tmp_path / "logical.png"
+    native = tmp_path / "header-gutter-grid.png"
+    output = tmp_path / "output.png"
+    Image.new("RGB", (126, 72), "#7986CB").save(logical)
+    Image.new("RGB", (1841, 852), "#202124").save(native)
+
+    report = compose_output_mode(
+        logical,
+        native,
+        output,
+        HybridOutputMode.HEADER_PRESERVED_FILL,
+        HIGH_RESOLUTION,
+        native_header_height=75,
+        native_time_gutter_width=73,
+    )
+
+    assert report["header_resample_method"] == "lanczos"
+    assert report["time_gutter_resample_method"] == "lanczos"
+    assert report["grid_resample_method"] == "nearest-neighbor"
+    assert report["header_source_rect"] == [0, 0, 1841, 75]
+    assert report["time_gutter_source_rect"] == [0, 75, 73, 777]
+    assert report["grid_source_rect"] == [73, 75, 1768, 777]
+    assert report["header_output_rect"] == [0, 0, 1512, 76]
+    assert report["time_gutter_output_rect"] == [0, 76, 60, 788]
+    assert report["grid_output_rect"] == [60, 76, 1452, 788]
 
 
 def test_final_frame_validation_uses_selected_high_resolution(tmp_path: Path) -> None:
@@ -1222,6 +1277,8 @@ def test_single_profile_preview_uses_final_capture_code_and_never_mutates_state(
     assert report.frames[0].frame_index == 22
     assert report.frames[1].human_frame == 24
     assert report.frames[1].frame_index == 23
+    assert all(item.left_time_gutter_present for item in report.frames)
+    assert report.geometry_consistent is True
     assert store.state_path(source.run_id, mode, resolution).read_bytes() == state_before
     assert all(item.status is HybridFrameStatus.PENDING for item in state.frames)
     assert not store.final_frame_path(source.run_id, 22, mode, resolution).exists()
