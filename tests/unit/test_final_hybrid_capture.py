@@ -38,8 +38,11 @@ from calendar_anim.calendar.hybrid_capture.artifacts import (
     parse_output_resolution,
 )
 from calendar_anim.calendar.hybrid_capture.media import (
+    FinalVisualProbe,
     build_final_visual_command,
+    inspect_final_frames,
     validate_final_frames,
+    validate_final_visual_probe,
 )
 from calendar_anim.calendar.hybrid_capture.models import (
     CURRENT_CAPTURE_IMPLEMENTATION_VERSION,
@@ -212,6 +215,169 @@ def test_final_visual_command_uses_all_frames_in_order_and_approved_codec(tmp_pa
     assert command[command.index("-pix_fmt") + 1] == "yuv420p"
     assert command[command.index("-vf") + 1] == "setsar=1"
     assert frame_sequence_duration(108, 3) == 36
+
+
+def _write_final_png_sequence(
+    directory: Path,
+    *,
+    resolution: tuple[int, int] = (14, 8),
+    omit: int | None = None,
+) -> None:
+    directory.mkdir(parents=True)
+    for index in range(108):
+        if index != omit:
+            Image.new("RGB", resolution, (index, 0, 0)).save(directory / f"frame_{index:03d}.png")
+
+
+def test_single_profile_composer_resolves_and_accepts_exact_sequence(tmp_path: Path) -> None:
+    store = AccountBSingleCaptureStore(tmp_path / "runs")
+    directory = store.final_frames_directory(
+        "run", HybridOutputMode.HEADER_PRESERVED_FILL, (1512, 864)
+    )
+    assert directory == (
+        tmp_path
+        / "runs"
+        / "run"
+        / "single-profile-final-frames"
+        / "header-preserved-fill"
+        / "1512x864"
+    )
+    _write_final_png_sequence(directory)
+
+    sequence = inspect_final_frames(directory, (14, 8))
+
+    assert sequence.count == 108
+    assert sequence.first.name == "frame_000.png"
+    assert sequence.last.name == "frame_107.png"
+    assert [path.name for path in sequence.paths] == [
+        f"frame_{index:03d}.png" for index in range(108)
+    ]
+    assert store.single_profile_final_directory(
+        "run", HybridOutputMode.HEADER_PRESERVED_FILL, (1512, 864)
+    ) == (
+        tmp_path
+        / "runs"
+        / "run"
+        / "final"
+        / "single-profile"
+        / "header-preserved-fill"
+        / "1512x864"
+    )
+
+
+def test_single_profile_composer_reports_missing_frame(tmp_path: Path) -> None:
+    directory = tmp_path / "frames"
+    _write_final_png_sequence(directory, omit=37)
+
+    with pytest.raises(CalendarAnimError, match=r"missing: frame_037\.png"):
+        inspect_final_frames(directory, (14, 8))
+
+
+def test_single_profile_composer_rejects_unexpected_png(tmp_path: Path) -> None:
+    directory = tmp_path / "frames"
+    _write_final_png_sequence(directory)
+    Image.new("RGB", (14, 8)).save(directory / "contact-sheet.png")
+
+    with pytest.raises(CalendarAnimError, match=r"unexpected: contact-sheet\.png"):
+        inspect_final_frames(directory, (14, 8))
+
+
+def test_single_profile_composer_rejects_wrong_resolution(tmp_path: Path) -> None:
+    directory = tmp_path / "frames"
+    _write_final_png_sequence(directory)
+
+    with pytest.raises(CalendarAnimError, match="Final frame is not 28x16"):
+        inspect_final_frames(directory, (28, 16))
+
+
+def test_final_visual_probe_requires_exact_approved_media_properties() -> None:
+    probe = FinalVisualProbe(
+        codec="h264",
+        profile="High",
+        width=1512,
+        height=864,
+        fps=3.0,
+        frame_count=108,
+        duration_seconds=36.0,
+        sample_aspect_ratio="1:1",
+    )
+
+    validate_final_visual_probe(probe, (1512, 864))
+
+    with pytest.raises(CalendarAnimError, match="frames=107"):
+        validate_final_visual_probe(
+            FinalVisualProbe(**{**probe.__dict__, "frame_count": 107}), (1512, 864)
+        )
+
+
+def test_single_profile_compose_command_is_media_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = AccountBSingleCaptureStore(tmp_path / "runs")
+    hybrid = _hybrid_plan(tmp_path)
+    plan = HybridCapturePlan(
+        **{
+            **hybrid.model_dump(exclude={"frames", "capture_strategy"}),
+            "capture_strategy": "single-profile-account-b",
+            "frames": [
+                frame.model_copy(
+                    update={"calendar_profile": "account-b", "capture_zoom_percent": 90}
+                )
+                for frame in hybrid.frames
+            ],
+        }
+    )
+    store.save_plan(plan)
+    frame_directory = store.final_frames_directory(
+        plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, (14, 8)
+    )
+    _write_final_png_sequence(frame_directory)
+    checkpoint = store.state_path(plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, (14, 8))
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text("trusted checkpoint", encoding="utf-8")
+    probe = FinalVisualProbe("h264", "High", 14, 8, 3.0, 108, 36.0, "1:1")
+
+    monkeypatch.setattr(hybrid_commands, "AccountBSingleCaptureStore", lambda: store)
+    monkeypatch.setattr(
+        hybrid_commands,
+        "detect_ffmpeg",
+        lambda: FFmpegTools(Path("ffmpeg"), Path("ffprobe"), "ffmpeg test"),
+    )
+
+    def fake_compose(
+        tools: FFmpegTools,
+        source: Path,
+        output: Path,
+        resolution: tuple[int, int],
+    ) -> Path:
+        assert source == frame_directory
+        assert resolution == (14, 8)
+        output.parent.mkdir(parents=True)
+        output.write_bytes(b"visual only")
+        return output
+
+    monkeypatch.setattr(hybrid_commands, "compose_final_visual", fake_compose)
+    monkeypatch.setattr(hybrid_commands, "probe_final_visual", lambda tools, output: probe)
+    monkeypatch.setattr(
+        hybrid_commands,
+        "_gateway_factory",
+        lambda *args, **kwargs: pytest.fail("composer must not open a browser"),
+    )
+
+    hybrid_commands.compose_final_single_profile_command(
+        plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, "14x8"
+    )
+
+    assert checkpoint.read_text(encoding="utf-8") == "trusted checkpoint"
+    final = store.single_profile_final_directory(
+        plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, (14, 8)
+    )
+    assert (final / "final-video-no-audio.mp4").read_bytes() == b"visual only"
+    report = store.load_json_report(final / "visual-composition-report.json")
+    assert report["capture_checkpoint_touched"] is False
+    assert report["calendar_touched"] is False
+    assert report["recurrence_touched"] is False
+    assert report["browser_opened"] is False
 
 
 def test_audio_source_is_exact_114_to_150(tmp_path: Path) -> None:
