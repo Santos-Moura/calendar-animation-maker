@@ -4,7 +4,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, model_validator
 
 CURRENT_CAPTURE_IMPLEMENTATION_VERSION = "structural-grid-visual-readiness-hires-v1"
-CURRENT_PROFILE_NAVIGATION_VERSION = "persistent-profile-visible-week-v1"
+CURRENT_PROFILE_NAVIGATION_VERSION = "persistent-profile-visible-week-v2"
 FINAL_SANITY_SCHEMA_VERSION = "2.0"
 
 
