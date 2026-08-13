@@ -357,6 +357,93 @@ class HybridCaptureStore:
             raise CalendarAnimError("A/B seam validation must pass before full capture") from error
 
 
+class AccountBSingleCaptureStore(HybridCaptureStore):
+    """Isolate Account-B-only checkpoints and frames from the trusted hybrid outputs."""
+
+    def plan_path(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "single-profile-capture-plan.json"
+
+    def state_path(
+        self,
+        run_id: str,
+        mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
+    ) -> Path:
+        name = f"{mode.value}-{resolution_name(resolution)}.json"
+        return self.run_directory(run_id) / "single-profile-final-capture-state" / name
+
+    def final_frames_directory(
+        self,
+        run_id: str,
+        mode: HybridOutputMode = HybridOutputMode.PIXEL_FAITHFUL,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
+    ) -> Path:
+        return (
+            self.run_directory(run_id)
+            / "single-profile-final-frames"
+            / mode.directory_name
+            / resolution_name(resolution)
+        )
+
+    def final_raw_path(
+        self,
+        run_id: str,
+        frame_index: int,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
+    ) -> Path:
+        return self._capture_path(run_id, frame_index, mode, resolution, "raw")
+
+    def final_logical_path(
+        self,
+        run_id: str,
+        frame_index: int,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
+    ) -> Path:
+        return self._capture_path(run_id, frame_index, mode, resolution, "logical")
+
+    def final_header_path(
+        self,
+        run_id: str,
+        frame_index: int,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int] = LEGACY_RESOLUTION,
+    ) -> Path:
+        return self._capture_path(run_id, frame_index, mode, resolution, "header-grid")
+
+    def final_capture_failure_directory(
+        self,
+        run_id: str,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> Path:
+        return (
+            self.run_directory(run_id)
+            / "single-profile-final-capture"
+            / mode.directory_name
+            / resolution_name(resolution)
+            / "failures"
+        )
+
+    def _capture_path(
+        self,
+        run_id: str,
+        frame_index: int,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+        component: str,
+    ) -> Path:
+        return (
+            self.run_directory(run_id)
+            / "single-profile-final-capture"
+            / mode.directory_name
+            / resolution_name(resolution)
+            / component
+            / f"frame_{frame_index:03d}.png"
+        )
+
+
 def normalize_grid(source: Path, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:

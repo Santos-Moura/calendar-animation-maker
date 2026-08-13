@@ -17,6 +17,7 @@ from calendar_anim.calendar.capture.final_media import (
 )
 from calendar_anim.calendar.capture.models import BrowserChannel, CalendarCaptureConfig
 from calendar_anim.calendar.hybrid_capture.artifacts import (
+    AccountBSingleCaptureStore,
     HybridCaptureStore,
     parse_output_resolution,
     resolution_name,
@@ -28,6 +29,7 @@ from calendar_anim.calendar.hybrid_capture.models import (
     HybridOutputMode,
 )
 from calendar_anim.calendar.hybrid_capture.planner import (
+    build_account_b_single_profile_capture_plan,
     build_final_capture_plan,
     parse_human_frames,
 )
@@ -36,12 +38,18 @@ from calendar_anim.calendar.hybrid_capture.service import (
     HybridCaptureService,
     final_sanity_gate_status,
 )
+from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
 from calendar_anim.calendar.profiles.store import CalendarProfileStore
+from calendar_anim.calendar.recurrence_compaction.account_b_prefix import (
+    ACCOUNT_B_PREFIX_RUN_ID,
+)
 from calendar_anim.calendar.recurrence_compaction.hybrid import (
     FINAL_HYBRID_RUN_ID,
+    FINAL_SOURCE_RUN_ID,
     validate_input_hash,
 )
 from calendar_anim.calendar.recurrence_upload.artifacts import RecurrenceUploadStore
+from calendar_anim.calendar.recurrence_upload.prefix_commands import _prefix_store
 from calendar_anim.exceptions import CalendarAnimError
 
 SANITY_FRAMES = "24,40,60,80,100,108"
@@ -516,6 +524,99 @@ def compose_final_hybrid_command(
     typer.echo(f"Duration: {duration:.6f}s")
 
 
+def capture_final_single_profile_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
+    profile: Annotated[str, typer.Option("--profile")] = "account-b",
+    frames: Annotated[str, typer.Option("--frames")] = "1-108",
+    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
+        HybridOutputMode.HEADER_PRESERVED_FILL
+    ),
+    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
+    stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
+    ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Capture all 108 consecutive weeks from Account B only after prefix audit PASS."""
+
+    try:
+        if profile != "account-b" or frames != "1-108":
+            raise CalendarAnimError(
+                "Final single-profile capture is locked to account-b frames 1-108"
+            )
+        if mode is not HybridOutputMode.HEADER_PRESERVED_FILL:
+            raise CalendarAnimError("Final single-profile capture requires header_preserved_fill")
+        output_resolution = parse_output_resolution(resolution)
+        if output_resolution != (1512, 864):
+            raise CalendarAnimError("Final single-profile capture requires resolution 1512x864")
+        validate_input_hash(Path("input.mp4"))
+        source_store = AnimationRunStore()
+        source = source_store.load_plan(FINAL_SOURCE_RUN_ID)
+        plan = build_account_b_single_profile_capture_plan(
+            source, run_id, source_store=source_store
+        )
+        store = AccountBSingleCaptureStore()
+        store.save_plan(plan)
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Run: {run_id}")
+    typer.echo("Profile: account-b only")
+    typer.echo("Zoom: 90%")
+    typer.echo("Frames: 1-108")
+    typer.echo("Weeks: 2027-10-10 -> 2029-10-28")
+    typer.echo(f"Mode: {mode.value}")
+    typer.echo(f"Resolution: {resolution_name(output_resolution)}")
+    typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
+    typer.echo(f"Plan: {store.plan_path(run_id)}")
+    typer.echo(f"Output: {store.final_frames_directory(run_id, mode, output_resolution)}")
+    if not execute:
+        typer.echo("Prefix upload completion and remote audit will be checked before execution.")
+        typer.echo("No browser was opened and no Calendar API call was made.")
+        typer.echo("Calendar writes: NO")
+        return
+    try:
+        _validate_single_profile_capture_gates()
+        state = store.initialize_state(plan, mode, output_resolution)
+        state = HybridCaptureService(
+            store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
+        ).capture_final_single_profile(plan, state, mode, output_resolution)
+    except KeyboardInterrupt:
+        typer.secho("Capture interrupted; atomic frame checkpoint was preserved.", fg="yellow")
+        raise typer.Exit(code=130) from None
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    completed = sum(item.status.value == "completed" for item in state.frames)
+    typer.echo(f"Completed: {completed}/108")
+    typer.echo("Calendar writes: NO")
+
+
+def _validate_single_profile_capture_gates() -> None:
+    existing = RecurrenceUploadStore().load_state(FINAL_HYBRID_RUN_ID)
+    if existing.completed_count != 32021 or len(existing.parents) != 32021:
+        raise CalendarAnimError("Existing Account-B frames 24-108 are not 32021/32021")
+    prefix_store = _prefix_store(
+        Path("output/account-b-prefix-plans"), Path("output/account-b-prefix-runs")
+    )
+    prefix_plan = prefix_store.load_plan(ACCOUNT_B_PREFIX_RUN_ID)
+    prefix_state = prefix_store.load_state(ACCOUNT_B_PREFIX_RUN_ID)
+    if prefix_state.completed_count != len(prefix_plan.parents):
+        raise CalendarAnimError("Account-B prefix upload is not complete")
+    audit_path = (
+        Path("output/account-b-prefix-runs")
+        / ACCOUNT_B_PREFIX_RUN_ID
+        / "remote-recurrence-audit"
+        / "remote-recurrence-audit.json"
+    )
+    try:
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CalendarAnimError("Account-B prefix remote audit is missing") from error
+    if audit.get("frames_audited") != [1, 8, 15, 23] or any(
+        int(audit.get(field, -1)) != 0
+        for field in ("total_missing", "total_extra", "total_duplicates")
+    ):
+        raise CalendarAnimError("Account-B prefix remote audit is not exact")
+
+
 def mux_final_hybrid_audio_command(
     run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
     mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (HybridOutputMode.PIXEL_FAITHFUL),
@@ -581,5 +682,6 @@ def register_hybrid_capture_commands(app: typer.Typer) -> None:
     app.command("capture-hybrid-sanity")(capture_hybrid_sanity_command)
     app.command("capture-hybrid-seam")(capture_hybrid_seam_command)
     app.command("capture-final-hybrid")(capture_final_hybrid_command)
+    app.command("capture-final-single-profile")(capture_final_single_profile_command)
     app.command("compose-final-hybrid")(compose_final_hybrid_command)
     app.command("mux-final-hybrid-audio")(mux_final_hybrid_audio_command)

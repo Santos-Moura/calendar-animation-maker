@@ -470,7 +470,61 @@ class HybridCaptureService:
             raise CalendarAnimError("Hybrid capture state does not match selected resolution")
         self.validate_final_capture_gate(plan, mode, resolution)
         self.validate_profile_capture_gates(plan, mode, resolution)
-        for profile, zoom in (("account-a", 33), ("account-b", 90)):
+        self._capture_final_profiles(
+            plan,
+            state,
+            mode,
+            resolution,
+            (("account-a", 33), ("account-b", 90)),
+        )
+        self._validate_final_sequence(plan, mode, resolution)
+        compose_seam_geometry(
+            self.store.final_frame_path(plan.run_id, 22, mode, resolution),
+            self.store.final_frame_path(plan.run_id, 23, mode, resolution),
+            self.store.run_directory(plan.run_id)
+            / "seam"
+            / mode.directory_name
+            / f"{resolution[0]}x{resolution[1]}"
+            / "a-b-transition-geometry.png",
+        )
+        return state
+
+    def capture_final_single_profile(
+        self,
+        plan: HybridCapturePlan,
+        state: HybridCaptureState,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> HybridCaptureState:
+        if plan.capture_strategy != "single-profile-account-b":
+            raise CalendarAnimError("Capture plan is not Account-B single-profile")
+        if (
+            state.output_mode is not mode
+            or (
+                state.output_width,
+                state.output_height,
+            )
+            != resolution
+        ):
+            raise CalendarAnimError("Single-profile capture state differs from selected output")
+        if any(
+            frame.calendar_profile != "account-b" or frame.capture_zoom_percent != 90
+            for frame in plan.frames
+        ):
+            raise CalendarAnimError("Single-profile capture must use Account B at zoom 90%")
+        self._capture_final_profiles(plan, state, mode, resolution, (("account-b", 90),))
+        self._validate_final_sequence(plan, mode, resolution)
+        return state
+
+    def _capture_final_profiles(
+        self,
+        plan: HybridCapturePlan,
+        state: HybridCaptureState,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+        profiles: tuple[tuple[str, int], ...],
+    ) -> None:
+        for profile, zoom in profiles:
             frames = [frame for frame in plan.frames if frame.calendar_profile == profile]
             frames = [
                 frame
@@ -531,17 +585,6 @@ class HybridCaptureService:
                     state_frame.status = HybridFrameStatus.COMPLETED
                     state_frame.completed_at = datetime.now(UTC)
                     self.store.save_state(state)
-        self._validate_final_sequence(plan, mode, resolution)
-        compose_seam_geometry(
-            self.store.final_frame_path(plan.run_id, 22, mode, resolution),
-            self.store.final_frame_path(plan.run_id, 23, mode, resolution),
-            self.store.run_directory(plan.run_id)
-            / "seam"
-            / mode.directory_name
-            / f"{resolution[0]}x{resolution[1]}"
-            / "a-b-transition-geometry.png",
-        )
-        return state
 
     def check_final_capture_profiles(self, plan: HybridCapturePlan) -> dict[str, object]:
         """Read-only preflight of both persistent profiles and their first target week."""

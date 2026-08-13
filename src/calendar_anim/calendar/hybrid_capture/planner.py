@@ -4,7 +4,7 @@ from pathlib import Path
 from calendar_anim.calendar.hybrid_capture.artifacts import HybridCaptureStore
 from calendar_anim.calendar.hybrid_capture.models import HybridCapturePlan, HybridFramePlan
 from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
-from calendar_anim.calendar.multi_frame.models import FrameUploadStatus
+from calendar_anim.calendar.multi_frame.models import FrameUploadStatus, MultiFramePlan
 from calendar_anim.calendar.profiles.store import CalendarProfileStore
 from calendar_anim.calendar.recurrence_compaction.hybrid import (
     FINAL_HYBRID_RUN_ID,
@@ -90,6 +90,54 @@ def build_final_capture_plan(
     )
     HybridCaptureStore(hybrid_run_root).save_plan(plan)
     return plan
+
+
+def build_account_b_single_profile_capture_plan(
+    source: MultiFramePlan,
+    run_id: str = FINAL_HYBRID_RUN_ID,
+    *,
+    source_store: AnimationRunStore | None = None,
+) -> HybridCapturePlan:
+    """Map all 108 approved weeks to the one visually consistent Account-B profile."""
+
+    if (
+        source.frame_count != 108
+        or [frame.frame_index for frame in source.frames] != list(range(108))
+        or source.output_fps != 3
+        or source.target_grid_width != 126
+        or source.target_grid_height != 72
+        or source.palette_preset != "cayde-final"
+        or source.clip_start_seconds != 114.0
+        or source.clip_end_seconds != 150.0
+    ):
+        raise CalendarAnimError("Final single-profile source invariants changed")
+    weeks = [frame.week_start for frame in source.frames]
+    if any((right - left).days != 7 for left, right in zip(weeks, weeks[1:], strict=False)):
+        raise CalendarAnimError("Final single-profile weeks are not consecutive")
+    store = source_store or AnimationRunStore()
+    frames = [
+        HybridFramePlan(
+            frame_index=frame.frame_index,
+            human_frame=frame.frame_index + 1,
+            week_start=frame.week_start,
+            calendar_profile="account-b",
+            calendar_name="Calendar Animation Lab B",
+            capture_zoom_percent=90,
+            expected_occurrences=frame.planned_events,
+            source_frame_plan=str(
+                store.frame_directory(source, frame.frame_index) / "frame-plan.json"
+            ),
+        )
+        for frame in source.frames
+    ]
+    return HybridCapturePlan(
+        schema_version="2.0",
+        capture_strategy="single-profile-account-b",
+        run_id=run_id,
+        source_run_id=FINAL_SOURCE_RUN_ID,
+        source_sha256=FINAL_INPUT_SHA256,
+        frames=frames,
+    )
 
 
 def parse_human_frames(value: str) -> list[int]:

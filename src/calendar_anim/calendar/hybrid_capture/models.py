@@ -42,6 +42,7 @@ class HybridFramePlan(BaseModel):
 
 class HybridCapturePlan(BaseModel):
     schema_version: str = "1.0"
+    capture_strategy: str = "hybrid"
     run_id: str
     source_run_id: str
     source_sha256: str
@@ -62,14 +63,23 @@ class HybridCapturePlan(BaseModel):
             raise ValueError("hybrid capture must account for frame indices 0-107 exactly once")
         if [frame.human_frame for frame in self.frames] != list(range(1, 109)):
             raise ValueError("hybrid human frames must be 1-108 exactly once")
-        for frame in self.frames:
-            expected_profile = "account-a" if frame.frame_index <= 22 else "account-b"
-            expected_zoom = 33 if frame.frame_index <= 22 else 90
-            if (
-                frame.calendar_profile != expected_profile
-                or frame.capture_zoom_percent != expected_zoom
+        if self.capture_strategy == "hybrid":
+            for frame in self.frames:
+                expected_profile = "account-a" if frame.frame_index <= 22 else "account-b"
+                expected_zoom = 33 if frame.frame_index <= 22 else 90
+                if (
+                    frame.calendar_profile != expected_profile
+                    or frame.capture_zoom_percent != expected_zoom
+                ):
+                    raise ValueError("hybrid profile/zoom boundary differs at frame index 23")
+        elif self.capture_strategy == "single-profile-account-b":
+            if any(
+                frame.calendar_profile != "account-b" or frame.capture_zoom_percent != 90
+                for frame in self.frames
             ):
-                raise ValueError("hybrid profile/zoom boundary differs at frame index 23")
+                raise ValueError("single-profile capture requires Account B at zoom 90%")
+        else:
+            raise ValueError("unsupported final capture strategy")
         return self
 
 
