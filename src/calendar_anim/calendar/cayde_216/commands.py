@@ -32,6 +32,9 @@ from calendar_anim.calendar.cayde_216.planner import (
     build_cayde_216_plan,
     protected_hashes,
 )
+from calendar_anim.calendar.cayde_216.single_frame_validation import (
+    register_single_frame_validation_commands,
+)
 from calendar_anim.calendar.cayde_216.upload import upload_cayde_216_recurrence_command
 from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
 from calendar_anim.calendar.hybrid_capture.artifacts import parse_output_resolution
@@ -465,3 +468,4 @@ def register_cayde_216_commands(app: typer.Typer) -> None:
     app.command("compose-final-cayde-216")(compose_final_cayde_216_command)
     app.command("mux-final-cayde-216-audio")(mux_final_cayde_216_audio_command)
     app.command("upload-cayde-216-recurrence")(upload_cayde_216_recurrence_command)
+    register_single_frame_validation_commands(app)

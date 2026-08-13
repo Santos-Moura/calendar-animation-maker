@@ -1333,7 +1333,19 @@ def image_has_expected_visual_occupancy(
 
     if expected_occurrences <= 0:
         return True
-    palette = ((121, 134, 203), (51, 182, 121), (142, 36, 170), (230, 124, 115))
+    palette = (
+        (121, 134, 203),
+        (51, 182, 121),
+        (142, 36, 170),
+        (230, 124, 115),
+        (246, 191, 38),
+        (244, 81, 30),
+        (3, 155, 229),
+        (97, 97, 97),
+        (63, 81, 181),
+        (11, 128, 67),
+        (213, 0, 0),
+    )
     try:
         with Image.open(path) as opened:
             image = opened.convert("RGB")
