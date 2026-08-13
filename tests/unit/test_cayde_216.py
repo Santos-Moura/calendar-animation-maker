@@ -17,7 +17,9 @@ from calendar_anim.calendar.cayde_216.planner import (
     FRAME_COUNT,
     OLD_LAST_WEEK,
     RUN_ID,
+    SOURCE_RUN_ID,
 )
+from calendar_anim.calendar.cayde_216.upload import UPLOAD_ARTIFACT_NAMES, upload_store
 from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
 from calendar_anim.calendar.frame_mapping.colors import calendar_palette_color, contrast_ratio
 from calendar_anim.calendar.hybrid_capture.media import (
@@ -47,6 +49,9 @@ def _report(**updates: object) -> Cayde216SizingReport:
         "calendar_profile": "account-b",
         "calendar_name": "Calendar Animation Lab B",
         "timezone": "America/Sao_Paulo",
+        "palette_preset": "cayde-cyan-magenta",
+        "background_color_id": "7",
+        "foreground_color_ids": ["3", "5", "9", "11"],
         "first_week": weeks[0],
         "last_week": weeks[-1],
         "week_count": 216,
@@ -94,13 +99,16 @@ def test_cayde_216_timing_and_week_mapping_are_exact() -> None:
     weeks = [FIRST_WEEK + timedelta(weeks=index) for index in range(FRAME_COUNT)]
 
     assert date(2029, 10, 28) == OLD_LAST_WEEK
-    assert date(2029, 11, 4) == FIRST_WEEK
+    assert date(2030, 5, 5) == FIRST_WEEK
     assert FRAME_COUNT / FPS == 36.0
-    assert weeks[-1] == date(2033, 12, 18)
+    assert weeks[-1] == date(2034, 6, 18)
     assert all(
         right - left == timedelta(days=7) for left, right in zip(weeks, weeks[1:], strict=False)
     )
     assert not set(weeks) & {date(2027, 10, 10) + timedelta(weeks=index) for index in range(108)}
+    assert RUN_ID == "cayde-final-216f-6fps-cyan-magenta-rdate-126x72-36s-01"
+    assert SOURCE_RUN_ID == "cayde-final-216f-6fps-rdate-126x72-36s-01"
+    assert RUN_ID != SOURCE_RUN_ID
 
 
 def test_cayde_216_report_rejects_overlap_collision_or_expansion_difference() -> None:
@@ -196,3 +204,21 @@ def test_cayde_216_window_search_skips_conflicts_and_returns_disjoint_ranges() -
         conflict_week + timedelta(weeks=217),
     ]
     assert candidates[0].end_exclusive == candidates[1].first_week
+
+
+def test_cayde_216_upload_store_is_namespaced_and_requires_final_gate_artifacts() -> None:
+    store = upload_store()
+
+    assert store.plan_root == Path("output/216-plans")
+    assert store.state_root == Path("output/216-runs")
+    assert store.recurrence_plan_name == "recurrence-plan.json"
+    assert UPLOAD_ARTIFACT_NAMES == (
+        "animation-plan.json",
+        "recurrence-plan.json",
+        "recurrence-report.json",
+        "sizing-report.json",
+        "remote-preflight.json",
+    )
+    assert store.state_path(RUN_ID) == (
+        Path("output/216-runs") / RUN_ID / "account-b-upload-state.json"
+    )
