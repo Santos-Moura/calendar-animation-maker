@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from pathlib import Path
-from types import TracebackType
+from types import SimpleNamespace, TracebackType
 
 import pytest
 from PIL import Image
@@ -27,6 +27,7 @@ from calendar_anim.calendar.frame_mapping.models import (
     FrameMappingStatistics,
     SingleFrameCalendarPlan,
 )
+from calendar_anim.calendar.hybrid_capture import commands as hybrid_commands
 from calendar_anim.calendar.hybrid_capture.artifacts import (
     HIGH_RESOLUTION,
     HybridCaptureStore,
@@ -40,8 +41,10 @@ from calendar_anim.calendar.hybrid_capture.media import (
 )
 from calendar_anim.calendar.hybrid_capture.models import (
     CURRENT_CAPTURE_IMPLEMENTATION_VERSION,
+    CURRENT_PROFILE_NAVIGATION_VERSION,
     HybridCapturePlan,
     HybridFramePlan,
+    HybridFrameStatus,
     HybridOutputMode,
     HybridSanityReport,
     SanityFrameResult,
@@ -225,11 +228,12 @@ def test_audio_source_is_exact_114_to_150(tmp_path: Path) -> None:
 
 
 class ReadOnlyFakeGateway:
-    def __init__(self) -> None:
+    def __init__(self, zoom_applied: float = 90.0) -> None:
         self.opened: list[date] = []
         self.waited: list[tuple[date, int]] = []
         self.population_waits: list[int] = []
         self.reloads: list[date] = []
+        self.zoom_applied = zoom_applied
 
     def __enter__(self) -> "ReadOnlyFakeGateway":
         return self
@@ -261,6 +265,22 @@ class ReadOnlyFakeGateway:
             "viewport": {"width": 1920, "height": 1080},
             "scroll_position": {"scrollTop": 360.0, "targetScrollTop": 360.0},
             "grid_diagnostics": {"strategy": "css-grid-seven-tracks"},
+        }
+
+    def inspect_navigation(self, expected_week: date) -> dict[str, object]:
+        return {
+            "state": "ready",
+            "week_matches": True,
+            "logged_in_detection": True,
+            "calendar_shell_detection": True,
+            "week_view_detection": True,
+            "visible_week_date": expected_week.isoformat(),
+            "current_url": (
+                f"https://calendar.google.com/calendar/u/0/r/week/"
+                f"{expected_week.year}/{expected_week.month}/{expected_week.day}"
+            ),
+            "browser_profile_path": ".calendar-anim/browser-profile",
+            "zoom_applied": self.zoom_applied,
         }
 
     def capture_viewport(self, output_path: Path) -> None:
@@ -899,3 +919,239 @@ def test_current_six_frame_sanity_pass_allows_matching_full_capture_gate(
     )
     assert (directory / "sanity-contact-sheet.png").is_file()
     assert all((directory / f"frame-{frame:03d}.png").is_file() for frame in report.frames_checked)
+
+
+def _prime_navigation_gates(
+    store: HybridCaptureStore,
+    plan: HybridCapturePlan,
+    mode: HybridOutputMode = HybridOutputMode.HEADER_PRESERVED_FILL,
+    resolution: tuple[int, int] = HIGH_RESOLUTION,
+) -> None:
+    sanity_frames = [24, 40, 60, 80, 100, 108]
+    for human_frame in sanity_frames:
+        frame = plan.frames[human_frame - 1]
+        _write_uniform_frame_plan(Path(frame.source_frame_plan), frame.frame_index)
+    HybridCaptureService(store, lambda _p, zoom: ReadOnlyFakeGateway(zoom)).capture_final_sanity(
+        plan, sanity_frames, "account-b", mode, resolution
+    )
+    store.save_json_report(
+        store.profile_preflight_report_path(plan.run_id),
+        {
+            "schema_version": "1.0",
+            "profile_navigation_version": CURRENT_PROFILE_NAVIGATION_VERSION,
+            "run_id": plan.run_id,
+            "result": "PASS",
+            "profiles": [
+                {"profile": "account-a", "status": "PASS"},
+                {"profile": "account-b", "status": "PASS"},
+            ],
+            "google_calendar_writes": False,
+        },
+    )
+
+
+def test_profile_preflight_launches_a_then_b_with_locked_zooms(tmp_path: Path) -> None:
+    plan = _hybrid_plan(tmp_path)
+    store = HybridCaptureStore(tmp_path / "runs")
+    launched: list[tuple[str, int]] = []
+
+    def factory(profile: str, zoom: int) -> ReadOnlyFakeGateway:
+        launched.append((profile, zoom))
+        return ReadOnlyFakeGateway(float(zoom))
+
+    report = HybridCaptureService(store, factory).check_final_capture_profiles(plan)
+
+    assert report["result"] == "PASS"
+    assert launched == [("account-a", 33), ("account-b", 90)]
+    assert store.profile_preflight_report_path(plan.run_id).is_file()
+
+
+def test_gateway_factory_keeps_persistent_profile_directories_isolated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profiles = {
+        "account-a": SimpleNamespace(
+            profile_name="account-a",
+            browser_profile_directory=tmp_path / "browser-a",
+            authenticated_google_account="a@example.com",
+            calendar_name="Calendar Animation Lab",
+            capture_zoom_percent=33,
+        ),
+        "account-b": SimpleNamespace(
+            profile_name="account-b",
+            browser_profile_directory=tmp_path / "browser-b",
+            authenticated_google_account="b@example.com",
+            calendar_name="Calendar Animation Lab B",
+            capture_zoom_percent=90,
+        ),
+    }
+    monkeypatch.setattr(
+        hybrid_commands,
+        "CalendarProfileStore",
+        lambda: SimpleNamespace(load=lambda name: profiles[name]),
+    )
+
+    factory = hybrid_commands._gateway_factory(0, 30)
+    gateway_a = factory("account-a", 33)
+    gateway_b = factory("account-b", 90)
+    assert isinstance(gateway_a, hybrid_commands.PlaywrightCalendarCaptureGateway)
+    assert isinstance(gateway_b, hybrid_commands.PlaywrightCalendarCaptureGateway)
+    config_a = gateway_a.config
+    config_b = gateway_b.config
+
+    assert config_a.profile_directory == tmp_path / "browser-a"
+    assert config_b.profile_directory == tmp_path / "browser-b"
+    assert config_a.profile_directory != config_b.profile_directory
+    assert config_a.expected_google_account == "a@example.com"
+    assert config_b.expected_google_account == "b@example.com"
+
+
+def test_transition_closes_a_before_opening_b_and_uses_final_composition(
+    tmp_path: Path,
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    store = HybridCaptureStore(tmp_path / "runs")
+    _prime_navigation_gates(store, plan)
+    lifecycle: list[str] = []
+
+    class TrackingGateway(ReadOnlyFakeGateway):
+        def __init__(self, profile: str, zoom: int) -> None:
+            super().__init__(float(zoom))
+            self.profile = profile
+
+        def __enter__(self) -> "TrackingGateway":
+            lifecycle.append(f"enter:{self.profile}")
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_value: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            lifecycle.append(f"exit:{self.profile}")
+
+    service = HybridCaptureService(store, lambda profile, zoom: TrackingGateway(profile, zoom))
+    report = service.capture_profile_transition(
+        plan, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+    )
+
+    assert report["result"] == "PASS"
+    assert lifecycle == [
+        "enter:account-a",
+        "exit:account-a",
+        "enter:account-b",
+        "exit:account-b",
+    ]
+    directory = store.profile_transition_directory(plan.run_id)
+    for name in ("frame_022-account-a.png", "frame_023-account-b.png"):
+        with Image.open(directory / name) as image:
+            assert image.size == HIGH_RESOLUTION
+
+
+def test_transition_checkpoint_preserves_a_when_b_fails_then_resumes_b_only(
+    tmp_path: Path,
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    store = HybridCaptureStore(tmp_path / "runs")
+    _prime_navigation_gates(store, plan)
+    launched: list[str] = []
+
+    class FailingBGateway(ReadOnlyFakeGateway):
+        def wait_until_ready(self, week_start: date, minimum_event_count: int) -> None:
+            raise CalendarAnimError("account-b transition failure")
+
+        def reload_current_week(self, week_start: date, minimum_event_count: int) -> None:
+            raise CalendarAnimError("account-b transition failure")
+
+    def failing_factory(profile: str, zoom: int) -> ReadOnlyFakeGateway:
+        launched.append(profile)
+        return FailingBGateway(zoom) if profile == "account-b" else ReadOnlyFakeGateway(zoom)
+
+    service = HybridCaptureService(store, failing_factory)
+    with pytest.raises(CalendarAnimError, match="CAPTURE LOAD FAILURE"):
+        service.capture_profile_transition(
+            plan, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+        )
+
+    partial = store.load_json_report(store.profile_transition_report_path(plan.run_id))
+    partial_frames = partial["frames"]
+    assert isinstance(partial_frames, list)
+    assert partial_frames[0]["status"] == "COMPLETED"  # type: ignore[index]
+    assert partial_frames[1]["status"] == "FAILED"  # type: ignore[index]
+    launched.clear()
+
+    resumed = HybridCaptureService(
+        store, lambda profile, zoom: launched.append(profile) or ReadOnlyFakeGateway(zoom)
+    ).capture_profile_transition(plan, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION)
+
+    assert resumed["result"] == "PASS"
+    assert launched == ["account-b"]
+
+
+def test_full_resume_skips_completed_account_a_profile_context(tmp_path: Path) -> None:
+    plan = _hybrid_plan(tmp_path)
+    store = HybridCaptureStore(tmp_path / "runs")
+    _prime_navigation_gates(store, plan)
+    transition_directory = store.profile_transition_directory(plan.run_id)
+    transition_directory.mkdir(parents=True, exist_ok=True)
+    for frame_index, profile in ((22, "account-a"), (23, "account-b")):
+        Image.new("RGB", HIGH_RESOLUTION, "#7986CB").save(
+            transition_directory / f"frame_{frame_index:03d}-{profile}.png"
+        )
+    store.save_json_report(
+        store.profile_transition_report_path(plan.run_id),
+        {
+            "schema_version": "1.0",
+            "profile_navigation_version": CURRENT_PROFILE_NAVIGATION_VERSION,
+            "run_id": plan.run_id,
+            "output_mode": HybridOutputMode.HEADER_PRESERVED_FILL.value,
+            "output_resolution": list(HIGH_RESOLUTION),
+            "result": "PASS",
+            "frames": [],
+            "google_calendar_writes": False,
+        },
+    )
+    state = store.initialize_state(plan, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION)
+    for frame in plan.frames[:23]:
+        state.frame(frame.frame_index).status = HybridFrameStatus.COMPLETED
+        output = store.final_frame_path(
+            plan.run_id,
+            frame.frame_index,
+            HybridOutputMode.HEADER_PRESERVED_FILL,
+            HIGH_RESOLUTION,
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", HIGH_RESOLUTION, "#7986CB").save(output)
+    store.save_state(state)
+    launched: list[str] = []
+
+    class StopAtBGateway(ReadOnlyFakeGateway):
+        def wait_until_ready(self, week_start: date, minimum_event_count: int) -> None:
+            error = CalendarAnimError("stop after proving account-a was skipped")
+            error.non_retryable = True  # type: ignore[attr-defined]
+            raise error
+
+    def factory(profile: str, zoom: int) -> ReadOnlyFakeGateway:
+        launched.append(profile)
+        return StopAtBGateway(zoom)
+
+    with pytest.raises(CalendarAnimError, match="CAPTURE LOAD FAILURE"):
+        HybridCaptureService(store, factory).capture_final(
+            plan, state, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+        )
+
+    assert launched == ["account-b"]
+    assert all(state.frame(index).status is HybridFrameStatus.COMPLETED for index in range(23))
+    failure = (
+        store.final_capture_failure_directory(
+            plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION
+        )
+        / "capture-failure-account-b-frame-024-attempt-1.json"
+    )
+    payload = store.load_json_report(failure)
+    assert payload["profile"] == "account-b"
+    assert payload["human_frame"] == 24
+    assert payload["frame_index"] == 23
+    assert payload["week_start"] == "2028-01-02"
+    assert payload["zoom_expected"] == 90

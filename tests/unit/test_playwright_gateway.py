@@ -5,11 +5,14 @@ from pathlib import Path
 import pytest
 
 from calendar_anim.browser.playwright_gateway import (
+    ManualLoginRequired,
     PlaywrightCalendarCaptureGateway,
+    ProfileAccountMismatch,
     VisibleWindowMetrics,
     calendar_week_url,
     capture_clip_for_window,
     chromium_zoom_level,
+    classify_calendar_navigation,
     configure_calendar_zoom_preference,
     native_browser_zoom_factor,
     scale_clip_for_browser_zoom,
@@ -17,7 +20,11 @@ from calendar_anim.browser.playwright_gateway import (
     week_header_clip,
 )
 from calendar_anim.calendar.capture.commands import _capture_config
-from calendar_anim.calendar.capture.models import BrowserChannel, CaptureProfile
+from calendar_anim.calendar.capture.models import (
+    BrowserChannel,
+    CalendarCaptureConfig,
+    CaptureProfile,
+)
 from calendar_anim.exceptions import CalendarAnimError
 
 pytestmark = pytest.mark.unit
@@ -42,6 +49,100 @@ def test_validation_rejects_login_or_non_week_pages() -> None:
         PlaywrightCalendarCaptureGateway._validate_week_url(
             "https://accounts.google.com/signin", date(2026, 10, 4)
         )
+
+
+def test_wrong_url_with_correct_visible_week_is_allowed() -> None:
+    expected = date(2026, 10, 4)
+
+    result = classify_calendar_navigation(
+        {
+            "url": "https://calendar.google.com/calendar/u/0/r",
+            "document_title": "Google Calendar",
+            "login_page_detected": False,
+            "calendar_shell_detected": True,
+            "week_view_detected": True,
+            "detected_accounts": [],
+            "date_markers": [{"data_datekey": "20261004"}],
+        },
+        expected,
+        profile_name="account-a",
+    )
+
+    assert result["state"] == "ready"
+    assert result["week_detection_source"] == "visible_ui"
+    assert result["current_url"] == "https://calendar.google.com/calendar/u/0/r"
+
+
+def test_month_view_is_recovered_through_root_then_target_week() -> None:
+    expected = date(2026, 10, 4)
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://calendar.google.com/calendar/u/0/r/month"
+            self.visited: list[str] = []
+
+        def evaluate(self, _script: str, _argument: object) -> dict[str, object]:
+            week = "/week/2026/10/4" in self.url
+            return {
+                "url": self.url,
+                "document_title": "Google Calendar",
+                "login_page_detected": False,
+                "calendar_shell_detected": True,
+                "week_view_detected": week,
+                "detected_accounts": [],
+                "date_markers": [{"data_datekey": "20261004"}] if week else [],
+            }
+
+        def goto(self, url: str, wait_until: str) -> None:
+            assert wait_until == "domcontentloaded"
+            self.url = url
+            self.visited.append(url)
+
+        def wait_for_load_state(self, state: str) -> None:
+            assert state == "domcontentloaded"
+
+    page = FakePage()
+    gateway = PlaywrightCalendarCaptureGateway(CalendarCaptureConfig(profile_name="account-a"))
+    gateway._page = page
+
+    result = gateway._ensure_target_week(expected)
+
+    assert result["state"] == "ready"
+    assert page.visited[0].endswith("/calendar/u/0/r")
+    assert page.visited[1].endswith("/week/2026/10/4")
+
+
+def test_login_page_stops_with_explicit_profile_message() -> None:
+    gateway = PlaywrightCalendarCaptureGateway(CalendarCaptureConfig(profile_name="account-a"))
+
+    with pytest.raises(ManualLoginRequired, match=r"(?s)MANUAL LOGIN REQUIRED.*PROFILE: account-a"):
+        gateway._raise_for_session_state({"state": "manual_login_required"})
+
+
+def test_wrong_account_stops_with_profile_account_mismatch() -> None:
+    result = classify_calendar_navigation(
+        {
+            "url": "https://calendar.google.com/calendar/u/0/r/week/2026/10/4",
+            "document_title": "Google Calendar",
+            "login_page_detected": False,
+            "calendar_shell_detected": True,
+            "week_view_detected": True,
+            "detected_accounts": ["other@example.com"],
+            "date_markers": [{"data_datekey": "20261004"}],
+        },
+        date(2026, 10, 4),
+        profile_name="account-b",
+        expected_account="expected@example.com",
+    )
+    gateway = PlaywrightCalendarCaptureGateway(
+        CalendarCaptureConfig(
+            profile_name="account-b", expected_google_account="expected@example.com"
+        )
+    )
+
+    assert result["state"] == "profile_account_mismatch"
+    with pytest.raises(ProfileAccountMismatch, match="PROFILE ACCOUNT MISMATCH"):
+        gateway._raise_for_session_state(result)
 
 
 def test_capture_clip_aligns_six_to_eighteen_and_keeps_calendar_header() -> None:
