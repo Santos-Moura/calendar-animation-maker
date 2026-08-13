@@ -59,6 +59,7 @@ from calendar_anim.calendar.hybrid_capture.service import (
     HybridCaptureService,
     final_sanity_allows_capture,
     final_sanity_gate_status,
+    image_has_expected_visual_occupancy,
 )
 from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 from calendar_anim.exceptions import CalendarAnimError
@@ -117,6 +118,70 @@ def test_normalization_is_exact_504x288_nearest_neighbor(tmp_path: Path) -> None
     with Image.open(output) as normalized:
         assert normalized.size == (504, 288)
         assert normalized.getpixel((503, 287)) == (171, 71, 188)
+
+
+def test_visual_readiness_rejects_empty_expected_capture(tmp_path: Path) -> None:
+    empty = tmp_path / "empty.png"
+    occupied = tmp_path / "occupied.png"
+    Image.new("RGB", (200, 100), "#202124").save(empty)
+    image = Image.new("RGB", (200, 100), "#202124")
+    for x in range(20, 180):
+        for y in range(20, 80):
+            image.putpixel((x, y), (121, 134, 203))
+    image.save(occupied)
+    image.close()
+
+    assert image_has_expected_visual_occupancy(empty, 100) is False
+    assert image_has_expected_visual_occupancy(occupied, 100) is True
+    assert image_has_expected_visual_occupancy(empty, 0) is True
+
+
+def test_composed_capture_retries_empty_expected_content_before_returning(
+    tmp_path: Path,
+) -> None:
+    class EmptyThenOccupiedGateway(ReadOnlyFakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.logical_captures = 0
+
+        def capture_logical_event_grid(self, output_path: Path) -> dict[str, object]:
+            self.logical_captures += 1
+            if self.logical_captures < 3:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (126, 72), "#202124").save(output_path)
+                return {
+                    "event_count": 0,
+                    "rendered_color_counts": {},
+                    "logical_cell_width": 4.0,
+                    "logical_cell_height": 4.0,
+                    "logical_clip": {
+                        "x": 0.0,
+                        "y": 0.0,
+                        "width": 504.0,
+                        "height": 288.0,
+                    },
+                }
+            return super().capture_logical_event_grid(output_path)
+
+    gateway = EmptyThenOccupiedGateway()
+    service = HybridCaptureService(HybridCaptureStore(tmp_path / "runs"), lambda *_: gateway)
+    frame = _hybrid_plan(tmp_path).frames[0]
+
+    metrics = service._capture_composed_frame(
+        gateway,
+        frame,
+        tmp_path / "raw.png",
+        tmp_path / "logical.png",
+        tmp_path / "header.png",
+        tmp_path / "output.png",
+        HybridOutputMode.HEADER_PRESERVED_FILL,
+        (1512, 864),
+        tmp_path / "debug",
+    )
+
+    assert gateway.logical_captures == 3
+    assert metrics["visual_content_occupancy"] is True
+    assert metrics["visual_content_occupancy_attempt"] == 3
 
 
 @pytest.mark.parametrize(

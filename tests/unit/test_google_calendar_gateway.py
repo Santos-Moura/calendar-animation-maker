@@ -273,3 +273,42 @@ def test_google_conflict_confirms_deterministic_event_already_exists() -> None:
     assert result.created_events == 1
     assert result.failed_events == 0
     assert result.created_event_ids[0].startswith("ca")
+
+
+def test_range_preflight_lists_events_read_only_with_half_open_bounds() -> None:
+    class ListRequest:
+        def execute(self) -> dict[str, object]:
+            return {"items": [{"id": "one"}, {"id": "two"}]}
+
+    class ListEvents:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def list(self, **kwargs: object) -> ListRequest:
+            self.calls.append(kwargs)
+            return ListRequest()
+
+    class ListService:
+        def __init__(self) -> None:
+            self.resource = ListEvents()
+
+        def events(self) -> ListEvents:
+            return self.resource
+
+    service = ListService()
+    gateway = GoogleCalendarGateway(service)
+    start = datetime(2029, 11, 4, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    end = start + timedelta(weeks=216)
+
+    assert gateway.list_event_ids_in_range("calendar-b", start, end) == ["one", "two"]
+    assert service.resource.calls == [
+        {
+            "calendarId": "calendar-b",
+            "timeMin": start.isoformat(),
+            "timeMax": end.isoformat(),
+            "singleEvents": True,
+            "showDeleted": False,
+            "maxResults": 2500,
+            "pageToken": None,
+        }
+    ]
