@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, suppress
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from PIL import Image
 
@@ -912,30 +912,45 @@ class HybridCaptureService:
         resolution: tuple[int, int],
         debug_directory: Path,
     ) -> dict[str, object]:
-        metrics = self._browser_capture(
-            gateway,
-            frame,
-            raw,
-            logical,
-            header=header,
-            debug_directory=debug_directory,
+        errors = []
+        for occupancy_attempt in range(1, 4):
+            metrics = self._browser_capture(
+                gateway,
+                frame,
+                raw,
+                logical,
+                header=header,
+                debug_directory=debug_directory,
+            )
+            composition = compose_output_mode(
+                logical,
+                header,
+                output,
+                mode,
+                resolution,
+                native_header_height=(
+                    _native_header_height(metrics) if mode.includes_header else None
+                ),
+                native_time_gutter_width=(
+                    _native_time_gutter_width(metrics) if mode.includes_header else None
+                ),
+            )
+            with Image.open(output) as image:
+                if image.size != resolution:
+                    raise CalendarAnimError("Final normalized frame resolution is incorrect")
+            occupancy = image_has_expected_visual_occupancy(logical, frame.expected_occurrences)
+            metrics["composition"] = composition
+            metrics["visual_content_occupancy"] = occupancy
+            metrics["visual_content_occupancy_attempt"] = occupancy_attempt
+            if occupancy:
+                return metrics
+            errors.append(
+                f"attempt {occupancy_attempt}: expected {frame.expected_occurrences} "
+                "occurrences but the captured event grid is practically empty"
+            )
+        raise CalendarAnimError(
+            "Visual content readiness failed; no frame was checkpointed: " + "; ".join(errors)
         )
-        composition = compose_output_mode(
-            logical,
-            header,
-            output,
-            mode,
-            resolution,
-            native_header_height=_native_header_height(metrics) if mode.includes_header else None,
-            native_time_gutter_width=(
-                _native_time_gutter_width(metrics) if mode.includes_header else None
-            ),
-        )
-        with Image.open(output) as image:
-            if image.size != resolution:
-                raise CalendarAnimError("Final normalized frame resolution is incorrect")
-        metrics["composition"] = composition
-        return metrics
 
     def validate_final_capture_gate(
         self,
@@ -1305,6 +1320,39 @@ def _image_is_non_empty(path: Path) -> bool:
             return colors is None or len(colors) > 1
     except OSError as error:
         raise CalendarAnimError(f"Could not inspect final sanity image: {path}") from error
+
+
+def image_has_expected_visual_occupancy(
+    path: Path,
+    expected_occurrences: int,
+    *,
+    minimum_ratio: float = 0.005,
+    color_distance: int = 60,
+) -> bool:
+    """Reject a practically empty grid when the logical plan expects visible event bars."""
+
+    if expected_occurrences <= 0:
+        return True
+    palette = ((121, 134, 203), (51, 182, 121), (142, 36, 170), (230, 124, 115))
+    try:
+        with Image.open(path) as opened:
+            image = opened.convert("RGB")
+            pixels = cast(list[tuple[int, int, int]], list(image.get_flattened_data()))
+            image.close()
+    except OSError as error:
+        raise CalendarAnimError(f"Could not inspect visual event occupancy: {path}") from error
+    if not pixels:
+        return False
+    maximum_squared = color_distance * color_distance
+    matches = sum(
+        any(
+            (red - target_red) ** 2 + (green - target_green) ** 2 + (blue - target_blue) ** 2
+            <= maximum_squared
+            for target_red, target_green, target_blue in palette
+        )
+        for red, green, blue in pixels
+    )
+    return matches / len(pixels) >= minimum_ratio
 
 
 def _valid_clip(value: object) -> bool:
