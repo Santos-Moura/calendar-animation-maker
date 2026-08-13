@@ -7,7 +7,7 @@ import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from io import BytesIO
 from pathlib import Path
 from types import TracebackType
@@ -18,7 +18,8 @@ from PIL import Image
 from calendar_anim.calendar.capture.models import BrowserChannel, CalendarCaptureConfig
 from calendar_anim.exceptions import CalendarAnimError
 
-CALENDAR_HOME_URL = "https://calendar.google.com/calendar/u/0/r/week"
+CALENDAR_ROOT_URL = "https://calendar.google.com/calendar/u/0/r"
+CALENDAR_HOME_URL = f"{CALENDAR_ROOT_URL}/week"
 WEEK_PATH_PATTERN = re.compile(r"/week/(\d{4})/(\d{1,2})/(\d{1,2})(?:/|$)")
 CALENDAR_REGION_SELECTORS = ("[role='main']", "main", "[role='grid']")
 EVENT_SELECTORS = "[data-eventid], [data-eventchip], [data-dragsource-type='4']"
@@ -281,6 +282,171 @@ CAPTURE_PAGE_DIAGNOSTIC_SCRIPT = """
   };
 }
 """
+CALENDAR_NAVIGATION_DIAGNOSTIC_SCRIPT = r"""
+(expectedAccount) => {
+  const visible = (element) => {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' &&
+      style.display !== 'none';
+  };
+  const visibleNodes = (selector) => Array.from(document.querySelectorAll(selector))
+    .filter(visible);
+  const loginControls = visibleNodes(
+    "input[type='email'], input[type='password'], [autocomplete='username'], " +
+    "[autocomplete='current-password']");
+  const shellCandidates = visibleNodes("[role='main'], main, [role='grid']");
+  const timeLabels = visibleNodes("[aria-label]").filter((element) => {
+    const value = element.getAttribute('aria-label') || '';
+    return /(^|\s)([0-1]?\d|2[0-3])(:00)?(\s|$)|\b(AM|PM)\b/i.test(value);
+  });
+  const accountControls = visibleNodes(
+    "[aria-label*='Google Account'], [aria-label*='Conta do Google'], " +
+    "a[href*='SignOutOptions'], a[href*='AccountChooser'], img[alt*='@']");
+  const accountEvidence = accountControls.map((element) => [
+    element.getAttribute('aria-label') || '',
+    element.getAttribute('alt') || '',
+    element.getAttribute('title') || '',
+    element.textContent || '',
+  ].join(' '));
+  const detectedAccounts = [...new Set(accountEvidence.flatMap((value) =>
+    value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig) || []))];
+  const dateMarkers = visibleNodes(
+    "[data-datekey], [data-date], [datetime], [aria-label]"
+  ).slice(0, 500).map((element) => ({
+    data_datekey: element.getAttribute('data-datekey'),
+    data_date: element.getAttribute('data-date'),
+    datetime: element.getAttribute('datetime'),
+    aria_label: element.getAttribute('aria-label'),
+    text: (element.textContent || '').trim().slice(0, 120),
+  })).filter((item) => item.data_datekey || item.data_date || item.datetime || item.aria_label);
+  const host = window.location.hostname;
+  const path = window.location.pathname;
+  return {
+    url: window.location.href,
+    document_title: document.title,
+    host,
+    path,
+    login_page_detected: host === 'accounts.google.com' || loginControls.length > 0,
+    calendar_shell_detected: host === 'calendar.google.com' && shellCandidates.length > 0,
+    week_view_detected: /\/week(?:\/|$)/.test(path) ||
+      (shellCandidates.length > 0 && timeLabels.length >= 4),
+    detected_accounts: detectedAccounts,
+    expected_account: expectedAccount || null,
+    date_markers: dateMarkers,
+  };
+}
+"""
+
+
+class ManualLoginRequired(CalendarAnimError):
+    """A persistent browser profile has no usable authenticated Calendar session."""
+
+    non_retryable = True
+
+
+class ProfileAccountMismatch(CalendarAnimError):
+    """A persistent browser profile is authenticated as a different Google account."""
+
+    non_retryable = True
+
+
+def _dates_from_navigation_markers(raw: object) -> list[date]:
+    if not isinstance(raw, list):
+        return []
+    found: set[date] = set()
+    pattern = re.compile(r"(?<!\d)(20\d{2})[-/]?(\d{2})[-/]?(\d{2})(?!\d)")
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        for value in item.values():
+            if not isinstance(value, str):
+                continue
+            for match in pattern.finditer(value):
+                try:
+                    found.add(date(*(int(part) for part in match.groups())))
+                except ValueError:
+                    continue
+    return sorted(found)
+
+
+def classify_calendar_navigation(
+    raw: object,
+    expected_week: date,
+    *,
+    profile_name: str | None = None,
+    browser_profile_path: Path | None = None,
+    expected_account: str | None = None,
+) -> dict[str, object]:
+    """Classify Calendar navigation from rendered UI first, with URL as fallback."""
+
+    source = raw if isinstance(raw, dict) else {}
+    url = str(source.get("url", ""))
+    title = str(source.get("document_title", ""))
+    login_page = bool(source.get("login_page_detected", False))
+    shell = bool(source.get("calendar_shell_detected", False))
+    week_view = bool(source.get("week_view_detected", False))
+    detected_accounts = (
+        [str(item) for item in source.get("detected_accounts", []) if isinstance(item, str)]
+        if isinstance(source.get("detected_accounts", []), list)
+        else []
+    )
+    normalized_expected = expected_account.casefold() if expected_account else None
+    normalized_detected = {item.casefold() for item in detected_accounts}
+    account_mismatch = bool(
+        normalized_expected
+        and normalized_detected
+        and normalized_expected not in normalized_detected
+    )
+    visible_dates = _dates_from_navigation_markers(source.get("date_markers"))
+    expected_dates = {expected_week + timedelta(days=offset) for offset in range(7)}
+    visible_expected_dates = sorted(expected_dates.intersection(visible_dates))
+    ui_week_match = expected_week in visible_expected_dates or len(visible_expected_dates) >= 4
+    match = WEEK_PATH_PATTERN.search(url)
+    url_week = date(*(int(part) for part in match.groups())) if match is not None else None
+    url_week_match = url_week == expected_week
+    week_matches = week_view and (ui_week_match or (not visible_dates and url_week_match))
+    if login_page:
+        state = "manual_login_required"
+    elif account_mismatch:
+        state = "profile_account_mismatch"
+    elif week_matches:
+        state = "ready"
+    elif shell and week_view:
+        state = "wrong_week"
+    elif shell:
+        state = "wrong_calendar_view"
+    elif "calendar.google.com" in url:
+        state = "calendar_shell_missing"
+    else:
+        state = "redirect_or_interstitial"
+    source_kind = "visible_ui" if ui_week_match else ("url_fallback" if url_week_match else "none")
+    return {
+        "profile": profile_name,
+        "browser_profile_path": str(browser_profile_path) if browser_profile_path else None,
+        "current_url": url,
+        "page_title": title,
+        "expected_week": expected_week.isoformat(),
+        "visible_week_date": (
+            visible_expected_dates[0].isoformat()
+            if visible_expected_dates
+            else (visible_dates[0].isoformat() if visible_dates else None)
+        ),
+        "visible_dates": [value.isoformat() for value in visible_dates],
+        "url_week": url_week.isoformat() if url_week else None,
+        "week_detection_source": source_kind,
+        "logged_in_detection": shell and not login_page,
+        "login_page_detection": login_page,
+        "calendar_shell_detection": shell,
+        "week_view_detection": week_view,
+        "week_matches": week_matches,
+        "expected_google_account": expected_account,
+        "detected_google_accounts": detected_accounts,
+        "account_match": (
+            None if not expected_account or not detected_accounts else not account_mismatch
+        ),
+        "state": state,
+    }
 
 
 @dataclass(frozen=True)
@@ -762,6 +928,8 @@ class PlaywrightCalendarCaptureGateway:
         self._last_animation_readiness: AnimationReadiness | None = None
         self._last_grid_diagnostics: dict[str, object] | None = None
         self._last_visible_window_diagnostics: dict[str, object] | None = None
+        self._last_navigation_diagnostics: dict[str, object] | None = None
+        self._target_week: date | None = None
         self._applied_zoom_percent: float | None = None
 
     def __enter__(self) -> "PlaywrightCalendarCaptureGateway":
@@ -826,10 +994,13 @@ class PlaywrightCalendarCaptureGateway:
         self._last_animation_readiness = None
         self._last_grid_diagnostics = None
         self._last_visible_window_diagnostics = None
+        self._last_navigation_diagnostics = None
+        self._target_week = None
         self._applied_zoom_percent = None
 
     def open_week(self, week_start: date) -> None:
         page = self._require_page()
+        self._target_week = week_start
         page.goto(calendar_week_url(week_start), wait_until="domcontentloaded")
         if self.config.browser_zoom_percent == 100:
             page.keyboard.press("Control+0")
@@ -845,6 +1016,7 @@ class PlaywrightCalendarCaptureGateway:
         self._last_animation_readiness = None
         self._last_grid_diagnostics = None
         self._last_visible_window_diagnostics = None
+        self._last_navigation_diagnostics = None
 
     def _verify_browser_zoom(self, target_percent: int) -> float:
         page = self._require_page()
@@ -864,14 +1036,15 @@ class PlaywrightCalendarCaptureGateway:
     def wait_until_ready(self, week_start: date, minimum_event_count: int) -> None:
         page = self._require_page()
         page.wait_for_load_state("domcontentloaded")
-        self._validate_week_url(page.url, week_start)
+        self._ensure_target_week(week_start)
         region = self._find_visible_capture_region()
         region.wait_for(state="visible")
         if minimum_event_count > 0:
             page.locator(EVENT_SELECTORS).first.wait_for(state="visible")
         header_clip, time_clip = self._position_visible_window(region)
         self._wait_for_stable_snapshots(time_clip)
-        self._validate_week_url(page.url, week_start)
+        navigation = self.inspect_navigation(week_start)
+        self._raise_for_navigation_state(navigation)
         self._header_clip = header_clip
         self._time_window_clip = time_clip
         self._capture_clip = time_clip
@@ -1119,6 +1292,12 @@ class PlaywrightCalendarCaptureGateway:
             }
         except CalendarAnimError as error:
             event_state = {"event_audit_error": str(error)}
+        navigation = self._last_navigation_diagnostics
+        if self._target_week is not None:
+            try:
+                navigation = self.inspect_navigation(self._target_week)
+            except CalendarAnimError as error:
+                navigation = {"navigation_diagnostic_error": str(error)}
         return {
             **page_state,
             "requested_zoom_percent": self.config.browser_zoom_percent,
@@ -1128,8 +1307,69 @@ class PlaywrightCalendarCaptureGateway:
             "week_header_grid_clip": self._week_header_grid_clip,
             "scroll_position": self._last_visible_window_diagnostics,
             "grid_diagnostics": self._last_grid_diagnostics,
+            "navigation": navigation,
             "events": event_state,
         }
+
+    def inspect_navigation(self, expected_week: date) -> dict[str, object]:
+        """Inspect rendered Calendar/session state without mutating Calendar data."""
+
+        raw = self._require_page().evaluate(
+            CALENDAR_NAVIGATION_DIAGNOSTIC_SCRIPT,
+            self.config.expected_google_account,
+        )
+        result = classify_calendar_navigation(
+            raw,
+            expected_week,
+            profile_name=self.config.profile_name,
+            browser_profile_path=self.config.profile_directory.resolve(),
+            expected_account=self.config.expected_google_account,
+        )
+        result["zoom_expected"] = self.config.browser_zoom_percent
+        result["zoom_applied"] = self._applied_zoom_percent
+        result["expected_calendar_name"] = self.config.expected_calendar_name
+        self._last_navigation_diagnostics = result
+        return result
+
+    def _ensure_target_week(self, expected_week: date) -> dict[str, object]:
+        navigation = self.inspect_navigation(expected_week)
+        self._raise_for_session_state(navigation)
+        if navigation["state"] == "ready":
+            return navigation
+
+        page = self._require_page()
+        page.goto(CALENDAR_ROOT_URL, wait_until="domcontentloaded")
+        page.wait_for_load_state("domcontentloaded")
+        root_state = self.inspect_navigation(expected_week)
+        self._raise_for_session_state(root_state)
+
+        page.goto(calendar_week_url(expected_week), wait_until="domcontentloaded")
+        page.wait_for_load_state("domcontentloaded")
+        navigation = self.inspect_navigation(expected_week)
+        self._raise_for_navigation_state(navigation)
+        return navigation
+
+    def _raise_for_session_state(self, navigation: dict[str, object]) -> None:
+        profile = self.config.profile_name or "unknown"
+        state = navigation.get("state")
+        if state == "manual_login_required":
+            raise ManualLoginRequired(f"MANUAL LOGIN REQUIRED\nPROFILE: {profile}")
+        if state == "profile_account_mismatch":
+            detected = navigation.get("detected_google_accounts")
+            raise ProfileAccountMismatch(
+                f"PROFILE ACCOUNT MISMATCH\nPROFILE: {profile}\n"
+                f"EXPECTED: {self.config.expected_google_account}\nDETECTED: {detected}"
+            )
+
+    def _raise_for_navigation_state(self, navigation: dict[str, object]) -> None:
+        self._raise_for_session_state(navigation)
+        if navigation.get("state") != "ready":
+            raise CalendarAnimError(
+                "Calendar navigation did not reach the target visible week; "
+                f"state={navigation.get('state')}, url={navigation.get('current_url')}, "
+                f"visible_week={navigation.get('visible_week_date')}, "
+                f"expected_week={navigation.get('expected_week')}"
+            )
 
     def _coordinate_scale(self) -> tuple[float, float]:
         raw = self._require_page().evaluate(

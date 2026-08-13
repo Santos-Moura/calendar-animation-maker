@@ -68,6 +68,9 @@ def _gateway_factory(
             )
         config = CalendarCaptureConfig(
             profile_directory=profile.browser_profile_directory,
+            profile_name=profile.profile_name,
+            expected_google_account=profile.authenticated_google_account,
+            expected_calendar_name=profile.calendar_name,
             browser_zoom_percent=profile.capture_zoom_percent,
             visible_start_hour=6,
             visible_end_hour=24,
@@ -78,6 +81,104 @@ def _gateway_factory(
         return PlaywrightCalendarCaptureGateway(config)  # type: ignore[return-value]
 
     return factory
+
+
+def check_final_capture_profiles_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
+    stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
+    ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Read-only preflight of the locked Account-A and Account-B browser profiles."""
+
+    try:
+        plan = build_final_capture_plan(run_id)
+        store = HybridCaptureStore()
+        profiles = CalendarProfileStore()
+        account_a = profiles.load("account-a")
+        account_b = profiles.load("account-b")
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Run: {run_id}")
+    for label, profile, frame in (
+        ("ACCOUNT A", account_a, plan.frames[0]),
+        ("ACCOUNT B", account_b, plan.frames[23]),
+    ):
+        typer.echo(label)
+        typer.echo(f"Profile path: {profile.browser_profile_directory.resolve()}")
+        typer.echo(f"Expected account: {profile.authenticated_google_account or 'UNKNOWN'}")
+        typer.echo(f"Expected calendar: {profile.calendar_name}")
+        typer.echo(f"Zoom: {profile.capture_zoom_percent}%")
+        typer.echo(f"First target week: {frame.week_start}")
+    typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
+    typer.echo(f"Report: {store.profile_preflight_report_path(run_id)}")
+    if not execute:
+        typer.echo("No browser was opened and no Calendar API call was made.")
+        typer.echo("Calendar writes: NO")
+        return
+    try:
+        report = HybridCaptureService(
+            store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
+        ).check_final_capture_profiles(plan)
+    except KeyboardInterrupt:
+        typer.secho("Profile preflight interrupted; Calendar was not modified.", fg="yellow")
+        raise typer.Exit(code=130) from None
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    entries = report.get("profiles", [])
+    if isinstance(entries, list):
+        for item in entries:
+            if isinstance(item, dict):
+                typer.echo(f"{str(item.get('profile')).upper()}: {item.get('status')}")
+                if item.get("error"):
+                    typer.echo(f"  {item['error']}")
+    typer.echo(f"Preflight: {report['result']}")
+    typer.echo("Calendar writes: NO")
+    if report["result"] != "PASS":
+        raise typer.Exit(code=1)
+
+
+def capture_final_profile_transition_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
+    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
+        HybridOutputMode.HEADER_PRESERVED_FILL
+    ),
+    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
+    stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
+    ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Capture only A frame 23 then B frame 24 through the final capture path."""
+
+    try:
+        plan = build_final_capture_plan(run_id)
+        output_resolution = parse_output_resolution(resolution)
+        store = HybridCaptureStore()
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo("Frame 23: account-a, zoom 33%")
+    typer.echo("Then close account-a persistent context")
+    typer.echo("Frame 24: account-b, zoom 90%")
+    typer.echo(f"Output mode: {mode.value}")
+    typer.echo(f"Output resolution: {resolution_name(output_resolution)}")
+    typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
+    typer.echo(f"Output: {store.profile_transition_directory(run_id)}")
+    if not execute:
+        typer.echo("No browser was opened and no Calendar API call was made.")
+        typer.echo("Calendar writes: NO")
+        return
+    try:
+        report = HybridCaptureService(
+            store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
+        ).capture_profile_transition(plan, mode, output_resolution)
+    except KeyboardInterrupt:
+        typer.secho("Transition test interrupted; its checkpoint was preserved.", fg="yellow")
+        raise typer.Exit(code=130) from None
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Transition test: {report['result']}")
+    typer.echo(f"Report: {store.profile_transition_report_path(run_id)}")
+    typer.echo("Calendar writes: NO")
 
 
 def capture_hybrid_sanity_command(
@@ -279,6 +380,16 @@ def capture_final_hybrid_command(
         sanity_status, sanity_version = final_sanity_gate_status(
             store, run_id, mode, output_resolution
         )
+        try:
+            profile_preflight = store.load_json_report(store.profile_preflight_report_path(run_id))
+            profile_preflight_status = str(profile_preflight.get("result", "INVALID"))
+        except CalendarAnimError:
+            profile_preflight_status = "NOT RUN"
+        try:
+            transition = store.load_json_report(store.profile_transition_report_path(run_id))
+            transition_status = str(transition.get("result", "INVALID"))
+        except CalendarAnimError:
+            transition_status = "NOT RUN"
     except (CalendarAnimError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Run: {run_id}")
@@ -289,6 +400,8 @@ def capture_final_hybrid_command(
     typer.echo(f"Normalized output: 108 PNGs, {resolution_name(output_resolution)}")
     typer.echo(f"Sanity gate: {sanity_status}")
     typer.echo(f"Sanity capture version: {sanity_version or 'none'}")
+    typer.echo(f"Profile preflight gate: {profile_preflight_status}")
+    typer.echo(f"A23 -> B24 transition gate: {transition_status}")
     typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
     typer.echo(f"Output: {store.final_frames_directory(run_id, mode, output_resolution)}")
     if not execute:
@@ -461,6 +574,8 @@ def print_final_bulk_status(run_id: str = FINAL_HYBRID_RUN_ID) -> None:
 
 
 def register_hybrid_capture_commands(app: typer.Typer) -> None:
+    app.command("check-final-capture-profiles")(check_final_capture_profiles_command)
+    app.command("capture-final-profile-transition")(capture_final_profile_transition_command)
     app.command("capture-hybrid-debug")(capture_hybrid_debug_command)
     app.command("capture-hybrid-debug-modes")(capture_hybrid_debug_modes_command)
     app.command("capture-hybrid-sanity")(capture_hybrid_sanity_command)

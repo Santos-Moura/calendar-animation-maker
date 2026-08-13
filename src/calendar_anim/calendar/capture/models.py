@@ -39,6 +39,9 @@ class CalendarCaptureConfig(BaseModel):
     stabilization_seconds: float = Field(default=2.0, ge=0)
     stable_snapshot_count: int = Field(default=2, ge=1, le=10)
     profile_directory: Path = Path(".calendar-anim/browser-profile")
+    profile_name: str | None = None
+    expected_google_account: str | None = None
+    expected_calendar_name: str | None = None
     browser_channel: BrowserChannel = BrowserChannel.CHROME
 
     @model_validator(mode="after")

@@ -1,7 +1,7 @@
 import json
 import statistics
 from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Protocol
@@ -26,6 +26,7 @@ from calendar_anim.calendar.hybrid_capture.artifacts import (
 )
 from calendar_anim.calendar.hybrid_capture.models import (
     CURRENT_CAPTURE_IMPLEMENTATION_VERSION,
+    CURRENT_PROFILE_NAVIGATION_VERSION,
     FINAL_SANITY_SCHEMA_VERSION,
     FinalHybridSanityReport,
     FinalSanityFrameResult,
@@ -58,6 +59,8 @@ class HybridBrowserGateway(Protocol):
 
     def capture_debug_state(self) -> dict[str, object]: ...
 
+    def inspect_navigation(self, expected_week: date) -> dict[str, object]: ...
+
 
 class CaptureLoadFailure(CalendarAnimError):
     def __init__(
@@ -66,12 +69,29 @@ class CaptureLoadFailure(CalendarAnimError):
         diagnostic_paths: list[Path],
         diagnostic_json_paths: list[Path],
         population_samples: list[dict[str, object]],
+        context: dict[str, object] | None = None,
+        last_browser_state: dict[str, object] | None = None,
     ) -> None:
-        super().__init__(f"CAPTURE LOAD FAILURE after {len(errors)} attempts: {errors[-1]}")
+        details = context or {}
+        navigation = (
+            last_browser_state.get("navigation", {}) if isinstance(last_browser_state, dict) else {}
+        )
+        if not isinstance(navigation, dict):
+            navigation = {}
+        suffix = (
+            f" profile={details.get('profile')}, human_frame={details.get('human_frame')},"
+            f" frame_index={details.get('frame_index')}, week={details.get('week_start')},"
+            f" url={navigation.get('current_url')}, state={navigation.get('state')}"
+        )
+        super().__init__(
+            f"CAPTURE LOAD FAILURE after {len(errors)} attempts:{suffix}: {errors[-1]}"
+        )
         self.errors = errors
         self.diagnostic_paths = diagnostic_paths
         self.diagnostic_json_paths = diagnostic_json_paths
         self.population_samples = population_samples
+        self.context = details
+        self.last_browser_state = last_browser_state or {}
 
 
 GatewayContextFactory = Callable[[str, int], AbstractContextManager[HybridBrowserGateway]]
@@ -449,8 +469,21 @@ class HybridCaptureService:
         if (state.output_width, state.output_height) != resolution:
             raise CalendarAnimError("Hybrid capture state does not match selected resolution")
         self.validate_final_capture_gate(plan, mode, resolution)
+        self.validate_profile_capture_gates(plan, mode, resolution)
         for profile, zoom in (("account-a", 33), ("account-b", 90)):
             frames = [frame for frame in plan.frames if frame.calendar_profile == profile]
+            frames = [
+                frame
+                for frame in frames
+                if not (
+                    state.frame(frame.frame_index).status is HybridFrameStatus.COMPLETED
+                    and self.store.final_frame_path(
+                        plan.run_id, frame.frame_index, mode, resolution
+                    ).is_file()
+                )
+            ]
+            if not frames:
+                continue
             with self.gateway_factory(profile, zoom) as gateway:
                 for frame in frames:
                     state_frame = state.frame(frame.frame_index)
@@ -477,22 +510,19 @@ class HybridCaptureService:
                             if mode.includes_header
                             else None
                         )
-                        metrics = self._browser_capture(gateway, frame, raw, logical, header=header)
-                        compose_output_mode(
+                        self._capture_composed_frame(
+                            gateway,
+                            frame,
+                            raw,
                             logical,
                             header,
                             output,
                             mode,
                             resolution,
-                            native_header_height=(
-                                _native_header_height(metrics) if mode.includes_header else None
+                            self.store.final_capture_failure_directory(
+                                plan.run_id, mode, resolution
                             ),
                         )
-                        with Image.open(output) as image:
-                            if image.size != resolution:
-                                raise CalendarAnimError(
-                                    "Final normalized frame resolution is incorrect"
-                                )
                     except Exception as error:
                         state_frame.status = HybridFrameStatus.FAILED
                         state_frame.error = str(error)
@@ -512,6 +542,268 @@ class HybridCaptureService:
             / "a-b-transition-geometry.png",
         )
         return state
+
+    def check_final_capture_profiles(self, plan: HybridCapturePlan) -> dict[str, object]:
+        """Read-only preflight of both persistent profiles and their first target week."""
+
+        selected = (("account-a", 33, plan.frames[0]), ("account-b", 90, plan.frames[23]))
+        results: list[dict[str, object]] = []
+        directory = self.store.profile_preflight_directory(plan.run_id)
+        for profile, zoom, frame in selected:
+            result: dict[str, object] = {
+                "profile": profile,
+                "human_frame": frame.human_frame,
+                "frame_index": frame.frame_index,
+                "week_start": frame.week_start.isoformat(),
+                "zoom_expected": zoom,
+                "status": "NOT_RUN",
+            }
+            try:
+                with self.gateway_factory(profile, zoom) as gateway:
+                    try:
+                        gateway.open_week(frame.week_start)
+                        gateway.wait_until_ready(frame.week_start, 0)
+                        navigation = gateway.inspect_navigation(frame.week_start)
+                        applied_zoom = navigation.get("zoom_applied")
+                        zoom_valid = (
+                            isinstance(applied_zoom, (int, float))
+                            and abs(float(applied_zoom) - zoom) <= 2.0
+                        )
+                        passed = navigation.get("state") == "ready" and zoom_valid
+                        result.update(
+                            {
+                                "status": "PASS" if passed else "FAIL",
+                                "navigation": navigation,
+                                "profile_path": navigation.get("browser_profile_path"),
+                                "session": (
+                                    "logged-in"
+                                    if navigation.get("logged_in_detection")
+                                    else "not-confirmed"
+                                ),
+                                "calendar_loaded": navigation.get("calendar_shell_detection"),
+                                "week_view_reachable": navigation.get("week_matches"),
+                                "zoom_applied": navigation.get("zoom_applied"),
+                                "zoom_valid": zoom_valid,
+                            }
+                        )
+                    except Exception as error:
+                        basename = (
+                            f"capture-failure-{profile}-frame-{frame.human_frame:03d}-attempt-1"
+                        )
+                        try:
+                            browser_state = gateway.capture_debug_state()
+                        except Exception as debug_error:
+                            browser_state = {"diagnostic_error": str(debug_error)}
+                        result["browser"] = browser_state
+                        self.store.save_json_report(
+                            directory / f"{basename}.json",
+                            {**result, "reason": str(error), "browser": browser_state},
+                        )
+                        with suppress(Exception):
+                            gateway.capture_viewport(directory / f"{basename}.png")
+                        raise
+            except Exception as error:
+                result.update({"status": "FAIL", "error": str(error)})
+                if bool(getattr(error, "non_retryable", False)):
+                    results.append(result)
+                    break
+            results.append(result)
+        checked = {str(item["profile"]) for item in results}
+        for profile, zoom, frame in selected:
+            if profile not in checked:
+                results.append(
+                    {
+                        "profile": profile,
+                        "human_frame": frame.human_frame,
+                        "frame_index": frame.frame_index,
+                        "week_start": frame.week_start.isoformat(),
+                        "zoom_expected": zoom,
+                        "status": "NOT_RUN",
+                        "reason": "preflight stopped after non-retryable profile failure",
+                    }
+                )
+        report: dict[str, object] = {
+            "schema_version": "1.0",
+            "profile_navigation_version": CURRENT_PROFILE_NAVIGATION_VERSION,
+            "run_id": plan.run_id,
+            "result": "PASS" if all(item["status"] == "PASS" for item in results) else "FAIL",
+            "profiles": results,
+            "google_calendar_writes": False,
+            "completed_at": datetime.now(UTC).isoformat(),
+        }
+        self.store.save_json_report(self.store.profile_preflight_report_path(plan.run_id), report)
+        directory.mkdir(parents=True, exist_ok=True)
+        return report
+
+    def capture_profile_transition(
+        self,
+        plan: HybridCapturePlan,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> dict[str, object]:
+        """Exercise the exact final A23 -> close A -> B24 capture path."""
+
+        self.validate_final_capture_gate(plan, mode, resolution)
+        self.validate_profile_preflight(plan)
+        directory = self.store.profile_transition_directory(plan.run_id)
+        report_path = self.store.profile_transition_report_path(plan.run_id)
+        try:
+            existing = self.store.load_json_report(report_path)
+        except CalendarAnimError:
+            existing = {}
+        reusable = (
+            existing.get("profile_navigation_version") == CURRENT_PROFILE_NAVIGATION_VERSION
+            and existing.get("output_mode") == mode.value
+            and existing.get("output_resolution") == list(resolution)
+        )
+        raw_results = existing.get("frames", []) if reusable else []
+        results = (
+            [item for item in raw_results if isinstance(item, dict)]
+            if isinstance(raw_results, list)
+            else []
+        )
+        report: dict[str, object] = {
+            "schema_version": "1.0",
+            "profile_navigation_version": CURRENT_PROFILE_NAVIGATION_VERSION,
+            "run_id": plan.run_id,
+            "output_mode": mode.value,
+            "output_resolution": list(resolution),
+            "result": "CAPTURING",
+            "frames": results,
+            "google_calendar_writes": False,
+        }
+        self.store.save_json_report(report_path, report)
+        for frame_index, profile, zoom in ((22, "account-a", 33), (23, "account-b", 90)):
+            frame = plan.frames[frame_index]
+            output = directory / f"frame_{frame_index:03d}-{profile}.png"
+            raw = directory / f".frame_{frame_index:03d}-{profile}-raw.png"
+            logical = directory / f".frame_{frame_index:03d}-{profile}-logical.png"
+            header = directory / f".frame_{frame_index:03d}-{profile}-header.png"
+            item = next(
+                (candidate for candidate in results if candidate.get("frame_index") == frame_index),
+                None,
+            )
+            if item is not None and item.get("status") == "COMPLETED" and output.is_file():
+                continue
+            if item is None:
+                item = {
+                    "frame_index": frame_index,
+                    "human_frame": frame.human_frame,
+                    "profile": profile,
+                    "week_start": frame.week_start.isoformat(),
+                    "artifact": str(output),
+                }
+                results.append(item)
+            item.update({"status": "CAPTURING", "error": None})
+            self.store.save_json_report(report_path, report)
+            try:
+                with self.gateway_factory(profile, zoom) as gateway:
+                    self._capture_composed_frame(
+                        gateway,
+                        frame,
+                        raw,
+                        logical,
+                        header if mode.includes_header else None,
+                        output,
+                        mode,
+                        resolution,
+                        directory,
+                    )
+            except Exception as error:
+                item.update({"status": "FAILED", "error": str(error)})
+                report["result"] = "FAIL"
+                self.store.save_json_report(report_path, report)
+                raise
+            for temporary in (raw, logical, header):
+                if temporary.exists():
+                    temporary.unlink()
+            item["status"] = "COMPLETED"
+            self.store.save_json_report(report_path, report)
+        report["result"] = "PASS"
+        report["completed_at"] = datetime.now(UTC).isoformat()
+        self.store.save_json_report(report_path, report)
+        return report
+
+    def validate_profile_preflight(self, plan: HybridCapturePlan) -> dict[str, object]:
+        report = self.store.load_json_report(self.store.profile_preflight_report_path(plan.run_id))
+        profiles = report.get("profiles", [])
+        profile_status = (
+            {
+                str(item.get("profile")): item.get("status")
+                for item in profiles
+                if isinstance(item, dict)
+            }
+            if isinstance(profiles, list)
+            else {}
+        )
+        if (
+            report.get("result") != "PASS"
+            or report.get("profile_navigation_version") != CURRENT_PROFILE_NAVIGATION_VERSION
+            or profile_status != {"account-a": "PASS", "account-b": "PASS"}
+        ):
+            raise CalendarAnimError("Final profile preflight is missing, stale, or not PASS")
+        return report
+
+    def validate_profile_capture_gates(
+        self,
+        plan: HybridCapturePlan,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> None:
+        self.validate_profile_preflight(plan)
+        transition = self.store.load_json_report(
+            self.store.profile_transition_report_path(plan.run_id)
+        )
+        if (
+            transition.get("result") != "PASS"
+            or transition.get("profile_navigation_version") != CURRENT_PROFILE_NAVIGATION_VERSION
+            or transition.get("output_mode") != mode.value
+            or transition.get("output_resolution") != list(resolution)
+        ):
+            raise CalendarAnimError("Final profile transition test is missing, stale, or not PASS")
+        for frame_index, profile in ((22, "account-a"), (23, "account-b")):
+            artifact = (
+                self.store.profile_transition_directory(plan.run_id)
+                / f"frame_{frame_index:03d}-{profile}.png"
+            )
+            if not artifact.is_file():
+                raise CalendarAnimError("Final profile transition artifact is missing")
+            with Image.open(artifact) as image:
+                if image.size != resolution:
+                    raise CalendarAnimError("Final profile transition artifact has wrong geometry")
+
+    def _capture_composed_frame(
+        self,
+        gateway: HybridBrowserGateway,
+        frame: HybridFramePlan,
+        raw: Path,
+        logical: Path,
+        header: Path | None,
+        output: Path,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+        debug_directory: Path,
+    ) -> dict[str, object]:
+        metrics = self._browser_capture(
+            gateway,
+            frame,
+            raw,
+            logical,
+            header=header,
+            debug_directory=debug_directory,
+        )
+        compose_output_mode(
+            logical,
+            header,
+            output,
+            mode,
+            resolution,
+            native_header_height=_native_header_height(metrics) if mode.includes_header else None,
+        )
+        with Image.open(output) as image:
+            if image.size != resolution:
+                raise CalendarAnimError("Final normalized frame resolution is incorrect")
+        return metrics
 
     def validate_final_capture_gate(
         self,
@@ -709,11 +1001,21 @@ class HybridCaptureService:
         logical: Path,
         header: Path | None = None,
         debug_directory: Path | None = None,
+        capture_context: dict[str, object] | None = None,
     ) -> dict[str, object]:
         errors: list[str] = []
         diagnostics: list[Path] = []
         diagnostic_json_paths: list[Path] = []
         population_samples: list[dict[str, object]] = []
+        last_state: dict[str, object] = {}
+        context = {
+            "profile": frame.calendar_profile,
+            "human_frame": frame.human_frame,
+            "frame_index": frame.frame_index,
+            "week_start": frame.week_start.isoformat(),
+            "zoom_expected": frame.capture_zoom_percent,
+            **(capture_context or {}),
+        }
         for attempt in range(1, 4):
             try:
                 if attempt == 1:
@@ -759,17 +1061,34 @@ class HybridCaptureService:
                         if isinstance(sample, dict):
                             population_samples.append({"attempt": attempt, **sample})
                 directory = debug_directory or raw.parent
-                diagnostic = directory / f"debug-attempt-{attempt}.png"
-                diagnostic_json = directory / f"debug-attempt-{attempt}.json"
+                basename = (
+                    f"capture-failure-{frame.calendar_profile}-"
+                    f"frame-{frame.human_frame:03d}-attempt-{attempt}"
+                )
+                diagnostic = directory / f"{basename}.png"
+                diagnostic_json = directory / f"{basename}.json"
                 try:
                     state = gateway.capture_debug_state()
                 except Exception as debug_error:
                     state = {"diagnostic_error": str(debug_error)}
+                last_state = state
+                navigation = state.get("navigation", {}) if isinstance(state, dict) else {}
+                if not isinstance(navigation, dict):
+                    navigation = {}
                 debug_payload = {
                     "attempt": attempt,
                     "reason": str(error),
+                    **context,
                     "expected_week": frame.week_start.isoformat(),
                     "expected_occurrences_reference": frame.expected_occurrences,
+                    "browser_profile_path": navigation.get("browser_profile_path"),
+                    "current_url": navigation.get("current_url", state.get("url")),
+                    "page_title": navigation.get("page_title", state.get("document_title")),
+                    "logged_in_detection": navigation.get("logged_in_detection"),
+                    "calendar_shell_detection": navigation.get("calendar_shell_detection"),
+                    "week_view_detection": navigation.get("week_view_detection"),
+                    "visible_week_date": navigation.get("visible_week_date"),
+                    "navigation_state": navigation.get("state"),
                     "browser": state,
                 }
                 write_atomic(diagnostic_json, json.dumps(debug_payload, indent=2) + "\n")
@@ -779,7 +1098,16 @@ class HybridCaptureService:
                     diagnostics.append(diagnostic)
                 except Exception:
                     pass
-        raise CaptureLoadFailure(errors, diagnostics, diagnostic_json_paths, population_samples)
+                if bool(getattr(error, "non_retryable", False)):
+                    break
+        raise CaptureLoadFailure(
+            errors,
+            diagnostics,
+            diagnostic_json_paths,
+            population_samples,
+            context,
+            last_state,
+        )
 
     def _validate_final_sequence(
         self,

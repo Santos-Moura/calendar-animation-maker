@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 from datetime import UTC, datetime
@@ -193,6 +194,44 @@ class HybridCaptureStore:
             / "header-grid"
             / f"frame_{frame_index:03d}.png"
         )
+
+    def final_capture_failure_directory(
+        self,
+        run_id: str,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> Path:
+        return (
+            self.run_directory(run_id)
+            / "final-capture"
+            / mode.directory_name
+            / resolution_name(resolution)
+            / "failures"
+        )
+
+    def profile_preflight_directory(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "profile-preflight"
+
+    def profile_preflight_report_path(self, run_id: str) -> Path:
+        return self.profile_preflight_directory(run_id) / "report.json"
+
+    def profile_transition_directory(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "profile-transition-test"
+
+    def profile_transition_report_path(self, run_id: str) -> Path:
+        return self.profile_transition_directory(run_id) / "report.json"
+
+    def save_json_report(self, path: Path, payload: dict[str, object]) -> Path:
+        return write_atomic(path, json.dumps(payload, indent=2) + "\n")
+
+    def load_json_report(self, path: Path) -> dict[str, object]:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise CalendarAnimError(f"Invalid or missing report: {path}") from error
+        if not isinstance(raw, dict):
+            raise CalendarAnimError(f"Invalid report object: {path}")
+        return raw
 
     def final_directory(
         self, run_id: str, mode: HybridOutputMode, resolution: tuple[int, int]
