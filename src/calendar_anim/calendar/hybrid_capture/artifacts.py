@@ -480,6 +480,7 @@ def compose_output_mode(
     resolution: tuple[int, int] = LEGACY_RESOLUTION,
     *,
     native_header_height: int | None = None,
+    native_time_gutter_width: int | None = None,
 ) -> dict[str, object]:
     """Compose directly from native browser crops into the requested resolution."""
 
@@ -495,8 +496,10 @@ def compose_output_mode(
             if source_width <= 0 or source_height <= 0:
                 raise CalendarAnimError("Calendar mode source has invalid dimensions")
             header_source_rect: list[int] | None = None
+            time_gutter_source_rect: list[int] | None = None
             grid_source_rect: list[int] | None = None
             header_output_rect: list[int] | None = None
+            time_gutter_output_rect: list[int] | None = None
             grid_output_rect: list[int] | None = None
             if mode is HybridOutputMode.HEADER_PRESERVED_LETTERBOX:
                 scale = min(target_width / source_width, target_height / source_height)
@@ -515,6 +518,7 @@ def compose_output_mode(
                 letterbox = content_size != resolution
                 stretch = False
                 header_method = "nearest-neighbor"
+                gutter_method = "nearest-neighbor"
                 grid_method = "nearest-neighbor"
             elif mode is HybridOutputMode.HEADER_PRESERVED_FILL and resolution != LEGACY_RESOLUTION:
                 if native_header_height is None or not 0 < native_header_height < source_height:
@@ -526,37 +530,82 @@ def compose_output_mode(
                 )
                 target_grid_height = target_height - target_header_height
                 header_source_rect = [0, 0, source_width, native_header_height]
+                gutter_width = native_time_gutter_width or 0
+                if gutter_width < 0 or gutter_width >= source_width:
+                    raise CalendarAnimError("High-resolution time-gutter geometry is invalid")
+                target_gutter_width = (
+                    max(1, round(target_width * gutter_width / source_width)) if gutter_width else 0
+                )
                 grid_source_rect = [
-                    0,
+                    gutter_width,
                     native_header_height,
-                    source_width,
+                    source_width - gutter_width,
                     source_height - native_header_height,
                 ]
                 header_output_rect = [0, 0, target_width, target_header_height]
                 grid_output_rect = [
-                    0,
+                    target_gutter_width,
                     target_header_height,
-                    target_width,
+                    target_width - target_gutter_width,
                     target_grid_height,
                 ]
                 native_header = source.crop((0, 0, source_width, native_header_height))
-                native_grid = source.crop((0, native_header_height, source_width, source_height))
+                native_gutter = (
+                    source.crop((0, native_header_height, gutter_width, source_height))
+                    if gutter_width
+                    else None
+                )
+                native_grid = source.crop(
+                    (gutter_width, native_header_height, source_width, source_height)
+                )
                 resized_header = native_header.resize(
                     (target_width, target_header_height), Image.Resampling.LANCZOS
                 )
+                resized_gutter = (
+                    native_gutter.resize(
+                        (target_gutter_width, target_grid_height), Image.Resampling.LANCZOS
+                    )
+                    if native_gutter is not None
+                    else None
+                )
                 resized_grid = native_grid.resize(
-                    (target_width, target_grid_height), Image.Resampling.NEAREST
+                    (target_width - target_gutter_width, target_grid_height),
+                    Image.Resampling.NEAREST,
                 )
                 output = Image.new("RGB", resolution)
                 output.paste(resized_header, (0, 0))
-                output.paste(resized_grid, (0, target_header_height))
-                for image in (native_header, native_grid, resized_header, resized_grid):
+                if resized_gutter is not None:
+                    output.paste(resized_gutter, (0, target_header_height))
+                    time_gutter_source_rect = [
+                        0,
+                        native_header_height,
+                        gutter_width,
+                        source_height - native_header_height,
+                    ]
+                    time_gutter_output_rect = [
+                        0,
+                        target_header_height,
+                        target_gutter_width,
+                        target_grid_height,
+                    ]
+                output.paste(resized_grid, (target_gutter_width, target_header_height))
+                for image in (
+                    native_header,
+                    native_gutter,
+                    native_grid,
+                    resized_header,
+                    resized_gutter,
+                    resized_grid,
+                ):
+                    if image is None:
+                        continue
                     image.close()
                 content_size = resolution
                 offset = (0, 0)
                 letterbox = False
                 stretch = abs(source_width / source_height - target_width / target_height) > 1e-6
                 header_method = "lanczos"
+                gutter_method = "lanczos" if gutter_width else "not-included"
                 grid_method = "nearest-neighbor"
             else:
                 content_size = resolution
@@ -568,6 +617,7 @@ def compose_output_mode(
                     and abs(source_width / source_height - target_width / target_height) > 1e-6
                 )
                 header_method = "nearest-neighbor"
+                gutter_method = "nearest-neighbor"
                 grid_method = "nearest-neighbor"
             output.save(destination)
             output.close()
@@ -590,10 +640,13 @@ def compose_output_mode(
         "intermediate_504x288": False,
         "resize_passes": 1,
         "header_resample_method": header_method,
+        "time_gutter_resample_method": gutter_method,
         "grid_resample_method": grid_method,
         "header_source_rect": header_source_rect,
+        "time_gutter_source_rect": time_gutter_source_rect,
         "grid_source_rect": grid_source_rect,
         "header_output_rect": header_output_rect,
+        "time_gutter_output_rect": time_gutter_output_rect,
         "grid_output_rect": grid_output_rect,
         "resampling": (header_method if header_method == grid_method else "hybrid"),
         "blur_or_sharpen": False,

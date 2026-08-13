@@ -238,14 +238,17 @@ class SingleProfilePreviewFrameResult(BaseModel):
     output: str
     output_size: tuple[int, int]
     header_present: bool
+    left_time_gutter_present: bool
     pre_06_blank_gap_present: bool
     vertical_interval: str
     capture: str
     native_browser_viewport: dict[str, object]
     native_composed_crop_dimensions: tuple[int, int]
     header_source_rect: list[int]
+    time_gutter_source_rect: list[int]
     grid_source_rect: list[int]
     header_output_rect: list[int]
+    time_gutter_output_rect: list[int]
     grid_output_rect: list[int]
     current_url: str | None = None
 

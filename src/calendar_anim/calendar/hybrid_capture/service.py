@@ -213,6 +213,7 @@ class HybridCaptureService:
                 mode,
                 resolution,
                 native_header_height=_native_header_height(metrics),
+                native_time_gutter_width=_native_time_gutter_width(metrics),
             )
             header_bounds = metrics.get("header_grid_bounds")
             logical_clip = metrics.get("logical_clip")
@@ -389,6 +390,7 @@ class HybridCaptureService:
                     mode,
                     resolution,
                     native_header_height=native_header_height,
+                    native_time_gutter_width=_native_time_gutter_width(metrics),
                 )
                 composition["bounds"] = (
                     logical_clip if mode is HybridOutputMode.PIXEL_FAITHFUL else header_bounds
@@ -925,6 +927,9 @@ class HybridCaptureService:
             mode,
             resolution,
             native_header_height=_native_header_height(metrics) if mode.includes_header else None,
+            native_time_gutter_width=(
+                _native_time_gutter_width(metrics) if mode.includes_header else None
+            ),
         )
         with Image.open(output) as image:
             if image.size != resolution:
@@ -1273,6 +1278,16 @@ def _native_header_height(metrics: dict[str, object]) -> int:
     return height
 
 
+def _native_time_gutter_width(metrics: dict[str, object]) -> int:
+    bounds = metrics.get("header_grid_bounds")
+    if not isinstance(bounds, dict):
+        raise CalendarAnimError("Native Calendar time-gutter bounds are unavailable")
+    width = bounds.get("native_time_gutter_width")
+    if not isinstance(width, int) or width <= 0:
+        raise CalendarAnimError("Native Calendar time-gutter width is invalid")
+    return width
+
+
 def _image_dimensions(path: Path) -> list[int]:
     try:
         with Image.open(path) as image:
@@ -1408,8 +1423,10 @@ def _preview_frame_result(
     source_dimensions = composition.get("source_dimensions")
     rect_names = (
         "header_source_rect",
+        "time_gutter_source_rect",
         "grid_source_rect",
         "header_output_rect",
+        "time_gutter_output_rect",
         "grid_output_rect",
     )
     rects = {name: composition.get(name) for name in rect_names}
@@ -1438,14 +1455,17 @@ def _preview_frame_result(
         output=str(output),
         output_size=resolution,
         header_present=bool(composition.get("header_included")),
+        left_time_gutter_present=bool(metrics.get("left_time_gutter_included")),
         pre_06_blank_gap_present=not bool(metrics.get("empty_pre_06_interval_removed")),
         vertical_interval=str(metrics.get("vertical_interval", "UNKNOWN")),
         capture="PASS",
         native_browser_viewport={str(key): value for key, value in viewport.items()},
         native_composed_crop_dimensions=(source_dimensions[0], source_dimensions[1]),
         header_source_rect=rects["header_source_rect"],  # type: ignore[arg-type]
+        time_gutter_source_rect=rects["time_gutter_source_rect"],  # type: ignore[arg-type]
         grid_source_rect=rects["grid_source_rect"],  # type: ignore[arg-type]
         header_output_rect=rects["header_output_rect"],  # type: ignore[arg-type]
+        time_gutter_output_rect=rects["time_gutter_output_rect"],  # type: ignore[arg-type]
         grid_output_rect=rects["grid_output_rect"],  # type: ignore[arg-type]
         current_url=str(browser.get("url")) if browser.get("url") else None,
     )
@@ -1456,8 +1476,10 @@ def _preview_geometry_signature(result: SingleProfilePreviewFrameResult) -> tupl
         tuple(sorted(result.native_browser_viewport.items())),
         result.native_composed_crop_dimensions,
         tuple(result.header_source_rect),
+        tuple(result.time_gutter_source_rect),
         tuple(result.grid_source_rect),
         tuple(result.header_output_rect),
+        tuple(result.time_gutter_output_rect),
         tuple(result.grid_output_rect),
         result.output_size,
     )
@@ -1489,6 +1511,7 @@ def _single_profile_preview_text(report: SingleProfilePreviewReport) -> str:
                 f"Output: {frame.output}",
                 f"Size: {frame.output_size[0]}x{frame.output_size[1]}",
                 f"Header present: {'YES' if frame.header_present else 'NO'}",
+                "Left time gutter present: " + ("YES" if frame.left_time_gutter_present else "NO"),
                 "03:00-06:00 blank gap present: "
                 + ("YES" if frame.pre_06_blank_gap_present else "NO"),
                 f"Grid: {frame.vertical_interval}",
@@ -1496,8 +1519,10 @@ def _single_profile_preview_text(report: SingleProfilePreviewReport) -> str:
                 f"Native viewport: {frame.native_browser_viewport}",
                 f"Native composed crop: {frame.native_composed_crop_dimensions}",
                 f"Header source rect: {frame.header_source_rect}",
+                f"Left time gutter source rect: {frame.time_gutter_source_rect}",
                 f"Grid source rect: {frame.grid_source_rect}",
                 f"Header output rect: {frame.header_output_rect}",
+                f"Left time gutter output rect: {frame.time_gutter_output_rect}",
                 f"Grid output rect: {frame.grid_output_rect}",
                 "",
             ]

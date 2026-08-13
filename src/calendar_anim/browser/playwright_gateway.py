@@ -802,6 +802,35 @@ def capture_clip_for_window(
     }
 
 
+def header_time_gutter_grid_clips(
+    header_grid_clip: dict[str, float],
+    logical_event_grid_clip: dict[str, float],
+    time_window: dict[str, float],
+) -> tuple[dict[str, float], dict[str, float], float]:
+    """Join structural header/time-axis bounds without consulting event geometry."""
+
+    right = logical_event_grid_clip["x"] + logical_event_grid_clip["width"]
+    gutter_width = logical_event_grid_clip["x"] - time_window["x"]
+    if gutter_width <= 1 or right <= time_window["x"]:
+        raise CalendarAnimError("Calendar structural time gutter has invalid bounds")
+    width = right - time_window["x"]
+    return (
+        {
+            "x": time_window["x"],
+            "y": header_grid_clip["y"],
+            "width": width,
+            "height": header_grid_clip["height"],
+        },
+        {
+            "x": time_window["x"],
+            "y": logical_event_grid_clip["y"],
+            "width": width,
+            "height": logical_event_grid_clip["height"],
+        },
+        gutter_width,
+    )
+
+
 def structural_grid_bounds_from_diagnostics(raw: object) -> dict[str, float]:
     """Validate a content-independent grid selection returned by the browser."""
 
@@ -1171,46 +1200,64 @@ class PlaywrightCalendarCaptureGateway:
         }
 
     def capture_header_event_grid(self, output_path: Path) -> dict[str, object]:
-        """Capture the structural week header plus the exact 06:00-00:00 grid."""
+        """Capture header, structural time gutter, and exact 06:00-00:00 event grid."""
 
-        if self._week_header_grid_clip is None or self._logical_grid_clip is None:
+        if (
+            self._week_header_grid_clip is None
+            or self._logical_grid_clip is None
+            or self._time_window_clip is None
+        ):
             raise CalendarAnimError("Calendar header grid is not ready for capture")
-        header_clip = self._week_header_grid_clip
-        event_grid_clip = self._logical_grid_clip
+        grid_clip = self._logical_grid_clip
+        time_clip = self._time_window_clip
+        header_clip, time_grid_clip, gutter_width = header_time_gutter_grid_clips(
+            self._week_header_grid_clip, grid_clip, time_clip
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         page = self._require_page()
         header_bytes = page.screenshot(animations="disabled", scale="css", clip=header_clip)
-        event_grid_bytes = page.screenshot(animations="disabled", scale="css", clip=event_grid_clip)
+        time_grid_bytes = page.screenshot(animations="disabled", scale="css", clip=time_grid_clip)
         header: Image.Image | None = None
-        event_grid: Image.Image | None = None
+        time_grid: Image.Image | None = None
         composed: Image.Image | None = None
         try:
             with Image.open(BytesIO(header_bytes)) as opened:
                 header = opened.convert("RGB")
-            with Image.open(BytesIO(event_grid_bytes)) as opened:
-                event_grid = opened.convert("RGB")
-            if header.width != event_grid.width:
-                raise CalendarAnimError("Calendar header and event-grid structural widths differ")
-            composed = Image.new("RGB", (header.width, header.height + event_grid.height))
+            with Image.open(BytesIO(time_grid_bytes)) as opened:
+                time_grid = opened.convert("RGB")
+            if header.width != time_grid.width:
+                raise CalendarAnimError("Calendar header and time-grid structural widths differ")
+            composed = Image.new("RGB", (header.width, header.height + time_grid.height))
             composed.paste(header, (0, 0))
-            composed.paste(event_grid, (0, header.height))
+            composed.paste(time_grid, (0, header.height))
             composed.save(output_path)
             dimensions = [composed.width, composed.height]
         finally:
-            for image in (header, event_grid, composed):
+            for image in (header, time_grid, composed):
                 if image is not None:
                     image.close()
+        native_gutter_width = round(gutter_width)
         return {
             "header_grid_bounds": {
                 "header_clip": header_clip,
-                "event_grid_clip": event_grid_clip,
+                "time_grid_clip": time_grid_clip,
+                "time_gutter_clip": {
+                    "x": time_clip["x"],
+                    "y": grid_clip["y"],
+                    "width": gutter_width,
+                    "height": grid_clip["height"],
+                },
+                "event_grid_clip": grid_clip,
                 "composite_dimensions": dimensions,
-                "native_header_height": dimensions[1] - event_grid.height,
-                "native_grid_height": event_grid.height,
+                "native_header_height": dimensions[1] - time_grid.height,
+                "native_time_gutter_width": native_gutter_width,
+                "native_grid_width": dimensions[0] - native_gutter_width,
+                "native_grid_height": time_grid.height,
             },
             "header_included": True,
+            "left_time_gutter_included": True,
             "vertical_interval": "06:00-00:00",
-            "horizontal_bounds_source": "structural-week-grid",
+            "horizontal_bounds_source": "structural-time-gutter-and-week-grid",
             "empty_pre_06_interval_removed": True,
         }
 
