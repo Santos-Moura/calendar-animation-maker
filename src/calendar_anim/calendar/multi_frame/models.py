@@ -82,7 +82,7 @@ class MultiFramePlan(BaseModel):
     target_grid_height: int = Field(gt=0)
     grid_profile: str = "legacy"
     slots_per_day: int | None = Field(default=None, gt=0)
-    vertical_step_minutes: int | None = Field(default=None, gt=0)
+    vertical_step_minutes: float | None = Field(default=None, gt=0)
     visible_start_hour: int | None = Field(default=None, ge=0, le=23)
     visible_end_hour: int | None = Field(default=None, ge=1, le=24)
     subcolumn_order_strategy: SubcolumnOrderStrategy
@@ -137,9 +137,11 @@ class MultiFramePlan(BaseModel):
             if self.target_grid_width != self.slots_per_day * 7:
                 raise ValueError("target grid width does not match slots_per_day")
             visible_minutes = (self.visible_end_hour - self.visible_start_hour) * 60
-            if visible_minutes % self.vertical_step_minutes:
+            rows = visible_minutes / self.vertical_step_minutes
+            rounded_rows = round(rows)
+            if abs(rows - rounded_rows) > 1e-9:
                 raise ValueError("visible window is not divisible by vertical_step_minutes")
-            if self.target_grid_height != visible_minutes // self.vertical_step_minutes:
+            if self.target_grid_height != rounded_rows:
                 raise ValueError("target grid height does not match persisted time geometry")
         return self
 

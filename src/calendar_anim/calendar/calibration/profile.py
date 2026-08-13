@@ -296,8 +296,8 @@ def profile_summary(profile: CalibrationProfile) -> str:
     return "\n".join(lines)
 
 
-def _minutes(value: int | None) -> str:
-    return f"{value} minutes" if value is not None else "pending"
+def _minutes(value: float | int | None) -> str:
+    return f"{value:g} minutes" if value is not None else "pending"
 
 
 def _value(value: Any | None) -> str:

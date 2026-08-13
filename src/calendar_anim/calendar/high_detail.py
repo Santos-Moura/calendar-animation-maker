@@ -5,8 +5,11 @@ from calendar_anim.calendar.multi_frame.quota_wait import QuotaWaitPolicy
 from calendar_anim.exceptions import CalendarAnimError
 
 HIGH_DETAIL_GRID: Final = "126x72"
+EXPERIMENTAL_ULTRA_GRID: Final = "168x96"
 HIGH_DETAIL_SLOTS_PER_DAY: Final = 18
 HIGH_DETAIL_VERTICAL_STEP_MINUTES: Final = 15
+EXPERIMENTAL_ULTRA_SLOTS_PER_DAY: Final = 24
+EXPERIMENTAL_ULTRA_VERTICAL_STEP_MINUTES: Final = 11.25
 HIGH_DETAIL_VISIBLE_START_HOUR: Final = 6
 HIGH_DETAIL_VISIBLE_END_HOUR: Final = 24
 HIGH_DETAIL_GRID_PROFILE: Final = f"high-detail-{HIGH_DETAIL_GRID}"
@@ -51,7 +54,7 @@ def is_high_detail_geometry(
     width: int,
     height: int,
     slots_per_day: int | None,
-    vertical_step_minutes: int | None,
+    vertical_step_minutes: float | None,
     visible_start_hour: int | None,
     visible_end_hour: int | None,
 ) -> bool:
@@ -74,16 +77,24 @@ def apply_high_detail_grid(
 ) -> CalibrationProfile:
     """Return an isolated mapper profile for the validated high-detail candidate."""
 
-    if grid.lower().strip() != HIGH_DETAIL_GRID:
+    normalized = grid.lower().strip()
+    if normalized not in {HIGH_DETAIL_GRID, EXPERIMENTAL_ULTRA_GRID}:
         raise CalendarAnimError(
-            f"Unsupported experimental grid {grid!r}; supported: {HIGH_DETAIL_GRID}"
+            f"Unsupported experimental grid {grid!r}; supported: "
+            f"{HIGH_DETAIL_GRID}, {EXPERIMENTAL_ULTRA_GRID}"
         )
-    data = base_profile.model_dump()
-    data["horizontal_mapping"]["maximum_tested_overlap_columns"] = HIGH_DETAIL_SLOTS_PER_DAY
-    data["horizontal_mapping"]["usable_overlap_columns_per_day"] = HIGH_DETAIL_SLOTS_PER_DAY
-    data["vertical_mapping"]["minimum_distinguishable_height_minutes"] = (
-        HIGH_DETAIL_VERTICAL_STEP_MINUTES
+    slots_per_day, vertical_step = (
+        (HIGH_DETAIL_SLOTS_PER_DAY, HIGH_DETAIL_VERTICAL_STEP_MINUTES)
+        if normalized == HIGH_DETAIL_GRID
+        else (
+            EXPERIMENTAL_ULTRA_SLOTS_PER_DAY,
+            EXPERIMENTAL_ULTRA_VERTICAL_STEP_MINUTES,
+        )
     )
+    data = base_profile.model_dump()
+    data["horizontal_mapping"]["maximum_tested_overlap_columns"] = slots_per_day
+    data["horizontal_mapping"]["usable_overlap_columns_per_day"] = slots_per_day
+    data["vertical_mapping"]["minimum_distinguishable_height_minutes"] = vertical_step
     for section in ("calendar_ui", "position_mapping"):
         data[section]["visible_start_hour"] = HIGH_DETAIL_VISIBLE_START_HOUR
         data[section]["visible_end_hour"] = HIGH_DETAIL_VISIBLE_END_HOUR

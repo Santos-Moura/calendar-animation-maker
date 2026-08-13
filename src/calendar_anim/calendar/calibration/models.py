@@ -210,7 +210,7 @@ class CalibrationObservations(BaseModel):
 
 class VerticalMappingProfile(BaseModel):
     minimum_visible_event_minutes: int | None = Field(default=None, ge=1)
-    minimum_distinguishable_height_minutes: int | None = Field(default=None, ge=1)
+    minimum_distinguishable_height_minutes: float | None = Field(default=None, ge=1)
     logical_rows: int | None = Field(default=None, ge=1)
 
 
@@ -410,7 +410,7 @@ class CalibrationProfile(BaseModel):
             visible_minutes = (
                 self.calendar_ui.visible_end_hour - self.calendar_ui.visible_start_hour
             ) * 60
-            self.vertical_mapping.logical_rows = visible_minutes // row_minutes
+            self.vertical_mapping.logical_rows = int(visible_minutes // row_minutes)
 
         usable_columns = self.horizontal_mapping.usable_overlap_columns_per_day
         if usable_columns is None:
