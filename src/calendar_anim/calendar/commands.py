@@ -35,6 +35,7 @@ from calendar_anim.calendar.calibration.profile import (
 )
 from calendar_anim.calendar.calibration.service import CalibrationService, CleanupMatch
 from calendar_anim.calendar.capture.commands import register_capture_commands
+from calendar_anim.calendar.cayde_216.commands import register_cayde_216_commands
 from calendar_anim.calendar.frame_mapping.artifacts import (
     write_frame_execution_result,
     write_frame_mapping_artifacts,
@@ -932,3 +933,4 @@ def register_calendar_commands(app: typer.Typer) -> None:
     register_vertical_compression_commands(app)
     register_horizontal_band_compression_commands(app)
     register_hybrid_capture_commands(app)
+    register_cayde_216_commands(app)

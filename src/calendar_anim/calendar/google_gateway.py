@@ -313,6 +313,35 @@ class GoogleCalendarGateway:
             if not page_token:
                 return found
 
+    def list_event_ids_in_range(
+        self,
+        calendar_id: str,
+        time_min: datetime,
+        time_max: datetime,
+    ) -> list[str]:
+        """List expanded event IDs in a half-open range without mutating Calendar."""
+
+        page_token: str | None = None
+        event_ids: list[str] = []
+        while True:
+            response = (
+                self.service.events()
+                .list(
+                    calendarId=calendar_id,
+                    timeMin=time_min.isoformat(),
+                    timeMax=time_max.isoformat(),
+                    singleEvents=True,
+                    showDeleted=False,
+                    maxResults=2500,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+            event_ids.extend(str(item["id"]) for item in response.get("items", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                return event_ids
+
     def delete_events(self, calendar_id: str, event_ids: Sequence[str]) -> CalendarDeleteResult:
         deleted = 0
         errors: list[str] = []
