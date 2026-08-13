@@ -1,10 +1,23 @@
+import hashlib
 import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 from calendar_anim.exceptions import CalendarAnimError
+
+
+def media_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise CalendarAnimError(f"Could not hash media file: {path}") from error
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -23,6 +36,24 @@ class MediaTiming:
     @property
     def difference_seconds(self) -> float:
         return self.final_seconds - self.visual_seconds
+
+
+@dataclass(frozen=True)
+class AVMediaProbe:
+    video_codec: str
+    audio_codec: str
+    width: int
+    height: int
+    fps: float
+    video_frame_count: int
+    video_duration_seconds: float
+    audio_duration_seconds: float
+    container_duration_seconds: float
+    sample_aspect_ratio: str
+
+    @property
+    def av_delta_seconds(self) -> float:
+        return abs(self.audio_duration_seconds - self.video_duration_seconds)
 
 
 def detect_ffmpeg() -> FFmpegTools:
@@ -73,6 +104,40 @@ def build_extract_audio_command(
         "0:a:0",
         "-vn",
         *codec,
+        str(output_audio),
+    ]
+
+
+def build_exact_audio_extract_command(
+    tools: FFmpegTools,
+    source_video: Path,
+    output_audio: Path,
+    clip_start: float,
+    clip_end: float,
+) -> list[str]:
+    if clip_start < 0 or clip_end <= clip_start:
+        raise CalendarAnimError("Invalid audio clip range")
+    duration = clip_end - clip_start
+    return [
+        str(tools.ffmpeg),
+        "-y",
+        "-loglevel",
+        "error",
+        "-ss",
+        f"{clip_start:.6f}",
+        "-t",
+        f"{duration:.6f}",
+        "-i",
+        str(source_video),
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-af",
+        f"atrim=duration={duration:.6f},asetpts=PTS-STARTPTS",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
         str(output_audio),
     ]
 
@@ -148,6 +213,91 @@ def probe_audio_codec(tools: FFmpegTools, media: Path) -> str:
         raise CalendarAnimError(f"No audio stream was found in {media}") from error
 
 
+def probe_av_media(tools: FFmpegTools, media: Path) -> AVMediaProbe:
+    command = [
+        str(tools.ffprobe),
+        "-v",
+        "error",
+        "-count_frames",
+        "-show_entries",
+        (
+            "stream=codec_type,codec_name,width,height,avg_frame_rate,nb_frames,"
+            "nb_read_frames,duration,sample_aspect_ratio:format=duration"
+        ),
+        "-of",
+        "json",
+        str(media),
+    ]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+        payload = json.loads(completed.stdout)
+        streams = payload["streams"]
+        video = next(stream for stream in streams if stream["codec_type"] == "video")
+        audio = next(stream for stream in streams if stream["codec_type"] == "audio")
+        frame_count_text = video.get("nb_read_frames") or video["nb_frames"]
+        return AVMediaProbe(
+            video_codec=str(video["codec_name"]),
+            audio_codec=str(audio["codec_name"]),
+            width=int(video["width"]),
+            height=int(video["height"]),
+            fps=float(Fraction(str(video["avg_frame_rate"]))),
+            video_frame_count=int(frame_count_text),
+            video_duration_seconds=float(video["duration"]),
+            audio_duration_seconds=float(audio["duration"]),
+            container_duration_seconds=float(payload["format"]["duration"]),
+            sample_aspect_ratio=str(video["sample_aspect_ratio"]),
+        )
+    except (
+        subprocess.CalledProcessError,
+        StopIteration,
+        IndexError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise CalendarAnimError(f"ffprobe could not validate final A/V MP4: {media}") from error
+
+
+def validate_av_media(
+    probe: AVMediaProbe,
+    resolution: tuple[int, int],
+    *,
+    expected_duration_seconds: float = 36.0,
+    tolerance_seconds: float = 0.050,
+) -> None:
+    failures = []
+    if probe.video_codec != "h264":
+        failures.append(f"video codec={probe.video_codec}, expected h264")
+    if probe.audio_codec != "aac":
+        failures.append(f"audio codec={probe.audio_codec}, expected aac")
+    if (probe.width, probe.height) != resolution:
+        failures.append(
+            f"resolution={probe.width}x{probe.height}, expected {resolution[0]}x{resolution[1]}"
+        )
+    if abs(probe.fps - 3.0) > 0.001:
+        failures.append(f"fps={probe.fps}, expected 3")
+    if probe.video_frame_count != 108:
+        failures.append(f"video frames={probe.video_frame_count}, expected 108")
+    if abs(probe.video_duration_seconds - expected_duration_seconds) > tolerance_seconds:
+        failures.append(
+            f"video duration={probe.video_duration_seconds:.6f}s, "
+            f"expected {expected_duration_seconds:.6f}s"
+        )
+    if abs(probe.container_duration_seconds - expected_duration_seconds) > tolerance_seconds:
+        failures.append(
+            f"container duration={probe.container_duration_seconds:.6f}s, "
+            f"expected {expected_duration_seconds:.6f}s"
+        )
+    if probe.av_delta_seconds > tolerance_seconds:
+        failures.append(
+            f"A/V delta={probe.av_delta_seconds:.6f}s, maximum {tolerance_seconds:.6f}s"
+        )
+    if probe.sample_aspect_ratio != "1:1":
+        failures.append(f"SAR={probe.sample_aspect_ratio}, expected 1:1")
+    if failures:
+        raise CalendarAnimError("Final A/V validation failed; " + "; ".join(failures))
+
+
 def extract_audio(
     tools: FFmpegTools,
     source_video: Path,
@@ -167,6 +317,20 @@ def extract_audio(
         copy_aac=source_audio_codec.lower() == "aac",
     )
     _run_ffmpeg(command)
+    return output_audio
+
+
+def extract_exact_audio(
+    tools: FFmpegTools,
+    source_video: Path,
+    output_audio: Path,
+    clip_start: float,
+    clip_end: float,
+) -> Path:
+    output_audio.parent.mkdir(parents=True, exist_ok=True)
+    _run_ffmpeg(
+        build_exact_audio_extract_command(tools, source_video, output_audio, clip_start, clip_end)
+    )
     return output_audio
 
 

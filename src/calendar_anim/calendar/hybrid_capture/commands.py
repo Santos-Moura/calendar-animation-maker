@@ -8,11 +8,17 @@ import typer
 
 from calendar_anim.browser.playwright_gateway import PlaywrightCalendarCaptureGateway
 from calendar_anim.calendar.capture.final_media import (
+    build_exact_audio_extract_command,
+    build_mux_command,
     detect_ffmpeg,
     extract_audio,
+    extract_exact_audio,
+    media_sha256,
     mux_audio,
     probe_audio_codec,
+    probe_av_media,
     probe_duration,
+    validate_av_media,
     validate_timing,
 )
 from calendar_anim.calendar.capture.models import BrowserChannel, CalendarCaptureConfig
@@ -880,6 +886,151 @@ def mux_final_hybrid_audio_command(
     typer.echo(f"Duration: {timing.final_seconds:.6f}s")
 
 
+def mux_final_single_profile_audio_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
+    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
+        HybridOutputMode.HEADER_PRESERVED_FILL
+    ),
+    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
+    source_video: Annotated[Path, typer.Option("--source-video")] = Path("input.mp4"),
+) -> None:
+    """Mux exact 114-150s audio into the existing single-profile visual MP4."""
+
+    clip_start = 114.0
+    clip_end = 150.0
+    expected_duration = clip_end - clip_start
+    try:
+        validate_input_hash(source_video)
+        output_resolution = parse_output_resolution(resolution)
+        store = AccountBSingleCaptureStore()
+        final = store.single_profile_final_directory(run_id, mode, output_resolution)
+        visual = final / "final-video-no-audio.mp4"
+        if not visual.is_file():
+            raise CalendarAnimError(
+                "Single-profile silent MP4 does not exist; expected: " + str(visual)
+            )
+        tools = detect_ffmpeg()
+        silent_probe = probe_final_visual(tools, visual)
+        validate_final_visual_probe(silent_probe, output_resolution)
+        source_audio_codec = probe_audio_codec(tools, source_video)
+        visual_hash_before = media_sha256(visual)
+        audio = final / "cutscene-audio-114s-150s.m4a"
+        audio_command = build_exact_audio_extract_command(
+            tools, source_video, audio, clip_start, clip_end
+        )
+        extract_exact_audio(tools, source_video, audio, clip_start, clip_end)
+        output = final / "final-with-audio.mp4"
+        mux_command = build_mux_command(tools, visual, audio, output)
+        mux_audio(tools, visual, audio, output)
+        probe = probe_av_media(tools, output)
+        validate_av_media(
+            probe,
+            output_resolution,
+            expected_duration_seconds=expected_duration,
+        )
+        visual_hash_after = media_sha256(visual)
+        if visual_hash_after != visual_hash_before:
+            raise CalendarAnimError("Silent visual MP4 changed during audio mux")
+        report = {
+            "schema_version": "1.0",
+            "run_id": run_id,
+            "capture_strategy": "single-profile-account-b",
+            "silent_video_input": str(visual),
+            "source_video_input": str(source_video),
+            "source_audio_codec": source_audio_codec,
+            "source_audio_clip_start_seconds": clip_start,
+            "source_audio_clip_end_seconds": clip_end,
+            "expected_duration_seconds": expected_duration,
+            "final_output": str(output),
+            "video_copied": True,
+            "video_reencoded": False,
+            "audio_copied": False,
+            "audio_reencoded": True,
+            "audio_output_codec": probe.audio_codec,
+            "audio_extract_command": audio_command,
+            "mux_command": mux_command,
+            "silent_video_sha256_before": visual_hash_before,
+            "silent_video_sha256_after": visual_hash_after,
+            "silent_video_unchanged": True,
+            "validation": {
+                "result": "PASS",
+                "video_codec": probe.video_codec,
+                "audio_present": True,
+                "audio_codec": probe.audio_codec,
+                "width": probe.width,
+                "height": probe.height,
+                "fps": probe.fps,
+                "video_frame_count": probe.video_frame_count,
+                "video_duration_seconds": probe.video_duration_seconds,
+                "audio_duration_seconds": probe.audio_duration_seconds,
+                "final_container_duration_seconds": probe.container_duration_seconds,
+                "av_delta_seconds": probe.av_delta_seconds,
+                "av_tolerance_seconds": 0.050,
+                "sample_aspect_ratio": probe.sample_aspect_ratio,
+            },
+            "capture_checkpoint_touched": False,
+            "pngs_touched": False,
+            "calendar_reads": False,
+            "calendar_writes": False,
+            "recurrence_touched": False,
+            "browser_opened": False,
+        }
+        write_atomic(
+            final / "single-profile-audio-mux-report.json", json.dumps(report, indent=2) + "\n"
+        )
+        report_text = "\n".join(
+            [
+                "FINAL SINGLE-PROFILE AUDIO MUX",
+                "==============================",
+                "",
+                f"Silent video: {visual}",
+                f"Source video: {source_video}",
+                f"Source audio clip: {clip_start:.1f}s -> {clip_end:.1f}s",
+                f"Final output: {output}",
+                "Video: COPIED (-c:v copy), not reencoded",
+                f"Audio: REENCODED to {probe.audio_codec}",
+                f"Video duration: {probe.video_duration_seconds:.6f}s",
+                f"Audio duration: {probe.audio_duration_seconds:.6f}s",
+                f"Container duration: {probe.container_duration_seconds:.6f}s",
+                f"A/V delta: {probe.av_delta_seconds:.6f}s",
+                f"Resolution: {probe.width}x{probe.height}",
+                f"FPS: {probe.fps:g}",
+                f"Video codec: {probe.video_codec}",
+                f"Audio codec: {probe.audio_codec}",
+                f"SAR: {probe.sample_aspect_ratio}",
+                "ffprobe: PASS",
+                "Silent video unchanged: YES",
+                "Capture checkpoint touched: NO",
+                "PNGs touched: NO",
+                "Browser opened: NO",
+                "Google Calendar reads: NO",
+                "Google Calendar writes: NO",
+                "Recurrence touched: NO",
+                "",
+            ]
+        )
+        write_atomic(final / "single-profile-audio-mux-report.txt", report_text)
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    typer.echo("FINAL SINGLE-PROFILE AUDIO MUX")
+    typer.echo("==============================")
+    typer.echo(f"Silent video: {visual}")
+    typer.echo(f"Source video: {source_video}")
+    typer.echo(f"Audio clip: {clip_start:.1f}s -> {clip_end:.1f}s")
+    typer.echo("Video copied: YES (-c:v copy)")
+    typer.echo(f"Audio reencoded: YES ({probe.audio_codec})")
+    typer.echo("FFPROBE VALIDATION: PASS")
+    typer.echo(f"Video: {probe.video_codec}, {probe.width}x{probe.height}, {probe.fps:g} FPS")
+    typer.echo(f"Audio present: YES ({probe.audio_codec})")
+    typer.echo(f"Video duration: {probe.video_duration_seconds:.6f}s")
+    typer.echo(f"Audio duration: {probe.audio_duration_seconds:.6f}s")
+    typer.echo(f"Final duration: {probe.container_duration_seconds:.6f}s")
+    typer.echo(f"A/V delta: {probe.av_delta_seconds:.6f}s")
+    typer.echo(f"SAR: {probe.sample_aspect_ratio}")
+    typer.echo(f"Final with audio: {output}")
+    typer.echo("Capture/PNGs/Calendar/recurrence touched: NO")
+
+
 def print_final_bulk_status(run_id: str = FINAL_HYBRID_RUN_ID) -> None:
     state = RecurrenceUploadStore().load_state(run_id)
     typer.echo(f"Parents completed: {state.completed_count}/{len(state.parents)}")
@@ -902,3 +1053,4 @@ def register_hybrid_capture_commands(app: typer.Typer) -> None:
     app.command("compose-final-hybrid")(compose_final_hybrid_command)
     app.command("compose-final-single-profile")(compose_final_single_profile_command)
     app.command("mux-final-hybrid-audio")(mux_final_hybrid_audio_command)
+    app.command("mux-final-single-profile-audio")(mux_final_single_profile_audio_command)
