@@ -13,6 +13,7 @@ from calendar_anim.calendar.hybrid_capture.artifacts import (
     LEGACY_RESOLUTION,
     HybridCaptureStore,
     compare_logical_cells,
+    compose_final_sanity_contact_sheet,
     compose_high_resolution_comparison,
     compose_mode_contact_sheet,
     compose_output_mode,
@@ -24,6 +25,10 @@ from calendar_anim.calendar.hybrid_capture.artifacts import (
     write_atomic,
 )
 from calendar_anim.calendar.hybrid_capture.models import (
+    CURRENT_CAPTURE_IMPLEMENTATION_VERSION,
+    FINAL_SANITY_SCHEMA_VERSION,
+    FinalHybridSanityReport,
+    FinalSanityFrameResult,
     HybridCapturePlan,
     HybridCaptureState,
     HybridFramePlan,
@@ -116,6 +121,136 @@ class HybridCaptureService:
             report, self.store.sanity_directory(plan.run_id) / "hybrid-sanity-contact-sheet.png"
         )
         return report
+
+    def capture_final_sanity(
+        self,
+        plan: HybridCapturePlan,
+        human_frames: Sequence[int],
+        profile: str,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> FinalHybridSanityReport:
+        """Capture the versioned final configuration using browser reads only."""
+
+        selected = [plan.frames[value - 1] for value in human_frames]
+        if any(frame.calendar_profile != profile for frame in selected):
+            raise CalendarAnimError(f"Final sanity frames must belong to {profile}")
+        if not mode.includes_header:
+            raise CalendarAnimError("Final high-resolution sanity requires a header mode")
+        results: list[FinalSanityFrameResult] = []
+        with self.gateway_factory(profile, selected[0].capture_zoom_percent) as gateway:
+            for frame in selected:
+                results.append(
+                    self._capture_final_sanity_frame(gateway, plan, frame, mode, resolution)
+                )
+        automated_result = "PASS" if all(item.passed for item in results) else "CAPTURE ERROR"
+        report = FinalHybridSanityReport(
+            run_id=plan.run_id,
+            profile=profile,
+            output_mode=mode,
+            output_width=resolution[0],
+            output_height=resolution[1],
+            frames_checked=list(human_frames),
+            results=results,
+            automated_result=automated_result,
+        )
+        self.store.save_final_sanity_report(report)
+        directory = self.store.final_sanity_directory(plan.run_id, mode, resolution)
+        compose_final_sanity_contact_sheet(report, directory / "sanity-contact-sheet.png")
+        return report
+
+    def _capture_final_sanity_frame(
+        self,
+        gateway: HybridBrowserGateway,
+        plan: HybridCapturePlan,
+        frame: HybridFramePlan,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> FinalSanityFrameResult:
+        directory = self.store.final_sanity_directory(plan.run_id, mode, resolution)
+        frame_directory = directory / "browser-artifacts" / f"frame-{frame.human_frame:03d}"
+        raw = frame_directory / "raw-browser.png"
+        logical = frame_directory / "logical-grid.png"
+        native = frame_directory / "native-header-grid.png"
+        output = directory / f"frame-{frame.human_frame:03d}.png"
+        metrics_path = frame_directory / "metrics.json"
+        try:
+            metrics = self._browser_capture(
+                gateway,
+                frame,
+                raw,
+                logical,
+                header=native,
+                debug_directory=frame_directory,
+            )
+            compose_output_mode(
+                logical,
+                native,
+                output,
+                mode,
+                resolution,
+                native_header_height=_native_header_height(metrics),
+            )
+            header_bounds = metrics.get("header_grid_bounds")
+            logical_clip = metrics.get("logical_clip")
+            header_present = isinstance(header_bounds, dict) and _valid_clip(
+                header_bounds.get("header_clip")
+            )
+            gap_absent = bool(metrics.get("empty_pre_06_interval_removed"))
+            visible_window_valid = metrics.get("vertical_interval") == "06:00-00:00"
+            dimensions = _image_dimensions(output)
+            output_dimensions = (dimensions[0], dimensions[1])
+            result = FinalSanityFrameResult(
+                human_frame=frame.human_frame,
+                frame_index=frame.frame_index,
+                week_start=frame.week_start,
+                profile=frame.calendar_profile,
+                capture_completed=True,
+                correct_week=bool(metrics.get("navigation_complete")),
+                grid_bounds_valid=_valid_clip(logical_clip),
+                output_dimensions=output_dimensions,
+                output_resolution_valid=output_dimensions == resolution,
+                header_present=header_present,
+                pre_06_gap_absent=gap_absent,
+                visible_window_valid=visible_window_valid,
+                visual_output_non_empty=_image_is_non_empty(output),
+                output_artifact=str(output),
+                native_crop_artifact=str(native),
+                raw_browser_artifact=str(raw),
+                metrics_artifact=str(metrics_path),
+            )
+            write_atomic(
+                metrics_path,
+                json.dumps(
+                    {"capture": metrics, "sanity": result.model_dump(mode="json")},
+                    indent=2,
+                )
+                + "\n",
+            )
+            return result
+        except (CalendarAnimError, OSError, ValueError) as error:
+            result = FinalSanityFrameResult(
+                human_frame=frame.human_frame,
+                frame_index=frame.frame_index,
+                week_start=frame.week_start,
+                profile=frame.calendar_profile,
+                capture_completed=False,
+                correct_week=False,
+                grid_bounds_valid=False,
+                output_dimensions=(0, 0),
+                output_resolution_valid=False,
+                header_present=False,
+                pre_06_gap_absent=False,
+                visible_window_valid=False,
+                visual_output_non_empty=False,
+                error=str(error),
+                output_artifact=str(output),
+                native_crop_artifact=str(native),
+                raw_browser_artifact=str(raw),
+                metrics_artifact=str(metrics_path),
+            )
+            write_atomic(metrics_path, result.model_dump_json(indent=2) + "\n")
+            return result
 
     def capture_debug(
         self, plan: HybridCapturePlan, human_frame: int, profile: str
@@ -313,12 +448,7 @@ class HybridCaptureService:
             raise CalendarAnimError("Hybrid capture state does not match selected output mode")
         if (state.output_width, state.output_height) != resolution:
             raise CalendarAnimError("Hybrid capture state does not match selected resolution")
-        sanity = self.store.load_sanity_report(plan.run_id)
-        if sanity.automated_result != "PASS":
-            raise CalendarAnimError("Hybrid sanity is NO-GO; full capture is blocked")
-        seam = self.store.load_seam_report(plan.run_id)
-        if seam.geometry_result != "PASS":
-            raise CalendarAnimError("A/B seam geometry is NO-GO; full capture is blocked")
+        self.validate_final_capture_gate(plan, mode, resolution)
         for profile, zoom in (("account-a", 33), ("account-b", 90)):
             frames = [frame for frame in plan.frames if frame.calendar_profile == profile]
             with self.gateway_factory(profile, zoom) as gateway:
@@ -382,6 +512,21 @@ class HybridCaptureService:
             / "a-b-transition-geometry.png",
         )
         return state
+
+    def validate_final_capture_gate(
+        self,
+        plan: HybridCapturePlan,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> FinalHybridSanityReport:
+        """Require the current exact-configuration sanity before any browser capture."""
+
+        sanity = self.store.load_final_sanity_report(plan.run_id, mode, resolution)
+        if not final_sanity_allows_capture(sanity, mode, resolution):
+            raise CalendarAnimError(
+                "Current final sanity is stale or not PASS; rerun capture-hybrid-sanity"
+            )
+        return sanity
 
     def capture_seam(self, plan: HybridCapturePlan) -> HybridSeamReport:
         sanity = self.store.load_sanity_report(plan.run_id)
@@ -679,6 +824,84 @@ def _image_dimensions(path: Path) -> list[int]:
             return [image.width, image.height]
     except OSError as error:
         raise CalendarAnimError(f"Could not inspect capture dimensions: {path}") from error
+
+
+def _image_is_non_empty(path: Path) -> bool:
+    try:
+        with Image.open(path) as opened:
+            rgb = opened.convert("RGB")
+            colors = rgb.getcolors(maxcolors=2)
+            rgb.close()
+            return colors is None or len(colors) > 1
+    except OSError as error:
+        raise CalendarAnimError(f"Could not inspect final sanity image: {path}") from error
+
+
+def _valid_clip(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    width = value.get("width")
+    height = value.get("height")
+    return (
+        isinstance(width, (int, float))
+        and isinstance(height, (int, float))
+        and width > 0
+        and height > 0
+    )
+
+
+def final_sanity_allows_capture(
+    report: FinalHybridSanityReport,
+    mode: HybridOutputMode,
+    resolution: tuple[int, int],
+) -> bool:
+    """Accept only a current, exact-configuration six-frame PASS."""
+
+    return (
+        report.schema_version == FINAL_SANITY_SCHEMA_VERSION
+        and report.capture_implementation_version == CURRENT_CAPTURE_IMPLEMENTATION_VERSION
+        and report.output_mode is mode
+        and (report.output_width, report.output_height) == resolution
+        and report.frames_checked == [24, 40, 60, 80, 100, 108]
+        and len(report.results) == 6
+        and report.automated_result == "PASS"
+        and not report.dom_event_count_is_gate
+        and not report.google_calendar_writes
+        and all(item.passed for item in report.results)
+    )
+
+
+def final_sanity_gate_status(
+    store: HybridCaptureStore,
+    run_id: str,
+    mode: HybridOutputMode,
+    resolution: tuple[int, int],
+) -> tuple[str, str | None]:
+    """Describe whether the exact current sanity exists; legacy reports are stale."""
+
+    current_path = store.final_sanity_report_path(run_id, mode, resolution)
+    if current_path.is_file():
+        try:
+            report = store.load_final_sanity_report(run_id, mode, resolution)
+        except CalendarAnimError:
+            return "INVALID CURRENT REPORT - RERUN REQUIRED", None
+        status = (
+            "PASS"
+            if final_sanity_allows_capture(report, mode, resolution)
+            else "CURRENT REPORT NOT PASS - RERUN REQUIRED"
+        )
+        return status, report.capture_implementation_version
+    legacy_path = store.sanity_directory(run_id) / "sanity-report.json"
+    if legacy_path.is_file():
+        try:
+            legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+            schema = (
+                legacy.get("schema_version", "unknown") if isinstance(legacy, dict) else "unknown"
+            )
+        except (OSError, json.JSONDecodeError):
+            schema = "invalid"
+        return "STALE LEGACY REPORT - RERUN REQUIRED", f"legacy-schema-{schema}"
+    return "NOT RUN", None
 
 
 def _debug_mode_paths(directory: Path, resolution: tuple[int, int]) -> dict[HybridOutputMode, Path]:

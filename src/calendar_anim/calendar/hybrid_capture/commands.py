@@ -23,7 +23,10 @@ from calendar_anim.calendar.hybrid_capture.artifacts import (
     write_atomic,
 )
 from calendar_anim.calendar.hybrid_capture.media import compose_final_visual
-from calendar_anim.calendar.hybrid_capture.models import HybridOutputMode
+from calendar_anim.calendar.hybrid_capture.models import (
+    CURRENT_CAPTURE_IMPLEMENTATION_VERSION,
+    HybridOutputMode,
+)
 from calendar_anim.calendar.hybrid_capture.planner import (
     build_final_capture_plan,
     parse_human_frames,
@@ -31,6 +34,7 @@ from calendar_anim.calendar.hybrid_capture.planner import (
 from calendar_anim.calendar.hybrid_capture.service import (
     HybridBrowserGateway,
     HybridCaptureService,
+    final_sanity_gate_status,
 )
 from calendar_anim.calendar.profiles.store import CalendarProfileStore
 from calendar_anim.calendar.recurrence_compaction.hybrid import (
@@ -80,6 +84,10 @@ def capture_hybrid_sanity_command(
     run_id: Annotated[str, typer.Option("--run-id")] = FINAL_HYBRID_RUN_ID,
     profile: Annotated[str, typer.Option("--profile")] = "account-b",
     frames: Annotated[str, typer.Option("--frames")] = SANITY_FRAMES,
+    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
+        HybridOutputMode.HEADER_PRESERVED_FILL
+    ),
+    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
     stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
     ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
     execute: Annotated[bool, typer.Option("--execute")] = False,
@@ -91,6 +99,7 @@ def capture_hybrid_sanity_command(
     try:
         selected = parse_human_frames(frames)
         plan = build_final_capture_plan(run_id)
+        output_resolution = parse_output_resolution(resolution)
         store = HybridCaptureStore()
     except (CalendarAnimError, OSError, ValueError) as error:
         _fail(error)
@@ -100,30 +109,31 @@ def capture_hybrid_sanity_command(
     typer.echo("Calendar: Calendar Animation Lab B")
     typer.echo("Browser zoom: 90%")
     typer.echo("Vertical scroller: required, 06:00-00:00")
+    typer.echo(f"Output mode: {mode.value}")
+    typer.echo(f"Output resolution: {resolution_name(output_resolution)}")
+    typer.echo(f"Capture implementation: {CURRENT_CAPTURE_IMPLEMENTATION_VERSION}")
+    old_report = store.sanity_directory(run_id) / "sanity-report.json"
+    typer.echo(f"Legacy sanity: {'STALE' if old_report.exists() else 'not found'}")
     typer.echo(f"Human frames: {', '.join(str(value) for value in selected)}")
     typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
-    typer.echo(f"Output: {store.sanity_directory(run_id)}")
+    output = store.final_sanity_directory(run_id, mode, output_resolution)
+    typer.echo(f"Output: {output}")
     if not execute:
         typer.echo("No browser was opened and no Calendar API call was made.")
         typer.echo("Calendar writes: NO")
         return
     try:
-        archived = store.archive_sanity(run_id)
-        if archived is not None:
-            typer.echo(f"Previous sanity archived: {archived}")
         report = HybridCaptureService(
             store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
-        ).capture_sanity(plan, selected)
+        ).capture_final_sanity(plan, selected, profile, mode, output_resolution)
     except KeyboardInterrupt:
         typer.secho("Sanity capture interrupted; Calendar was not modified.", fg="yellow")
         raise typer.Exit(code=130) from None
     except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
         _fail(error)
     typer.echo(f"Automated sanity: {report.automated_result}")
-    typer.echo(
-        f"Contact sheet: {store.sanity_directory(run_id) / 'hybrid-sanity-contact-sheet.png'}"
-    )
-    typer.echo(f"Report: {store.sanity_directory(run_id) / 'sanity-report.json'}")
+    typer.echo(f"Contact sheet: {output / 'sanity-contact-sheet.png'}")
+    typer.echo(f"Report: {output / 'sanity-report.json'}")
     typer.echo("Visual approval is still required before full capture.")
     typer.echo("Calendar writes: NO")
 
@@ -266,8 +276,9 @@ def capture_final_hybrid_command(
         output_resolution = parse_output_resolution(resolution)
         store = HybridCaptureStore()
         state = store.initialize_state(plan, mode, output_resolution)
-        sanity_path = store.sanity_directory(run_id) / "sanity-report.json"
-        sanity = store.load_sanity_report(run_id) if sanity_path.exists() else None
+        sanity_status, sanity_version = final_sanity_gate_status(
+            store, run_id, mode, output_resolution
+        )
     except (CalendarAnimError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Run: {run_id}")
@@ -276,7 +287,8 @@ def capture_final_hybrid_command(
     typer.echo("Visible window: 06:00-00:00")
     typer.echo(f"Output mode: {mode.value}")
     typer.echo(f"Normalized output: 108 PNGs, {resolution_name(output_resolution)}")
-    typer.echo(f"Sanity gate: {sanity.automated_result if sanity else 'NOT RUN'}")
+    typer.echo(f"Sanity gate: {sanity_status}")
+    typer.echo(f"Sanity capture version: {sanity_version or 'none'}")
     typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
     typer.echo(f"Output: {store.final_frames_directory(run_id, mode, output_resolution)}")
     if not execute:

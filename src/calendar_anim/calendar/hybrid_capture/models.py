@@ -3,6 +3,9 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, model_validator
 
+CURRENT_CAPTURE_IMPLEMENTATION_VERSION = "structural-grid-visual-readiness-hires-v1"
+FINAL_SANITY_SCHEMA_VERSION = "2.0"
+
 
 class HybridOutputMode(StrEnum):
     PIXEL_FAITHFUL = "pixel_faithful"
@@ -141,6 +144,60 @@ class HybridSanityReport(BaseModel):
     frames_checked: list[int]
     results: list[SanityFrameResult]
     automated_result: str
+    visual_approval_required: bool = True
+    google_calendar_writes: bool = False
+
+
+class FinalSanityFrameResult(BaseModel):
+    human_frame: int
+    frame_index: int
+    week_start: date
+    profile: str
+    capture_completed: bool
+    correct_week: bool
+    grid_bounds_valid: bool
+    output_dimensions: tuple[int, int]
+    output_resolution_valid: bool
+    header_present: bool
+    pre_06_gap_absent: bool
+    visible_window_valid: bool
+    visual_output_non_empty: bool
+    logical_grid: tuple[int, int] = (126, 72)
+    error: str | None = None
+    output_artifact: str
+    native_crop_artifact: str
+    raw_browser_artifact: str
+    metrics_artifact: str
+
+    @property
+    def passed(self) -> bool:
+        return all(
+            (
+                self.capture_completed,
+                self.correct_week,
+                self.grid_bounds_valid,
+                self.output_resolution_valid,
+                self.header_present,
+                self.pre_06_gap_absent,
+                self.visible_window_valid,
+                self.visual_output_non_empty,
+                self.logical_grid == (126, 72),
+            )
+        )
+
+
+class FinalHybridSanityReport(BaseModel):
+    schema_version: str = FINAL_SANITY_SCHEMA_VERSION
+    capture_implementation_version: str = CURRENT_CAPTURE_IMPLEMENTATION_VERSION
+    run_id: str
+    profile: str
+    output_mode: HybridOutputMode
+    output_width: int
+    output_height: int
+    frames_checked: list[int]
+    results: list[FinalSanityFrameResult]
+    automated_result: str
+    dom_event_count_is_gate: bool = False
     visual_approval_required: bool = True
     google_calendar_writes: bool = False
 

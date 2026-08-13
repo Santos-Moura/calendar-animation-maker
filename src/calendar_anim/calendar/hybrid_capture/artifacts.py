@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw
 
 from calendar_anim.calendar.frame_mapping.models import SingleFrameCalendarPlan
 from calendar_anim.calendar.hybrid_capture.models import (
+    FinalHybridSanityReport,
     HybridCapturePlan,
     HybridCaptureState,
     HybridFrameState,
@@ -78,6 +79,27 @@ class HybridCaptureStore:
 
     def sanity_directory(self, run_id: str) -> Path:
         return self.run_directory(run_id) / "sanity"
+
+    def final_sanity_directory(
+        self,
+        run_id: str,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> Path:
+        return (
+            self.run_directory(run_id)
+            / "sanity-hires"
+            / mode.directory_name
+            / resolution_name(resolution)
+        )
+
+    def final_sanity_report_path(
+        self,
+        run_id: str,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> Path:
+        return self.final_sanity_directory(run_id, mode, resolution) / "sanity-report.json"
 
     def sanity_frame_directory(self, run_id: str, human_frame: int) -> Path:
         return self.sanity_directory(run_id) / f"frame-{human_frame:03d}"
@@ -254,6 +276,28 @@ class HybridCaptureStore:
                 "Sanity capture must be completed before full capture"
             ) from error
 
+    def save_final_sanity_report(self, report: FinalHybridSanityReport) -> Path:
+        resolution = (report.output_width, report.output_height)
+        return write_atomic(
+            self.final_sanity_report_path(report.run_id, report.output_mode, resolution),
+            report.model_dump_json(indent=2) + "\n",
+        )
+
+    def load_final_sanity_report(
+        self,
+        run_id: str,
+        mode: HybridOutputMode,
+        resolution: tuple[int, int],
+    ) -> FinalHybridSanityReport:
+        try:
+            return FinalHybridSanityReport.model_validate_json(
+                self.final_sanity_report_path(run_id, mode, resolution).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as error:
+            raise CalendarAnimError(
+                "Current final sanity is missing or invalid; run capture-hybrid-sanity"
+            ) from error
+
     def seam_directory(self, run_id: str) -> Path:
         return self.run_directory(run_id) / "seam"
 
@@ -425,6 +469,50 @@ def compose_high_resolution_comparison(
                 image.close()
     except OSError as error:
         raise CalendarAnimError("Could not compose high-resolution comparison") from error
+    return destination
+
+
+def compose_final_sanity_contact_sheet(report: FinalHybridSanityReport, destination: Path) -> Path:
+    """Create a readable 2x3 overview while retaining full-resolution frame files."""
+
+    columns = 2
+    preview_size = (756, 432)
+    label_height = 36
+    rows = (len(report.results) + columns - 1) // columns
+    canvas = Image.new(
+        "RGB",
+        (preview_size[0] * columns, (preview_size[1] + label_height) * rows),
+        "#202124",
+    )
+    draw = ImageDraw.Draw(canvas)
+    for index, result in enumerate(report.results):
+        column = index % columns
+        row = index // columns
+        x = column * preview_size[0]
+        y = row * (preview_size[1] + label_height)
+        status = "PASS" if result.passed else "FAIL"
+        draw.text((x + 8, y + 10), f"FRAME {result.human_frame} / {status}", fill="white")
+        if Path(result.output_artifact).is_file():
+            try:
+                with Image.open(result.output_artifact) as opened:
+                    preview = opened.convert("RGB").resize(preview_size, Image.Resampling.LANCZOS)
+                    canvas.paste(preview, (x, y + label_height))
+                    preview.close()
+            except OSError as error:
+                raise CalendarAnimError(
+                    f"Could not read final sanity frame: {result.output_artifact}"
+                ) from error
+        else:
+            draw.rectangle(
+                (x, y + label_height, x + preview_size[0], y + label_height + preview_size[1]),
+                fill="#3c4043",
+            )
+            draw.text(
+                (x + 12, y + label_height + 12), result.error or "CAPTURE ERROR", fill="#f28b82"
+            )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(destination)
+    canvas.close()
     return destination
 
 
