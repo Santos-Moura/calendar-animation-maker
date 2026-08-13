@@ -1,6 +1,7 @@
 import json
 import statistics
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Never
@@ -8,17 +9,21 @@ from zoneinfo import ZoneInfo
 
 import typer
 from googleapiclient.errors import HttpError
+from PIL import Image, ImageDraw
 
 from calendar_anim.calendar.calibration.profile import DEFAULT_PROFILE_PATH, load_profile
 from calendar_anim.calendar.cayde_216.artifacts import Cayde216Store, write_atomic
 from calendar_anim.calendar.cayde_216.planner import (
+    EXPECTED_INPUT_SHA256,
     OLD_PREFIX_PLAN,
     OLD_RECURRENCE_PLAN,
     SOURCE_MANIFEST_RELATIVE,
-    SOURCE_RUN_ID,
     protected_hashes,
 )
 from calendar_anim.calendar.cayde_216.planner import RUN_ID as BULK_RUN_ID
+from calendar_anim.calendar.cayde_216.planner import (
+    SOURCE_RUN_ID as SOURCE_RENDER_RUN_ID_126,
+)
 from calendar_anim.calendar.event_identity import deterministic_event_id
 from calendar_anim.calendar.frame_mapping.models import EventCompressionMode, FrameMappingMode
 from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
@@ -44,14 +49,18 @@ from calendar_anim.calendar.recurrence_upload.artifacts import (
 from calendar_anim.calendar.recurrence_upload.gateway import GoogleRecurrenceUploadGateway
 from calendar_anim.calendar.recurrence_upload.service import RecurrenceUploadService
 from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
+from calendar_anim.config import RenderConfig
 from calendar_anim.exceptions import CalendarAnimError
+from calendar_anim.pipeline import render_video
 from calendar_anim.renderer.manifest import read_manifest, validate_manifest_files
 
 VALIDATION_RUN_ID = "cayde-216-cyan-magenta-single-frame-validation-093-01"
+VALIDATION_RUN_ID_168 = "cayde-216-cyan-magenta-168x96-single-frame-validation-093-01"
+SOURCE_RUN_ID_168 = "cayde-final-216f-6fps-cyan-magenta-168x96-local-source-01"
 HUMAN_FRAME = 93
 FRAME_INDEX = 92
 VALIDATION_WEEK = date(2034, 6, 25)
-VALIDATION_END = VALIDATION_WEEK + timedelta(days=7)
+VALIDATION_WEEK_168 = date(2034, 7, 2)
 ROOT = Path("output/216-validation")
 CAPTURE_MODE = HybridOutputMode.HEADER_PRESERVED_FILL
 CAPTURE_RESOLUTION = (1512, 864)
@@ -65,6 +74,40 @@ ARTIFACT_NAMES = (
     "remote-preflight.json",
 )
 BULK_CHECKPOINT = Path("output/216-runs") / BULK_RUN_ID / "account-b-upload-state.json"
+
+
+@dataclass(frozen=True)
+class SingleFrameValidationSpec:
+    run_id: str
+    source_run_id: str
+    grid: str
+    week: date
+    max_events: int
+    source_manifest: Path
+
+    @property
+    def end(self) -> date:
+        return self.week + timedelta(days=7)
+
+
+SPEC_126 = SingleFrameValidationSpec(
+    run_id=VALIDATION_RUN_ID,
+    source_run_id=BULK_RUN_ID,
+    grid="126x72",
+    week=VALIDATION_WEEK,
+    max_events=5200,
+    source_manifest=(
+        Cayde216Store().run_directory(SOURCE_RENDER_RUN_ID_126) / SOURCE_MANIFEST_RELATIVE
+    ),
+)
+SPEC_168 = SingleFrameValidationSpec(
+    run_id=VALIDATION_RUN_ID_168,
+    source_run_id=SOURCE_RUN_ID_168,
+    grid="168x96",
+    week=VALIDATION_WEEK_168,
+    max_events=9000,
+    source_manifest=ROOT / VALIDATION_RUN_ID_168 / "source-render" / "animation.json",
+)
 
 
 def _store() -> Cayde216Store:
@@ -81,6 +124,64 @@ def _upload_store() -> RecurrenceUploadStore:
     )
 
 
+def render_168_validation_source_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = VALIDATION_RUN_ID_168,
+    input_path: Annotated[Path, typer.Option("--input")] = Path("input.mp4"),
+) -> None:
+    """Render the isolated 168x96 source directly from input.mp4; Calendar is untouched."""
+
+    if run_id != VALIDATION_RUN_ID_168:
+        _fail(CalendarAnimError("168x96 source render is locked to its validation run ID"))
+    try:
+        if file_sha256(input_path) != EXPECTED_INPUT_SHA256:
+            raise CalendarAnimError("input.mp4 hash differs from the approved 216-frame source")
+        protected_before = _protected_hashes(SPEC_168)
+        output = SPEC_168.source_manifest.parent
+        if SPEC_168.source_manifest.is_file():
+            manifest = read_manifest(SPEC_168.source_manifest)
+            errors = validate_manifest_files(manifest, SPEC_168.source_manifest.resolve())
+            if errors:
+                raise CalendarAnimError("Existing 168x96 source is invalid: " + "; ".join(errors))
+            reused = True
+        else:
+            manifest, _, _ = render_video(
+                input_path,
+                output,
+                RenderConfig(
+                    animation_id="cayde-216-cyan-magenta-168x96-validation",
+                    start_seconds=114.0,
+                    duration_seconds=36.0,
+                    frame_count=216,
+                    grid_width=168,
+                    grid_height=96,
+                    fit="contain",
+                    palette="calendar",
+                    colors=6,
+                    background="#000000",
+                    background_tolerance=35,
+                    output_fps=6,
+                ),
+            )
+            reused = False
+        if (
+            manifest.render.frame_count != 216
+            or manifest.render.output_fps != 6
+            or manifest.render.grid_width != 168
+            or manifest.render.grid_height != 96
+            or manifest.source.start_seconds != 114
+            or manifest.source.duration_seconds != 36
+            or len(manifest.frames) != 216
+        ):
+            raise CalendarAnimError("168x96 source render geometry/timing is not exact")
+        ensure_bulk_hashes_unchanged(protected_before, _protected_hashes(SPEC_168))
+    except (CalendarAnimError, OSError, ValueError) as error:
+        _fail(error)
+    typer.echo(f"Source manifest: {SPEC_168.source_manifest}")
+    typer.echo(f"Source frame 93 timestamp: {manifest.frames[FRAME_INDEX].timestamp_seconds}")
+    typer.echo(f"Source render reused: {'YES' if reused else 'NO'}")
+    typer.echo("Google Calendar reads/writes: NO")
+
+
 def prepare_single_frame_validation_command(
     run_id: Annotated[str, typer.Option("--run-id")] = VALIDATION_RUN_ID,
     source_run_id: Annotated[str, typer.Option("--source-run-id")] = BULK_RUN_ID,
@@ -89,30 +190,30 @@ def prepare_single_frame_validation_command(
     """Prepare one isolated frame locally; never accesses Calendar."""
 
     try:
-        _validate_identity(run_id, source_run_id, frame)
+        spec = _validate_identity(run_id, source_run_id, frame)
         store = _store()
-        before = _bulk_hashes()
-        source_manifest = Cayde216Store().run_directory(SOURCE_RUN_ID) / SOURCE_MANIFEST_RELATIVE
+        before = _protected_hashes(spec)
+        source_manifest = spec.source_manifest
         manifest = read_manifest(source_manifest)
         errors = validate_manifest_files(manifest, source_manifest.resolve())
         if errors:
             raise CalendarAnimError("Source manifest invalid: " + "; ".join(errors))
-        profile = apply_high_detail_grid(load_profile(DEFAULT_PROFILE_PATH), "126x72")
+        profile = apply_high_detail_grid(load_profile(DEFAULT_PROFILE_PATH), spec.grid)
         plan, frames = build_multi_frame_plan(
             manifest.model_copy(update={"animation_id": "cayde-216-cyan-validation"}),
             profile,
             frame_start=FRAME_INDEX,
             frame_count=1,
-            anchor_date=VALIDATION_WEEK,
+            anchor_date=spec.week,
             run_id=run_id,
-            max_events_per_frame=5200,
+            max_events_per_frame=spec.max_events,
             calendar_name="Calendar Animation Lab B",
             calendar_profile="account-b",
             mapping_mode=FrameMappingMode.FULL_GRID,
             event_compression=EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
             palette_preset="cayde-cyan-magenta",
             subcolumn_order_strategy=SubcolumnOrderStrategy.ZERO_WIDTH,
-            grid_profile="high-detail-126x72",
+            grid_profile=f"experimental-{spec.grid}",
         )
         initialize_animation_run(plan, frames, manifest, source_manifest, store)
         result = build_recurrence_study(
@@ -131,7 +232,7 @@ def prepare_single_frame_validation_command(
         bulk_ids = _plan_ids(Path("output/216-plans") / BULK_RUN_ID / "recurrence-plan.json")
         existing_ids = _plan_ids(OLD_RECURRENCE_PLAN) | _plan_ids(OLD_PREFIX_PLAN)
         payloads = sorted(parent.estimated_insert_payload_bytes for parent in recurrence.parents)
-        after = _bulk_hashes()
+        after = _protected_hashes(spec)
         report: dict[str, Any] = {
             "schema_version": "1.0",
             "run_id": run_id,
@@ -139,8 +240,9 @@ def prepare_single_frame_validation_command(
             "human_frame": HUMAN_FRAME,
             "frame_index": FRAME_INDEX,
             "timestamp_seconds": manifest.frames[FRAME_INDEX].timestamp_seconds,
-            "validation_week": VALIDATION_WEEK.isoformat(),
-            "validation_end_exclusive": VALIDATION_END.isoformat(),
+            "grid": spec.grid,
+            "validation_week": spec.week.isoformat(),
+            "validation_end_exclusive": spec.end.isoformat(),
             "palette_preset": "cayde-cyan-magenta",
             "background_color_id": "7",
             "foreground_color_ids": ["3", "5", "9", "11"],
@@ -157,7 +259,7 @@ def prepare_single_frame_validation_command(
             "validation_parent_ids_unique": len(validation_ids) == len(recurrence.parents),
             "validation_ids_intersect_bulk": len(validation_ids & bulk_ids),
             "validation_ids_intersect_existing_b": len(validation_ids & existing_ids),
-            "validation_week_outside_bulk": date(2034, 6, 25) <= VALIDATION_WEEK,
+            "validation_week_outside_bulk": date(2034, 6, 25) <= spec.week,
             "bulk_checkpoint_touched": before != after,
             "bulk_window_touched": False,
             "bulk_parents_touched": False,
@@ -189,7 +291,8 @@ def prepare_single_frame_validation_command(
             "human_frame": HUMAN_FRAME,
             "frame_index": FRAME_INDEX,
             "timestamp_seconds": manifest.frames[FRAME_INDEX].timestamp_seconds,
-            "week_start": VALIDATION_WEEK.isoformat(),
+            "grid": spec.grid,
+            "week_start": spec.week.isoformat(),
             "palette_preset": "cayde-cyan-magenta",
             "background_color_id": "7",
             "foreground_color_ids": ["3", "5", "9", "11"],
@@ -209,7 +312,8 @@ def prepare_single_frame_validation_command(
         write_atomic(directory / "cleanup-plan.json", json.dumps(cleanup, indent=2) + "\n")
     except (CalendarAnimError, OSError, ValueError) as error:
         _fail(error)
-    typer.echo(f"Validation week: {VALIDATION_WEEK}")
+    typer.echo(f"Grid: {spec.grid}")
+    typer.echo(f"Validation week: {spec.week}")
     typer.echo(f"Logical occurrences: {report['logical_occurrences']}")
     typer.echo(f"Parents/inserts: {report['parent_inserts']}")
     typer.echo("Expansion exact: YES")
@@ -224,29 +328,30 @@ def preflight_single_frame_validation_command(
 ) -> None:
     """Check the temporary validation week without writing."""
 
-    _validate_run_profile(run_id, profile)
+    spec = _validate_run_profile(run_id, profile)
     if not execute:
         typer.echo("Dry run; no Calendar API call.")
         return
     try:
-        before = _bulk_hashes()
+        before = _protected_hashes(spec)
         account, gateway = CalendarProfileService(CalendarProfileStore()).gateway(profile)
         calendar_id = _validate_account(account, gateway)
         zone = ZoneInfo("America/Sao_Paulo")
         conflicts = gateway.list_event_ids_in_range(
             calendar_id,
-            datetime.combine(VALIDATION_WEEK, time.min, zone),
-            datetime.combine(VALIDATION_END, time.min, zone),
+            datetime.combine(spec.week, time.min, zone),
+            datetime.combine(spec.end, time.min, zone),
         )
-        after = _bulk_hashes()
+        after = _protected_hashes(spec)
         payload = {
             "run_id": run_id,
             "profile": profile,
             "authenticated_account": account.authenticated_google_account,
             "calendar_name": account.calendar_name,
             "calendar_id": calendar_id,
-            "week": VALIDATION_WEEK.isoformat(),
-            "end_exclusive": VALIDATION_END.isoformat(),
+            "grid": spec.grid,
+            "week": spec.week.isoformat(),
+            "end_exclusive": spec.end.isoformat(),
             "conflicts": len(conflicts),
             "clean": not conflicts,
             "bulk_checkpoint_touched": before != after,
@@ -279,8 +384,8 @@ def upload_single_frame_validation_command(
 ) -> None:
     """Upload only the isolated frame-93 validation parents."""
 
-    _validate_identity(run_id, source_run_id, frame)
-    _validate_run_profile(run_id, profile)
+    spec = _validate_identity(run_id, source_run_id, frame)
+    spec = _validate_run_profile(run_id, profile)
     try:
         store = _upload_store()
         plan = store.load_plan(run_id)
@@ -296,10 +401,11 @@ def upload_single_frame_validation_command(
             or report.get("source_run_id") != source_run_id
             or report.get("human_frame") != HUMAN_FRAME
             or report.get("frame_index") != FRAME_INDEX
+            or report.get("grid") != spec.grid
             or report.get("palette_preset") != "cayde-cyan-magenta"
             or report.get("background_color_id") != "7"
             or report.get("foreground_color_ids") != ["3", "5", "9", "11"]
-            or report.get("bulk_protected_sha256") != _bulk_hashes()
+            or report.get("bulk_protected_sha256") != _protected_hashes(spec)
             or preflight.get("result") != "PASS"
             or preflight.get("conflicts") != 0
         ):
@@ -317,7 +423,7 @@ def upload_single_frame_validation_command(
         ):
             raise CalendarAnimError("Validation parent IDs overlap the final bulk plan")
         state = store.initialize_state(run_id, plan, hashes, 1.0)
-        bulk_before = _bulk_hashes()
+        bulk_before = _protected_hashes(spec)
     except (CalendarAnimError, OSError, ValueError) as error:
         _fail(error)
     typer.echo(f"Parents: {state.completed_count}/{len(state.parents)}")
@@ -338,13 +444,13 @@ def upload_single_frame_validation_command(
         zone = ZoneInfo("America/Sao_Paulo")
         current_window = gateway.list_window(
             calendar_id,
-            datetime.combine(VALIDATION_WEEK, time.min, zone),
-            datetime.combine(VALIDATION_END, time.min, zone),
+            datetime.combine(spec.week, time.min, zone),
+            datetime.combine(spec.end, time.min, zone),
         )
         if state.events_insert_calls == 0:
             if current_window:
                 raise CalendarAnimError("Validation week is no longer empty; STOP")
-        elif any(not _is_validation_resource(resource) for resource in current_window):
+        elif any(not _is_validation_resource(resource, run_id) for resource in current_window):
             raise CalendarAnimError("Validation week contains a non-validation resource; STOP")
         typer.echo(f"Account: {account.authenticated_google_account}")
         typer.echo(f"Calendar ID: {calendar_id}")
@@ -363,7 +469,7 @@ def upload_single_frame_validation_command(
             ),
         )
         state = uploader.upload(plan, state, calendar_id)
-        ensure_bulk_hashes_unchanged(bulk_before, _bulk_hashes())
+        ensure_bulk_hashes_unchanged(bulk_before, _protected_hashes(spec))
         performance = performance_from_state(state, state.active_upload_seconds)
         payload = {
             "completed_parents": state.completed_count,
@@ -395,7 +501,7 @@ def audit_single_frame_validation_command(
 ) -> None:
     """Compare expanded remote instances and parent GETs with the exact local plan."""
 
-    _validate_run_profile(run_id, profile)
+    spec = _validate_run_profile(run_id, profile)
     if not execute:
         typer.echo("Dry run; no Calendar API call.")
         return
@@ -410,8 +516,8 @@ def audit_single_frame_validation_command(
         zone = ZoneInfo("America/Sao_Paulo")
         listed = gateway.list_window(
             calendar_id,
-            datetime.combine(VALIDATION_WEEK, time.min, zone),
-            datetime.combine(VALIDATION_END, time.min, zone),
+            datetime.combine(spec.week, time.min, zone),
+            datetime.combine(spec.end, time.min, zone),
         )
         animation_plan = _store().load_plan(run_id)
         frame_plan = _store().load_frame_plan(animation_plan, FRAME_INDEX)
@@ -480,7 +586,7 @@ def capture_single_frame_validation_command(
 ) -> None:
     """Capture the validation week through the final high-resolution composition."""
 
-    _validate_run_profile(run_id, profile)
+    spec = _validate_run_profile(run_id, profile)
     directory = _store().run_directory(run_id)
     if not execute:
         typer.echo(f"Output: {directory / 'capture' / 'frame_093-calendar.png'}")
@@ -494,7 +600,7 @@ def capture_single_frame_validation_command(
         frame = HybridFramePlan(
             frame_index=FRAME_INDEX,
             human_frame=HUMAN_FRAME,
-            week_start=VALIDATION_WEEK,
+            week_start=spec.week,
             calendar_profile="account-b",
             calendar_name="Calendar Animation Lab B",
             capture_zoom_percent=CAPTURE_ZOOM_PERCENT,
@@ -523,7 +629,8 @@ def capture_single_frame_validation_command(
         report = {
             "profile": "account-b",
             "zoom": CAPTURE_ZOOM_PERCENT,
-            "week": VALIDATION_WEEK.isoformat(),
+            "grid": spec.grid,
+            "week": spec.week.isoformat(),
             "mode": CAPTURE_MODE.value,
             "resolution": list(CAPTURE_RESOLUTION),
             "visual_readiness": metrics.get("visual_content_occupancy") is True,
@@ -531,6 +638,8 @@ def capture_single_frame_validation_command(
             "google_calendar_reads": True,
             "google_calendar_writes": False,
         }
+        comparison = _build_capture_comparison(run_id, output)
+        report["comparison"] = str(comparison) if comparison is not None else None
         write_atomic(capture / "capture-report.json", json.dumps(report, indent=2) + "\n")
     except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
         _fail(error)
@@ -561,7 +670,7 @@ def cleanup_single_frame_validation_command(
         if not isinstance(gateway, GoogleRecurrenceUploadGateway):
             raise CalendarAnimError("Validation cleanup gateway unavailable")
         matches = gateway.find_bulk_parents(calendar_id, run_id)
-        ids = select_cleanup_ids(matches, allowed)
+        ids = select_cleanup_ids(matches, allowed, run_id=run_id)
         typer.confirm(f"Delete exactly {len(ids)} validation parents?", default=False, abort=True)
         result = gateway.delete_events(calendar_id, sorted(ids))
     except (CalendarAnimError, HttpError, OSError, ValueError) as error:
@@ -583,6 +692,33 @@ def validation_expansion_metrics(
         "duplicates": duplicates,
         "exact": missing == 0 and extra == 0 and duplicates == 0,
     }
+
+
+def _build_capture_comparison(run_id: str, output: Path) -> Path | None:
+    if run_id != VALIDATION_RUN_ID_168:
+        return None
+    reference = ROOT / VALIDATION_RUN_ID / "capture" / "frame_093-calendar.png"
+    if not reference.is_file():
+        return None
+    destination = output.with_name("comparison-126x72-vs-168x96-frame093.png")
+    with Image.open(reference) as left_image, Image.open(output) as right_image:
+        left = left_image.convert("RGB")
+        right = right_image.convert("RGB")
+        if left.size != CAPTURE_RESOLUTION or right.size != CAPTURE_RESOLUTION:
+            raise CalendarAnimError("Comparison captures do not share the approved geometry")
+        label_height = 48
+        sheet = Image.new(
+            "RGB",
+            (CAPTURE_RESOLUTION[0] * 2, CAPTURE_RESOLUTION[1] + label_height),
+            "#101214",
+        )
+        sheet.paste(left, (0, label_height))
+        sheet.paste(right, (CAPTURE_RESOLUTION[0], label_height))
+        draw = ImageDraw.Draw(sheet)
+        draw.text((16, 16), "126x72 CYAN MAGENTA", fill="white")
+        draw.text((CAPTURE_RESOLUTION[0] + 16, 16), "168x96 CYAN MAGENTA", fill="white")
+        sheet.save(destination)
+    return destination
 
 
 def _local_occurrence_key(event: CalendarEventDraft) -> tuple[str, str, str, str]:
@@ -643,11 +779,16 @@ def remote_audit_result(
     return "PASS" if not any(values) else "FAIL"
 
 
-def select_cleanup_ids(matches: list[dict[str, Any]], allowed: set[str]) -> set[str]:
+def select_cleanup_ids(
+    matches: list[dict[str, Any]],
+    allowed: set[str],
+    *,
+    run_id: str = VALIDATION_RUN_ID,
+) -> set[str]:
     selected: set[str] = set()
     for resource in matches:
         event_id = str(resource.get("id") or "")
-        if not _is_validation_resource(resource):
+        if not _is_validation_resource(resource, run_id):
             raise CalendarAnimError("Cleanup resource metadata is not validation-only")
         if event_id not in allowed:
             raise CalendarAnimError("Cleanup metadata returned an ID outside validation allowlist")
@@ -655,7 +796,7 @@ def select_cleanup_ids(matches: list[dict[str, Any]], allowed: set[str]) -> set[
     return selected
 
 
-def _is_validation_resource(resource: dict[str, Any]) -> bool:
+def _is_validation_resource(resource: dict[str, Any], run_id: str) -> bool:
     extended = resource.get("extendedProperties")
     private = extended.get("private") if isinstance(extended, dict) else None
     return isinstance(private, dict) and all(
@@ -663,19 +804,30 @@ def _is_validation_resource(resource: dict[str, Any]) -> bool:
         for key, value in {
             "calendar_profile": "account-b",
             "generated_by": "calendar-anim",
-            "run_id": VALIDATION_RUN_ID,
+            "run_id": run_id,
         }.items()
     )
 
 
-def _validate_identity(run_id: str, source_run_id: str, frame: int) -> None:
-    if (run_id, source_run_id, frame) != (VALIDATION_RUN_ID, BULK_RUN_ID, HUMAN_FRAME):
+def _validation_spec(run_id: str) -> SingleFrameValidationSpec:
+    for spec in (SPEC_126, SPEC_168):
+        if spec.run_id == run_id:
+            return spec
+    raise CalendarAnimError("Unknown single-frame validation run ID")
+
+
+def _validate_identity(run_id: str, source_run_id: str, frame: int) -> SingleFrameValidationSpec:
+    spec = _validation_spec(run_id)
+    if source_run_id != spec.source_run_id or frame != HUMAN_FRAME:
         raise CalendarAnimError("Single-frame validation identity differs from approved values")
+    return spec
 
 
-def _validate_run_profile(run_id: str, profile: str) -> None:
-    if run_id != VALIDATION_RUN_ID or profile != "account-b":
+def _validate_run_profile(run_id: str, profile: str) -> SingleFrameValidationSpec:
+    spec = _validation_spec(run_id)
+    if profile != "account-b":
         raise CalendarAnimError("Validation is locked to its run ID and account-b")
+    return spec
 
 
 def _validate_account(account: CalendarAccountProfile, gateway: GoogleCalendarGateway) -> str:
@@ -699,7 +851,7 @@ def _plan_ids(path: Path) -> set[str]:
     }
 
 
-def _bulk_hashes() -> dict[str, str]:
+def _protected_hashes(spec: SingleFrameValidationSpec) -> dict[str, str]:
     values = protected_hashes()
     for path in (
         Path("output/216-plans") / BULK_RUN_ID / "animation-plan.json",
@@ -707,6 +859,16 @@ def _bulk_hashes() -> dict[str, str]:
         BULK_CHECKPOINT,
     ):
         values[str(path)] = file_sha256(path)
+    if spec.run_id != VALIDATION_RUN_ID:
+        protected_validation = ROOT / VALIDATION_RUN_ID
+        for path in (
+            protected_validation / "validation-report.json",
+            protected_validation / "recurrence-plan.json",
+            protected_validation / "account-b-upload-state.json",
+            protected_validation / "remote-audit.json",
+            protected_validation / "capture" / "frame_093-calendar.png",
+        ):
+            values[str(path)] = file_sha256(path)
     return values
 
 
@@ -716,6 +878,7 @@ def _fail(error: Exception) -> Never:
 
 
 def register_single_frame_validation_commands(app: typer.Typer) -> None:
+    app.command("render-cayde-216-168x96-validation-source")(render_168_validation_source_command)
     app.command("prepare-cayde-216-single-frame-validation")(
         prepare_single_frame_validation_command
     )
