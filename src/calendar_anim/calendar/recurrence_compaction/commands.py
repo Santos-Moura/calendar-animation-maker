@@ -6,6 +6,12 @@ from typing import Annotated, Never
 import typer
 
 from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
+from calendar_anim.calendar.recurrence_compaction.account_b_prefix import (
+    ACCOUNT_B_PREFIX_RUN_ID,
+    build_account_b_prefix_artifacts,
+    save_account_b_prefix_artifacts,
+    validate_prefix_input_hash,
+)
 from calendar_anim.calendar.recurrence_compaction.artifacts import (
     write_recurrence_artifacts,
 )
@@ -17,6 +23,7 @@ from calendar_anim.calendar.recurrence_compaction.hybrid import (
     validate_input_hash,
 )
 from calendar_anim.calendar.recurrence_compaction.planner import build_recurrence_study
+from calendar_anim.calendar.recurrence_upload.artifacts import RecurrenceUploadStore, file_sha256
 from calendar_anim.calendar.recurrence_validation.ordering import OrderingCaptureResult
 from calendar_anim.exceptions import CalendarAnimError
 
@@ -77,6 +84,68 @@ def recurrence_plan_command(
 def register_recurrence_compaction_commands(app: typer.Typer) -> None:
     app.command("recurrence-plan")(recurrence_plan_command)
     app.command("prepare-final-hybrid-recurrence")(prepare_final_hybrid_recurrence_command)
+    app.command("prepare-account-b-prefix-recurrence")(prepare_account_b_prefix_recurrence_command)
+
+
+def prepare_account_b_prefix_recurrence_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = ACCOUNT_B_PREFIX_RUN_ID,
+    source_run_id: Annotated[str, typer.Option("--source-run-id")] = FINAL_SOURCE_RUN_ID,
+    input_file: Annotated[Path, typer.Option("--input")] = Path("input.mp4"),
+    animation_output_root: Annotated[Path, typer.Option("--animation-output-root")] = Path(
+        "output/animation-runs"
+    ),
+    existing_plan_root: Annotated[Path, typer.Option("--existing-plan-root")] = Path(
+        "output/hybrid-plans"
+    ),
+    output_directory: Annotated[Path | None, typer.Option("--output-directory")] = None,
+    parent_chunk_size: Annotated[int, typer.Option("--parent-chunk-size", min=1, max=730)] = 100,
+) -> None:
+    """Build the isolated Account-B frames 1-23 recurrence prefix locally."""
+
+    try:
+        if run_id != ACCOUNT_B_PREFIX_RUN_ID:
+            raise CalendarAnimError(
+                "Account-B prefix preparation requires the locked prefix run ID"
+            )
+        if parent_chunk_size != 100:
+            raise CalendarAnimError("Account-B prefix recurrence requires chunk size 100")
+        validate_prefix_input_hash(input_file)
+        existing_store = RecurrenceUploadStore(existing_plan_root, Path("output/hybrid-runs"))
+        existing_plan = existing_store.load_plan(FINAL_HYBRID_RUN_ID)
+        existing_plan_path = (
+            existing_plan_root / FINAL_HYBRID_RUN_ID / "account-b-recurrence-plan.json"
+        )
+        existing_hash_before = file_sha256(existing_plan_path)
+        source_store = AnimationRunStore(animation_output_root)
+        animation, recurrence, report, final = build_account_b_prefix_artifacts(
+            source_store,
+            existing_plan,
+            source_run_id=source_run_id,
+            run_id=run_id,
+            chunk_size=parent_chunk_size,
+            existing_b_plan_sha256=existing_hash_before,
+        )
+        if file_sha256(existing_plan_path) != existing_hash_before:
+            raise CalendarAnimError("Existing Account-B recurrence plan changed during preparation")
+        destination = output_directory or Path("output/account-b-prefix-plans") / run_id
+        paths = save_account_b_prefix_artifacts(destination, animation, recurrence, report, final)
+    except (CalendarAnimError, OSError, ValueError, json.JSONDecodeError) as error:
+        _fail(error)
+    typer.echo("ACCOUNT-B FULL ANIMATION PREFIX PLAN")
+    typer.echo("Existing B frames 24-108: UNTOUCHED")
+    typer.echo(f"Prefix frames: 1-23 ({final.prefix_first_week} -> {final.prefix_last_week})")
+    typer.echo(f"Logical occurrences: {final.logical_occurrences}")
+    typer.echo(f"Unique signatures: {final.unique_recurrence_signatures}")
+    typer.echo(f"Parents chunk100: {final.recurring_parents}")
+    typer.echo(f"Reduction: {final.reduction_percent:.3f}%")
+    typer.echo(f"PREFIX/EXISTING-B WEEK OVERLAP: {final.prefix_existing_week_overlap}")
+    typer.echo(f"PARENT ID COLLISIONS: {final.parent_id_collisions}")
+    typer.echo(f"EXPANSION EQUALITY: {'YES' if final.expansion_exact else 'NO'}")
+    for path in paths:
+        typer.echo(f"Artifact: {path}")
+    typer.echo("Account A reads: NO")
+    typer.echo("Google Calendar reads: NO")
+    typer.echo("Google Calendar writes: NO")
 
 
 def prepare_final_hybrid_recurrence_command(

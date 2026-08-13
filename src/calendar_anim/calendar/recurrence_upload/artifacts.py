@@ -59,9 +59,16 @@ class RecurrenceUploadStore:
         self,
         plan_root: Path = Path("output/hybrid-plans"),
         state_root: Path = Path("output/hybrid-runs"),
+        *,
+        artifact_names: tuple[str, ...] = ARTIFACT_NAMES,
+        recurrence_plan_name: str = "account-b-recurrence-plan.json",
+        recurrence_report_name: str = "account-b-recurrence-report.json",
     ) -> None:
         self.plan_root = plan_root
         self.state_root = state_root
+        self.artifact_names = artifact_names
+        self.recurrence_plan_name = recurrence_plan_name
+        self.recurrence_report_name = recurrence_report_name
 
     def plan_directory(self, run_id: str) -> Path:
         return self.plan_root / run_id
@@ -84,21 +91,21 @@ class RecurrenceUploadStore:
     def artifact_hashes(self, run_id: str) -> dict[str, str]:
         directory = self.plan_directory(run_id)
         try:
-            return {name: file_sha256(directory / name) for name in ARTIFACT_NAMES}
+            return {name: file_sha256(directory / name) for name in self.artifact_names}
         except OSError as error:
             raise CalendarAnimError(
                 f"Missing or unreadable hybrid artifact in {directory}"
             ) from error
 
     def load_plan(self, run_id: str) -> RecurrenceMigrationPlan:
-        path = self.plan_directory(run_id) / "account-b-recurrence-plan.json"
+        path = self.plan_directory(run_id) / self.recurrence_plan_name
         try:
             return RecurrenceMigrationPlan.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValidationError, ValueError) as error:
             raise CalendarAnimError(f"Invalid recurrence plan: {path}") from error
 
     def load_report(self, run_id: str) -> RecurrenceStudyReport:
-        path = self.plan_directory(run_id) / "account-b-recurrence-report.json"
+        path = self.plan_directory(run_id) / self.recurrence_report_name
         try:
             return RecurrenceStudyReport.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValidationError, ValueError) as error:
@@ -128,7 +135,7 @@ class RecurrenceUploadStore:
             return state
         state = RecurrenceUploadState(
             run_id=run_id,
-            plan_sha256=artifact_sha256["account-b-recurrence-plan.json"],
+            plan_sha256=artifact_sha256[self.recurrence_plan_name],
             artifact_sha256=artifact_sha256,
             parents=[ParentUploadState(parent_id=item.parent_id) for item in plan.parents],
             write_pacing=CalendarWritePacingSnapshot(
