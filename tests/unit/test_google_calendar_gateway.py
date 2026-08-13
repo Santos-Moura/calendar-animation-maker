@@ -312,3 +312,41 @@ def test_range_preflight_lists_events_read_only_with_half_open_bounds() -> None:
             "pageToken": None,
         }
     ]
+
+
+def test_range_search_lists_minimal_timed_and_all_day_events_read_only() -> None:
+    class ListRequest:
+        def execute(self) -> dict[str, object]:
+            return {
+                "items": [
+                    {
+                        "id": "timed",
+                        "start": {"dateTime": "2030-01-06T06:00:00-03:00"},
+                        "end": {"dateTime": "2030-01-06T06:05:00-03:00"},
+                    },
+                    {
+                        "id": "all-day",
+                        "start": {"date": "2030-01-13"},
+                        "end": {"date": "2030-01-14"},
+                    },
+                ]
+            }
+
+    class ListEvents:
+        def list(self, **kwargs: object) -> ListRequest:
+            return ListRequest()
+
+    class ListService:
+        def events(self) -> ListEvents:
+            return ListEvents()
+
+    gateway = GoogleCalendarGateway(ListService())
+    zone = ZoneInfo("America/Sao_Paulo")
+    start = datetime(2030, 1, 1, tzinfo=zone)
+    end = datetime(2031, 1, 1, tzinfo=zone)
+
+    events = gateway.list_events_in_range("calendar-b", start, end)
+
+    assert [event.id for event in events] == ["timed", "all-day"]
+    assert events[0].start.isoformat() == "2030-01-06T06:00:00-03:00"
+    assert events[1].start == datetime(2030, 1, 13, tzinfo=zone)

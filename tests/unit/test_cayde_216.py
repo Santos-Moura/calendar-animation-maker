@@ -1,5 +1,6 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from PIL import Image
@@ -17,12 +18,16 @@ from calendar_anim.calendar.cayde_216.planner import (
     OLD_LAST_WEEK,
     RUN_ID,
 )
+from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
+from calendar_anim.calendar.frame_mapping.colors import calendar_palette_color, contrast_ratio
 from calendar_anim.calendar.hybrid_capture.media import (
     FinalVisualProbe,
     build_final_visual_command,
     inspect_final_frames,
     validate_final_visual_probe,
 )
+from calendar_anim.calendar.models import CalendarRangeEvent
+from calendar_anim.calendar.palette_presets import CAYDE_216_CANDIDATES, CAYDE_FINAL
 from calendar_anim.calendar.recurrence_compaction.planner import _parent_id
 from calendar_anim.exceptions import CalendarAnimError
 
@@ -152,3 +157,42 @@ def test_cayde_216_composer_rejects_missing_last_frame(tmp_path: Path) -> None:
 
     with pytest.raises(CalendarAnimError, match="frame_215.png"):
         inspect_final_frames(frames, (14, 8), frame_count=216)
+
+
+def test_cayde_216_palette_candidates_are_isolated_and_improve_separation() -> None:
+    assert CAYDE_FINAL.background_color_id == "1"
+    assert "1" in CAYDE_FINAL.foreground_color_ids
+    assert len(CAYDE_216_CANDIDATES) == 3
+    for candidate in CAYDE_216_CANDIDATES:
+        assert candidate.background_color_id not in candidate.foreground_color_ids
+        background = calendar_palette_color(candidate.background_color_id)
+        ratios = [
+            contrast_ratio(background.hex, calendar_palette_color(color_id).hex)
+            for color_id in candidate.foreground_color_ids
+        ]
+        assert min(ratios) >= 1.75
+
+
+def test_cayde_216_window_search_skips_conflicts_and_returns_disjoint_ranges() -> None:
+    zone = ZoneInfo("America/Sao_Paulo")
+    conflict_week = FIRST_WEEK + timedelta(weeks=10)
+    events = [
+        CalendarRangeEvent(
+            id="existing",
+            start=datetime.combine(conflict_week, datetime.min.time(), zone),
+            end=datetime.combine(conflict_week + timedelta(days=1), datetime.min.time(), zone),
+        )
+    ]
+
+    candidates = find_clean_windows(
+        events,
+        search_start=FIRST_WEEK,
+        search_end_exclusive=FIRST_WEEK + timedelta(weeks=700),
+        timezone="America/Sao_Paulo",
+    )
+
+    assert [candidate.first_week for candidate in candidates] == [
+        conflict_week + timedelta(weeks=1),
+        conflict_week + timedelta(weeks=217),
+    ]
+    assert candidates[0].end_exclusive == candidates[1].first_week
