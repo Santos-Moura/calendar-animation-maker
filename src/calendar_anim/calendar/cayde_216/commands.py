@@ -26,10 +26,13 @@ from calendar_anim.calendar.cayde_216.palette_preview import (
 from calendar_anim.calendar.cayde_216.planner import (
     FIRST_WEEK,
     FRAME_COUNT,
+    OLD_LAST_WEEK,
     RUN_ID,
+    SOURCE_RUN_ID,
     build_cayde_216_plan,
     protected_hashes,
 )
+from calendar_anim.calendar.cayde_216.upload import upload_cayde_216_recurrence_command
 from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
 from calendar_anim.calendar.hybrid_capture.artifacts import parse_output_resolution
 from calendar_anim.calendar.hybrid_capture.media import (
@@ -85,13 +88,13 @@ def prepare_cayde_216_command(
 
 
 def preview_cayde_216_palettes_command(
-    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
+    run_id: Annotated[str, typer.Option("--run-id")] = SOURCE_RUN_ID,
 ) -> None:
     """Render three isolated local palette candidates; never select the final palette."""
 
     try:
-        if run_id != RUN_ID:
-            raise CalendarAnimError(f"Palette preview requires locked run ID {RUN_ID}")
+        if run_id != SOURCE_RUN_ID:
+            raise CalendarAnimError(f"Palette preview requires source run ID {SOURCE_RUN_ID}")
         report, artifacts = build_palette_previews()
     except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
         _fail(error)
@@ -109,14 +112,14 @@ def preview_cayde_216_palettes_command(
 
 
 def preview_cayde_216_palette_frame_command(
-    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
+    run_id: Annotated[str, typer.Option("--run-id")] = SOURCE_RUN_ID,
     frame: Annotated[int, typer.Option("--frame", min=1, max=216)] = 93,
 ) -> None:
     """Reuse one generated candidate frame for a local side-by-side comparison."""
 
     try:
-        if run_id != RUN_ID:
-            raise CalendarAnimError(f"Palette preview requires locked run ID {RUN_ID}")
+        if run_id != SOURCE_RUN_ID:
+            raise CalendarAnimError(f"Palette preview requires source run ID {SOURCE_RUN_ID}")
         report, artifacts = build_single_frame_palette_comparison(human_frame=frame)
     except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
         _fail(error)
@@ -131,18 +134,19 @@ def preview_cayde_216_palette_frame_command(
 
 
 def search_cayde_216_windows_command(
-    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
+    run_id: Annotated[str, typer.Option("--run-id")] = SOURCE_RUN_ID,
     profile: Annotated[str, typer.Option("--profile")] = "account-b",
     execute: Annotated[bool, typer.Option("--execute")] = False,
 ) -> None:
     """Find two disjoint clean 216-week ranges through one read-only API scan."""
 
-    if run_id != RUN_ID or profile != "account-b":
+    if run_id != SOURCE_RUN_ID or profile != "account-b":
         _fail(CalendarAnimError("216-frame window search is locked to its run and account-b"))
-    search_end = FIRST_WEEK + timedelta(weeks=1040)
+    search_start = OLD_LAST_WEEK + timedelta(weeks=1)
+    search_end = search_start + timedelta(weeks=1040)
     typer.echo("CAYDE 216 CLEAN WINDOW SEARCH")
     typer.echo(f"Profile: {profile}")
-    typer.echo(f"Query: {FIRST_WEEK} -> {search_end} (exclusive)")
+    typer.echo(f"Query: {search_start} -> {search_end} (exclusive)")
     typer.echo(f"Execution: {'READ-ONLY GOOGLE API' if execute else 'DRY RUN'}")
     if not execute:
         typer.echo("No Google API call was made.")
@@ -160,12 +164,12 @@ def search_cayde_216_windows_command(
         zone = ZoneInfo("America/Sao_Paulo")
         events = gateway.list_events_in_range(
             account.calendar_id,
-            datetime.combine(FIRST_WEEK, time.min, zone),
+            datetime.combine(search_start, time.min, zone),
             datetime.combine(search_end, time.min, zone),
         )
         candidates = find_clean_windows(
             events,
-            search_start=FIRST_WEEK,
+            search_start=search_start,
             search_end_exclusive=search_end,
             timezone="America/Sao_Paulo",
         )
@@ -186,7 +190,7 @@ def search_cayde_216_windows_command(
             calendar_id=account.calendar_id,
             calendar_name=calendar.name,
             timezone=calendar.timezone,
-            query_start=FIRST_WEEK,
+            query_start=search_start,
             query_end_exclusive=search_end,
             expanded_events_seen=len(events),
             candidates=candidates,
@@ -207,7 +211,7 @@ def search_cayde_216_windows_command(
             "selected_palette": None,
             "palette_approval_required": True,
             "recommended_clean_window": recommended.model_dump(mode="json"),
-            "current_local_plan_first_week": FIRST_WEEK.isoformat(),
+            "current_local_plan_first_week": search_start.isoformat(),
             "current_local_plan_is_remote_clean": False,
             "replan_required_after_palette_approval": True,
             "do_not_upload_current_plan": True,
@@ -460,3 +464,4 @@ def register_cayde_216_commands(app: typer.Typer) -> None:
     app.command("search-cayde-216-windows")(search_cayde_216_windows_command)
     app.command("compose-final-cayde-216")(compose_final_cayde_216_command)
     app.command("mux-final-cayde-216-audio")(mux_final_cayde_216_audio_command)
+    app.command("upload-cayde-216-recurrence")(upload_cayde_216_recurrence_command)

@@ -11,8 +11,8 @@ from calendar_anim.calendar.calibration.profile import DEFAULT_PROFILE_PATH, loa
 from calendar_anim.calendar.cayde_216.artifacts import Cayde216Store, write_atomic
 from calendar_anim.calendar.cayde_216.planner import (
     MAX_EVENTS_PER_FRAME,
-    RUN_ID,
     SOURCE_MANIFEST_RELATIVE,
+    SOURCE_RUN_ID,
     protected_hashes,
 )
 from calendar_anim.calendar.frame_mapping.colors import (
@@ -50,7 +50,7 @@ def build_palette_previews(
 
     store = store or Cayde216Store()
     before = protected_hashes()
-    run_directory = store.run_directory(RUN_ID)
+    run_directory = store.run_directory(SOURCE_RUN_ID)
     manifest_path = run_directory / SOURCE_MANIFEST_RELATIVE
     manifest = read_manifest(manifest_path)
     if len(manifest.frames) != 216:
@@ -148,7 +148,7 @@ def build_palette_previews(
         raise CalendarAnimError("Protected 108-frame artifacts changed during palette preview")
     report: dict[str, Any] = {
         "schema_version": "1.0",
-        "run_id": RUN_ID,
+        "run_id": SOURCE_RUN_ID,
         "purpose": "candidate comparison only",
         "representative_frame_indices": list(REPRESENTATIVE_FRAME_INDICES),
         "representative_timestamps_seconds": timestamps,
@@ -183,7 +183,7 @@ def build_single_frame_palette_comparison(
     store = store or Cayde216Store()
     before = protected_hashes()
     frame_index = human_frame - 1
-    run_directory = store.run_directory(RUN_ID)
+    run_directory = store.run_directory(SOURCE_RUN_ID)
     manifest = read_manifest(run_directory / SOURCE_MANIFEST_RELATIVE)
     if len(manifest.frames) != 216:
         raise CalendarAnimError("Single-frame palette preview requires the 216-frame manifest")
@@ -225,7 +225,7 @@ def build_single_frame_palette_comparison(
         raise CalendarAnimError("Protected 108-frame artifacts changed during palette comparison")
     report: dict[str, Any] = {
         "schema_version": "1.0",
-        "run_id": RUN_ID,
+        "run_id": SOURCE_RUN_ID,
         "human_frame": human_frame,
         "frame_index": frame_index,
         "timestamp_seconds": manifest.frames[frame_index].timestamp_seconds,

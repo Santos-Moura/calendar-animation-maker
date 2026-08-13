@@ -26,14 +26,15 @@ from calendar_anim.calendar.subcolumn_ordering import SubcolumnOrderStrategy
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.renderer.manifest import read_manifest, validate_manifest_files
 
-RUN_ID = "cayde-final-216f-6fps-rdate-126x72-36s-01"
+SOURCE_RUN_ID = "cayde-final-216f-6fps-rdate-126x72-36s-01"
+RUN_ID = "cayde-final-216f-6fps-cyan-magenta-rdate-126x72-36s-01"
 SOURCE_MANIFEST_RELATIVE = Path("source-render/animation.json")
 OLD_RUN_ID = "cayde-final-hybrid-rdate-126x72-3fps-36s-01"
 OLD_SOURCE_RUN_ID = "cayde-final-126x72-3fps-36s-01"
 OLD_PREFIX_RUN_ID = "cayde-final-b-prefix-rdate-frames-001-023-01"
 OLD_FIRST_WEEK = date(2027, 10, 10)
 OLD_LAST_WEEK = date(2029, 10, 28)
-FIRST_WEEK = OLD_LAST_WEEK + timedelta(days=7)
+FIRST_WEEK = date(2030, 5, 5)
 FRAME_COUNT = 216
 FPS = 6.0
 CLIP_START = 114.0
@@ -85,7 +86,7 @@ def build_cayde_216_plan(
     store = store or Cayde216Store()
     _validate_input(input_path)
     protected_before = protected_hashes()
-    manifest_path = store.run_directory(RUN_ID) / SOURCE_MANIFEST_RELATIVE
+    manifest_path = store.run_directory(SOURCE_RUN_ID) / SOURCE_MANIFEST_RELATIVE
     manifest = read_manifest(manifest_path)
     errors = validate_manifest_files(manifest, manifest_path.resolve())
     if errors:
@@ -105,7 +106,7 @@ def build_cayde_216_plan(
         calendar_profile="account-b",
         mapping_mode=FrameMappingMode.FULL_GRID,
         event_compression=EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
-        palette_preset="cayde-final",
+        palette_preset="cayde-cyan-magenta",
         subcolumn_order_strategy=SubcolumnOrderStrategy.ZERO_WIDTH,
         grid_profile="high-detail-126x72",
     )
@@ -147,6 +148,9 @@ def build_cayde_216_plan(
         calendar_profile="account-b",
         calendar_name="Calendar Animation Lab B",
         timezone="America/Sao_Paulo",
+        palette_preset="cayde-cyan-magenta",
+        background_color_id="7",
+        foreground_color_ids=["3", "5", "9", "11"],
         first_week=weeks[0],
         last_week=weeks[-1],
         week_count=len(weeks),

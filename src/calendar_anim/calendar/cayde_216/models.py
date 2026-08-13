@@ -33,6 +33,9 @@ class Cayde216SizingReport(BaseModel):
     calendar_profile: str
     calendar_name: str
     timezone: str
+    palette_preset: str
+    background_color_id: str
+    foreground_color_ids: list[str]
     first_week: date
     last_week: date
     week_count: int
@@ -96,6 +99,12 @@ class Cayde216SizingReport(BaseModel):
             failures.append("timing")
         if self.week_count != 216 or not self.all_week_deltas_seven_days:
             failures.append("week sequence")
+        if (
+            self.palette_preset != "cayde-cyan-magenta"
+            or self.background_color_id != "7"
+            or self.foreground_color_ids != ["3", "5", "9", "11"]
+        ):
+            failures.append("final palette")
         if self.old_week_overlap:
             failures.append("old week overlap")
         if not self.expansion_exact:
