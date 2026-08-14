@@ -20,7 +20,7 @@ client_secret*.json
 
 .playwright-profile/
 playwright/.auth/
-
+*.jpg
 *.mp4
 *.mov
 *.mkv
