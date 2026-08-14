@@ -6,8 +6,7 @@ the commands contain no Calendar API write, update, delete, or cleanup path.
 
 ## Locked source and boundary
 
-- `input.mp4`, SHA-256
-  `c5c94c0c1361bd0a42034f7e7419abb1aba6d2b13b1ae7af1ac44bd1e152b507`
+- `input.mp4`, locked by a local SHA-256 fingerprint
 - clip 114.0-150.0 seconds, 108 frames, 3 FPS, 126x72
 - `cayde-final` palette, zero-width summaries, synchronized horizontal bands
 - indices 0-22 (human frames 1-23): `account-a`, Chrome zoom 33%
