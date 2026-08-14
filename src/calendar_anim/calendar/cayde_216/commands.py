@@ -15,6 +15,7 @@ from calendar_anim.calendar.capture.final_media import (
     validate_av_media,
 )
 from calendar_anim.calendar.cayde_216.artifacts import Cayde216Store, write_atomic
+from calendar_anim.calendar.cayde_216.capture import capture_cayde_216_preview_command
 from calendar_anim.calendar.cayde_216.models import (
     Cayde216RemotePreflight,
     Cayde216WindowSearchReport,
@@ -468,4 +469,5 @@ def register_cayde_216_commands(app: typer.Typer) -> None:
     app.command("compose-final-cayde-216")(compose_final_cayde_216_command)
     app.command("mux-final-cayde-216-audio")(mux_final_cayde_216_audio_command)
     app.command("upload-cayde-216-recurrence")(upload_cayde_216_recurrence_command)
+    app.command("capture-cayde-216-preview")(capture_cayde_216_preview_command)
     register_single_frame_validation_commands(app)
