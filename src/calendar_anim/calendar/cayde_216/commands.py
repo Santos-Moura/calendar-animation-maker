@@ -5,15 +5,6 @@ from zoneinfo import ZoneInfo
 
 import typer
 
-from calendar_anim.calendar.capture.final_media import (
-    build_exact_audio_extract_command,
-    build_mux_command,
-    detect_ffmpeg,
-    extract_exact_audio,
-    mux_audio,
-    probe_av_media,
-    validate_av_media,
-)
 from calendar_anim.calendar.cayde_216.artifacts import Cayde216Store, write_atomic
 from calendar_anim.calendar.cayde_216.capture import (
     capture_cayde_216_preview_command,
@@ -22,10 +13,6 @@ from calendar_anim.calendar.cayde_216.capture import (
 from calendar_anim.calendar.cayde_216.models import (
     Cayde216RemotePreflight,
     Cayde216WindowSearchReport,
-)
-from calendar_anim.calendar.cayde_216.palette_preview import (
-    build_palette_previews,
-    build_single_frame_palette_comparison,
 )
 from calendar_anim.calendar.cayde_216.planner import (
     FIRST_WEEK,
@@ -36,9 +23,6 @@ from calendar_anim.calendar.cayde_216.planner import (
     build_cayde_216_plan,
     protected_hashes,
 )
-from calendar_anim.calendar.cayde_216.single_frame_validation import (
-    register_single_frame_validation_commands,
-)
 from calendar_anim.calendar.cayde_216.toolbar_composition import (
     compose_final_cayde_216_calendar_toolbar_command,
     mux_final_cayde_216_calendar_toolbar_audio_command,
@@ -47,15 +31,6 @@ from calendar_anim.calendar.cayde_216.toolbar_composition import (
 )
 from calendar_anim.calendar.cayde_216.upload import upload_cayde_216_recurrence_command
 from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
-from calendar_anim.calendar.hybrid_capture.artifacts import parse_output_resolution
-from calendar_anim.calendar.hybrid_capture.media import (
-    build_final_visual_command,
-    compose_final_visual,
-    inspect_final_frames,
-    probe_final_visual,
-    validate_final_visual_probe,
-)
-from calendar_anim.calendar.hybrid_capture.models import HybridOutputMode
 from calendar_anim.calendar.profiles.service import CalendarProfileService
 from calendar_anim.calendar.profiles.store import CalendarProfileStore
 from calendar_anim.exceptions import CalendarAnimError
@@ -98,52 +73,6 @@ def prepare_cayde_216_command(
     typer.echo("OLD 108 VERSION TOUCHED: NO")
     typer.echo("Google Calendar reads: NO")
     typer.echo("Google Calendar writes: NO")
-
-
-def preview_cayde_216_palettes_command(
-    run_id: Annotated[str, typer.Option("--run-id")] = SOURCE_RUN_ID,
-) -> None:
-    """Render three isolated local palette candidates; never select the final palette."""
-
-    try:
-        if run_id != SOURCE_RUN_ID:
-            raise CalendarAnimError(f"Palette preview requires source run ID {SOURCE_RUN_ID}")
-        report, artifacts = build_palette_previews()
-    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
-        _fail(error)
-    typer.echo("CAYDE 216 PALETTE CANDIDATES")
-    for candidate in report["candidates"]:
-        typer.echo(
-            f"{candidate['name']}: background={candidate['background']} "
-            f"minimum contrast={candidate['minimum_foreground_contrast']:.3f}"
-        )
-    for artifact in artifacts:
-        typer.echo(f"Artifact: {artifact}")
-    typer.echo("Final palette selected: NO")
-    typer.echo("Final run replanned: NO")
-    typer.echo("Google Calendar reads/writes: NO")
-
-
-def preview_cayde_216_palette_frame_command(
-    run_id: Annotated[str, typer.Option("--run-id")] = SOURCE_RUN_ID,
-    frame: Annotated[int, typer.Option("--frame", min=1, max=216)] = 93,
-) -> None:
-    """Reuse one generated candidate frame for a local side-by-side comparison."""
-
-    try:
-        if run_id != SOURCE_RUN_ID:
-            raise CalendarAnimError(f"Palette preview requires source run ID {SOURCE_RUN_ID}")
-        report, artifacts = build_single_frame_palette_comparison(human_frame=frame)
-    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
-        _fail(error)
-    typer.echo(f"Human frame: {report['human_frame']} (index {report['frame_index']})")
-    typer.echo(f"Timestamp: {report['timestamp_seconds']:.6f}s")
-    for artifact in artifacts:
-        typer.echo(f"Artifact: {artifact}")
-    typer.echo("Source render reused: YES")
-    typer.echo("Google Calendar writes: NO")
-    typer.echo("Upload: NO")
-    typer.echo("Browser capture: NO")
 
 
 def search_cayde_216_windows_command(
@@ -352,131 +281,10 @@ def preflight_cayde_216_command(
     typer.echo("Google Calendar writes: NO")
 
 
-def compose_final_cayde_216_command(
-    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
-    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
-        HybridOutputMode.HEADER_PRESERVED_FILL
-    ),
-    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
-) -> None:
-    """Compose the future 216-frame capture at exactly 6 FPS; never opens Calendar."""
-
-    try:
-        if run_id != RUN_ID or mode is not HybridOutputMode.HEADER_PRESERVED_FILL:
-            raise CalendarAnimError("216-frame composition is locked to its run and final mode")
-        output_resolution = parse_output_resolution(resolution)
-        if output_resolution != (1512, 864):
-            raise CalendarAnimError("216-frame composition requires 1512x864")
-        runtime = Path("output/216-runs") / run_id
-        frames = runtime / "final-frames" / mode.directory_name / resolution
-        sequence = inspect_final_frames(frames, output_resolution, frame_count=216)
-        tools = detect_ffmpeg()
-        final = runtime / "final" / mode.directory_name / resolution
-        output = final / "final-video-no-audio.mp4"
-        command = build_final_visual_command(tools, frames, output, frame_count=216, fps=6)
-        compose_final_visual(
-            tools,
-            frames,
-            output,
-            output_resolution,
-            frame_count=216,
-            fps=6,
-        )
-        probe = probe_final_visual(tools, output)
-        validate_final_visual_probe(
-            probe,
-            output_resolution,
-            expected_frame_count=216,
-            expected_fps=6,
-            expected_duration_seconds=36,
-        )
-        payload = {
-            "input_directory": str(frames),
-            "count": sequence.count,
-            "first": sequence.first.name,
-            "last": sequence.last.name,
-            "fps": 6,
-            "duration_seconds": probe.duration_seconds,
-            "resolution": resolution,
-            "ffmpeg_command": command,
-            "output": str(output),
-            "validation": "PASS",
-            "calendar_touched": False,
-        }
-        Cayde216Store().save_json_report(final / "visual-composition-report.json", payload)
-    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
-        _fail(error)
-    typer.echo(f"Frames: {sequence.count}; {sequence.first.name} -> {sequence.last.name}")
-    typer.echo("FPS/duration: 6 / 36.000000s")
-    typer.echo(f"Visual MP4: {output}")
-    typer.echo("Google Calendar reads/writes: NO")
-
-
-def mux_final_cayde_216_audio_command(
-    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
-    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
-        HybridOutputMode.HEADER_PRESERVED_FILL
-    ),
-    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
-    source_video: Annotated[Path, typer.Option("--source-video")] = Path("input.mp4"),
-) -> None:
-    """Mux exact 114-150s audio into the future 216-frame visual by video stream copy."""
-
-    try:
-        if run_id != RUN_ID or mode is not HybridOutputMode.HEADER_PRESERVED_FILL:
-            raise CalendarAnimError("216-frame mux is locked to its run and final mode")
-        output_resolution = parse_output_resolution(resolution)
-        runtime = Path("output/216-runs") / run_id
-        final = runtime / "final" / mode.directory_name / resolution
-        visual = final / "final-video-no-audio.mp4"
-        if not visual.is_file():
-            raise CalendarAnimError(f"216-frame silent MP4 does not exist: {visual}")
-        tools = detect_ffmpeg()
-        audio = final / "cutscene-audio-114s-150s.m4a"
-        audio_command = build_exact_audio_extract_command(tools, source_video, audio, 114.0, 150.0)
-        extract_exact_audio(tools, source_video, audio, 114.0, 150.0)
-        output = final / "final-with-audio.mp4"
-        mux_command = build_mux_command(tools, visual, audio, output)
-        mux_audio(tools, visual, audio, output)
-        probe = probe_av_media(tools, output)
-        validate_av_media(
-            probe,
-            output_resolution,
-            expected_duration_seconds=36,
-            expected_fps=6,
-            expected_video_frame_count=216,
-        )
-        payload = {
-            "visual": str(visual),
-            "source": str(source_video),
-            "clip": [114.0, 150.0],
-            "audio_extract_command": audio_command,
-            "mux_command": mux_command,
-            "video_copied": True,
-            "audio_reencoded": True,
-            "video_duration": probe.video_duration_seconds,
-            "audio_duration": probe.audio_duration_seconds,
-            "av_delta": probe.av_delta_seconds,
-            "output": str(output),
-            "validation": "PASS",
-            "calendar_touched": False,
-        }
-        Cayde216Store().save_json_report(final / "audio-mux-report.json", payload)
-    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
-        _fail(error)
-    typer.echo(f"Final with audio: {output}")
-    typer.echo(f"A/V delta: {probe.av_delta_seconds:.6f}s")
-    typer.echo("Google Calendar reads/writes: NO")
-
-
 def register_cayde_216_commands(app: typer.Typer) -> None:
     app.command("prepare-cayde-216")(prepare_cayde_216_command)
-    app.command("preview-cayde-216-palettes")(preview_cayde_216_palettes_command)
-    app.command("preview-cayde-216-palette-frame")(preview_cayde_216_palette_frame_command)
     app.command("preflight-cayde-216")(preflight_cayde_216_command)
     app.command("search-cayde-216-windows")(search_cayde_216_windows_command)
-    app.command("compose-final-cayde-216")(compose_final_cayde_216_command)
-    app.command("mux-final-cayde-216-audio")(mux_final_cayde_216_audio_command)
     app.command("upload-cayde-216-recurrence")(upload_cayde_216_recurrence_command)
     app.command("capture-cayde-216-preview")(capture_cayde_216_preview_command)
     app.command("capture-final-cayde-216")(capture_final_cayde_216_command)
@@ -490,4 +298,3 @@ def register_cayde_216_commands(app: typer.Typer) -> None:
     app.command("mux-final-cayde-216-calendar-toolbar-audio")(
         mux_final_cayde_216_calendar_toolbar_audio_command
     )
-    register_single_frame_validation_commands(app)

@@ -218,26 +218,26 @@ def test_cayde_final_palette_is_locked_and_deterministic() -> None:
     assert signature == "d5c733504066e118d013264a8586a4d26501457378f32012e905b3658c9b9644"
 
 
-def test_candidate_palette_remaps_source_canvas_without_changing_final_preset() -> None:
+def test_cyan_magenta_palette_remaps_source_canvas() -> None:
     manifest = make_manifest(Block(x=0, y=0, width=1, color_id="1", color_hex="#7986CB"))
     manifest.frames[0].blocks.append(Block(x=1, y=0, width=1, color_id="3", color_hex="#8E24AA"))
 
-    candidate = build_single_frame_plan(
+    plan = build_single_frame_plan(
         manifest,
         make_ready_calibration_profile(),
         frame_index=0,
         anchor_date=date(2026, 9, 6),
-        run_id="cayde-candidate-background",
+        run_id="cayde-cyan-magenta-background",
         max_execute_events=2000,
         mapping_mode=FrameMappingMode.FULL_GRID,
         event_compression=EventCompressionMode.SYNCHRONIZED_HORIZONTAL_BANDS,
-        palette_preset="cayde-lilac-pop",
+        palette_preset="cayde-cyan-magenta",
     )
 
-    canvas = next(cell for cell in candidate.mapped_cells if cell.source_block_index == 0)
-    character = next(cell for cell in candidate.mapped_cells if cell.source_block_index == 1)
+    canvas = next(cell for cell in plan.mapped_cells if cell.source_block_index == 0)
+    character = next(cell for cell in plan.mapped_cells if cell.source_block_index == 1)
     assert canvas.cell_role is CellRole.BACKGROUND
-    assert canvas.color_id == "1"
+    assert canvas.color_id == "7"
     assert character.cell_role is CellRole.FOREGROUND
     assert character.color_id == "3"
 

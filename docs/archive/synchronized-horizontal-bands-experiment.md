@@ -1,4 +1,4 @@
-# Synchronized horizontal-band compression
+# Archived: Synchronized horizontal-band compression
 
 Independent vertical compression was rejected because mixed durations and partial overlaps changed
 Google Calendar's horizontal order, visible widths, and placement. This follow-up uses a stricter

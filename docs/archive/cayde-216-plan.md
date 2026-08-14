@@ -1,4 +1,4 @@
-# Cayde final 216-frame candidate
+# Archived: Cayde final 216-frame candidate
 
 The approved final variant is now isolated as
 `cayde-final-216f-6fps-cyan-magenta-rdate-126x72-36s-01`. It uses Cyan Magenta,

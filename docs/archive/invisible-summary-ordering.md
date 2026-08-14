@@ -1,4 +1,4 @@
-# Invisible summary ordering
+# Archived: Invisible summary ordering
 
 Google Calendar does not expose a horizontal subcolumn field. The project therefore keeps two
 event properties deliberately separate:

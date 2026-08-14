@@ -1,4 +1,3 @@
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -6,11 +5,6 @@ import yaml
 from typer.testing import CliRunner
 
 import calendar_anim.calendar.commands as calendar_commands
-from calendar_anim.calendar.calibration.patterns import build_calibration_plan
-from calendar_anim.calendar.calibration.service import CalibrationService
-from calendar_anim.calendar.fake import FakeCalendarGateway
-from calendar_anim.calendar.lab import LabCalendarService
-from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.cli import app
 
 pytestmark = pytest.mark.integration
@@ -204,7 +198,12 @@ def test_execute_without_credentials_has_friendly_error(
     assert "credentials were not found" in result.output
 
 
-def test_cleanup_is_dry_run_without_api() -> None:
+def test_cleanup_is_dry_run_without_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        calendar_commands,
+        "_google_gateway",
+        lambda: pytest.fail("dry-run cleanup must not construct a Google gateway"),
+    )
     result = runner.invoke(
         app,
         [
@@ -218,36 +217,8 @@ def test_cleanup_is_dry_run_without_api() -> None:
     )
     assert result.exit_code == 0, result.output
     assert "Execution: DRY RUN" in result.output
+    assert "Remote lookup was not performed" in result.output
     assert "No deletion was performed" in result.output
-
-
-def test_authenticated_cleanup_preview_reads_matches_but_never_deletes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    gateway = FakeCalendarGateway()
-    store = CalendarConfigStore(tmp_path / "calendar-config.json")
-    service = CalibrationService(gateway, LabCalendarService(gateway, store))
-    plan = build_calibration_plan("duration-scale", date(2026, 8, 10), run_id="preview-run")
-    service.execute(plan)
-    token = tmp_path / "token.json"
-    token.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("GOOGLE_CALENDAR_TOKEN_FILE", str(token))
-    monkeypatch.setattr(calendar_commands, "_google_gateway", lambda: gateway)
-    monkeypatch.setattr(calendar_commands, "CalendarConfigStore", lambda: store)
-    result = runner.invoke(
-        app,
-        [
-            "calendar",
-            "cleanup",
-            "--animation-id",
-            plan.animation_id,
-            "--run-id",
-            plan.run_id,
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert "Matching events: 7 (authenticated metadata lookup)" in result.output
-    assert gateway.delete_event_calls == 0
 
 
 def test_record_calibration_writes_human_editable_yaml(tmp_path: Path) -> None:

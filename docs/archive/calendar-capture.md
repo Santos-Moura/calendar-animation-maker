@@ -1,4 +1,4 @@
-# Google Calendar week capture
+# Archived: Google Calendar week capture
 
 ## Purpose and boundary
 

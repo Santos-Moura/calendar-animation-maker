@@ -1,4 +1,4 @@
-# Vertical event compression experiment
+# Archived: Vertical event compression experiment
 
 The working full-grid baseline creates one event for every logical cell:
 

@@ -4,7 +4,6 @@ from typing import Annotated, Never
 import typer
 from googleapiclient.errors import HttpError
 
-from calendar_anim.calendar.hybrid_capture.planner import parse_human_frames
 from calendar_anim.calendar.multi_frame.artifacts import AnimationRunStore
 from calendar_anim.calendar.profiles.service import CalendarProfileService
 from calendar_anim.calendar.profiles.store import CalendarProfileStore
@@ -31,6 +30,18 @@ DEFAULT_AUDIT_FRAMES = "24,40,60,100"
 def _fail(error: Exception) -> Never:
     typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
     raise typer.Exit(code=1)
+
+
+def parse_human_frames(value: str) -> list[int]:
+    try:
+        frames = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as error:
+        raise CalendarAnimError("--frames must be comma-separated human frame numbers") from error
+    if not frames or len(frames) != len(set(frames)):
+        raise CalendarAnimError("--frames must contain unique frame numbers")
+    if any(frame < 24 or frame > 108 for frame in frames):
+        raise CalendarAnimError("Account-B audit frames must be in human range 24-108")
+    return frames
 
 
 def audit_hybrid_recurrence_remote_command(

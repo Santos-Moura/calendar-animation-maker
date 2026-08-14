@@ -63,7 +63,6 @@ from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
 from calendar_anim.calendar.horizontal_band_compression.commands import (
     register_horizontal_band_compression_commands,
 )
-from calendar_anim.calendar.hybrid_capture.commands import register_hybrid_capture_commands
 from calendar_anim.calendar.lab import LAB_CALENDAR_DESCRIPTION, LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.commands import register_multi_frame_commands
@@ -304,31 +303,18 @@ def cleanup_command(
     except CalendarAnimError as error:
         _fail(error)
     if not execute:
-        auth = GoogleOAuthConfig()
-        if auth.token_available:
-            try:
-                match, _ = _find_cleanup_match(
-                    _google_gateway(), calendar_name, calendar_id, animation_id, run_id
-                )
-                count = len(match.events)
-                source = "authenticated metadata lookup"
-                display_calendar = match.calendar.name if match.calendar else calendar_name
-            except (CalendarAnimError, HttpError, OSError) as error:
-                _fail(error)
-        else:
-            local = _local_cleanup_result(run_id)
-            count = (
-                local.created_events
-                if local and local.executed and local.animation_id == animation_id
-                else 0
-            )
-            source = "local execution record; authentication was not configured"
-            display_calendar = calendar_name
-        typer.echo(f"Calendar: {display_calendar}")
+        local = _local_cleanup_result(run_id)
+        count = (
+            local.created_events
+            if local and local.executed and local.animation_id == animation_id
+            else 0
+        )
+        typer.echo(f"Calendar: {calendar_name}")
         typer.echo(f"Animation ID: {animation_id}")
         typer.echo(f"Run ID: {run_id}")
-        typer.echo(f"Matching events: {count} ({source})")
+        typer.echo(f"Locally recorded events: {count}")
         typer.echo("Execution: DRY RUN")
+        typer.echo("Remote lookup was not performed.")
         typer.echo("No deletion was performed.")
         if yes:
             typer.echo("--yes has no effect without --execute.")
@@ -932,5 +918,4 @@ def register_calendar_commands(app: typer.Typer) -> None:
     register_capture_commands(app)
     register_vertical_compression_commands(app)
     register_horizontal_band_compression_commands(app)
-    register_hybrid_capture_commands(app)
     register_cayde_216_commands(app)

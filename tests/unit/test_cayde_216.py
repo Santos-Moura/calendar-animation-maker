@@ -30,7 +30,6 @@ from calendar_anim.calendar.cayde_216.toolbar_composition import (
 )
 from calendar_anim.calendar.cayde_216.upload import UPLOAD_ARTIFACT_NAMES, upload_store
 from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
-from calendar_anim.calendar.frame_mapping.colors import calendar_palette_color, contrast_ratio
 from calendar_anim.calendar.hybrid_capture.artifacts import (
     AccountBSingleCaptureStore,
     HybridCaptureStore,
@@ -50,7 +49,7 @@ from calendar_anim.calendar.hybrid_capture.models import (
 )
 from calendar_anim.calendar.hybrid_capture.service import HybridCaptureService
 from calendar_anim.calendar.models import CalendarRangeEvent
-from calendar_anim.calendar.palette_presets import CAYDE_216_CANDIDATES, CAYDE_FINAL
+from calendar_anim.calendar.palette_presets import CAYDE_CYAN_MAGENTA, CAYDE_FINAL
 from calendar_anim.calendar.recurrence_compaction.planner import _parent_id
 from calendar_anim.exceptions import CalendarAnimError
 
@@ -330,18 +329,11 @@ def test_cayde_216_composer_rejects_missing_last_frame(tmp_path: Path) -> None:
         inspect_final_frames(frames, (14, 8), frame_count=216)
 
 
-def test_cayde_216_palette_candidates_are_isolated_and_improve_separation() -> None:
+def test_cayde_216_final_palette_is_locked() -> None:
     assert CAYDE_FINAL.background_color_id == "1"
     assert "1" in CAYDE_FINAL.foreground_color_ids
-    assert len(CAYDE_216_CANDIDATES) == 3
-    for candidate in CAYDE_216_CANDIDATES:
-        assert candidate.background_color_id not in candidate.foreground_color_ids
-        background = calendar_palette_color(candidate.background_color_id)
-        ratios = [
-            contrast_ratio(background.hex, calendar_palette_color(color_id).hex)
-            for color_id in candidate.foreground_color_ids
-        ]
-        assert min(ratios) >= 1.75
+    assert CAYDE_CYAN_MAGENTA.background_color_id == "7"
+    assert CAYDE_CYAN_MAGENTA.foreground_color_ids == ("3", "5", "9", "11")
 
 
 def test_cayde_216_window_search_skips_conflicts_and_returns_disjoint_ranges() -> None:

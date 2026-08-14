@@ -1,26 +1,32 @@
 # Architecture
 
-The package uses a small pipeline with explicit boundaries:
+The repository has five operational boundaries.
 
-- `video` validates metadata, chooses source indices, reads only selected frames, crops, and resizes;
-- `renderer` owns palettes, background masking, horizontal block merging, images, GIF, and manifest IO;
-- Pydantic models define the stable data exchanged by those modules;
-- `calendar` maps a manifest to drafts and exposes a gateway protocol plus a memory-only dry-run;
-- `browser` implements manually authenticated, persistent-profile capture behind a small protocol.
+1. **Media** — `video` reads selected frames; `renderer` fits, quantizes, and writes a manifest.
+2. **Mapping** — `calendar/frame_mapping` converts logical pixels into deterministic Calendar
+   drafts. Synchronized horizontal bands reduce event count without changing the logical grid.
+3. **Planning and upload** — `multi_frame` owns immutable frame plans and checkpoints;
+   `recurrence_compaction` groups equivalent occurrences into bounded RDATE parents;
+   `recurrence_upload` owns resumable remote writes and quota handling.
+4. **Capture** — `browser` controls an already-authenticated persistent Chrome profile;
+   `hybrid_capture` contains the shared grid discovery, readiness, crop, and composition primitives
+   used by the supported `cayde_216` workflow. Despite the historical module name, these primitives
+   are not limited to the retired two-account strategy.
+5. **Media output** — captured PNGs are recomposed locally, encoded with FFmpeg, then muxed with an
+   exact source-audio clip.
 
-Data flows from `VideoInfo` and `RenderConfig` through RGB NumPy arrays into logical blocks and an `AnimationManifest`. The manifest is vendor-independent so local approval, validation, testing, and alternative renderers do not need Google credentials or API availability.
+Pydantic models are persisted between stages. Immutable plans are separate from mutable state;
+state files are replaced atomically after each successful unit of work.
 
-Calendar access is behind a gateway because remote writes, OAuth, quotas, and safe deletion are infrastructure concerns. Calibration pattern builders produce an API-independent plan. `CalibrationService` coordinates idempotency and filtered cleanup through the port; fake and Google adapters implement it. `LabCalendarService` reuses a project-marked secondary calendar and refuses the primary calendar.
+## Safety invariants
 
-Multi-frame planning sits above the existing single-frame mapper. It assigns selected frames to consecutive calibrated weeks without duplicating fit, colors, full-grid fillers, summary ordering, or event generation. An immutable animation plan is separated from an atomically replaced upload state. The upload service serializes frame writes, skips completed frames, stops on failure, and limits recovery cleanup to the partial frame's metadata.
+- Calendar resources use deterministic IDs and private ownership metadata.
+- Recurrence expansion must equal the original occurrence plan before upload.
+- Account profiles bind a token, owned secondary calendar, and browser profile.
+- Writes are serial, resumable, and explicitly enabled.
+- Temporary rate limits back off; usage quotas checkpoint and pause.
+- Browser capture never creates, updates, or deletes Calendar events.
+- Media composition never opens Calendar or mutates capture checkpoints.
 
-OAuth is isolated in `google_auth.py`; API translation is isolated in `google_gateway.py`; `.calendar-anim/calendar-config.json` stores only the reusable lab calendar ID, never tokens. A deletion selects `generated_by`, `animation_id`, and `run_id`, then deletes only the returned event IDs.
-
-Browser capture is separate because it consumes already-created calendar state and has its own authentication, selectors, viewport, waiting, and screenshot concerns. It never creates events. Manual login is launched in normal Chrome without Playwright control; only an already-authenticated profile is later opened through the Playwright `chrome` channel.
-
-The capture layer derives an immutable plan from the persisted multi-frame weeks and refuses
-incomplete uploads. Its mutable state is atomically replaced after every frame. The browser port has
-only `open_week`, `wait_until_ready`, and `capture`; the Playwright adapter implements it while tests
-use an offline fake. The adapter positions the largest Calendar time scroller at the configured
-start hour and crops at the configured end hour before stabilization. Composition reads only
-completed PNG files and does not reopen Calendar.
+The Google API and Playwright implementations sit behind gateways so core planning and tests stay
+offline. Fake gateways are the default test boundary.
