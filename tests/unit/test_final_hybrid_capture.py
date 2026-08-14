@@ -1552,6 +1552,7 @@ def test_single_profile_preview_uses_final_capture_code_and_never_mutates_state(
     state = store.initialize_state(source, mode, resolution)
     state_before = store.state_path(source.run_id, mode, resolution).read_bytes()
     calls: list[tuple[int, Path]] = []
+    minimum_counts: list[int] = []
     original = HybridCaptureService._capture_composed_frame
 
     def tracked(
@@ -1565,8 +1566,11 @@ def test_single_profile_preview_uses_final_capture_code_and_never_mutates_state(
         selected_mode,
         selected_resolution,
         debug,
+        *,
+        minimum_event_count=0,
     ):  # type: ignore[no-untyped-def]
         calls.append((frame.frame_index, output))
+        minimum_counts.append(minimum_event_count)
         return original(
             self,
             gateway,
@@ -1578,6 +1582,7 @@ def test_single_profile_preview_uses_final_capture_code_and_never_mutates_state(
             selected_mode,
             selected_resolution,
             debug,
+            minimum_event_count=minimum_event_count,
         )
 
     monkeypatch.setattr(HybridCaptureService, "_capture_composed_frame", tracked)
@@ -1622,3 +1627,17 @@ def test_single_profile_preview_uses_final_capture_code_and_never_mutates_state(
         (23, store.preview_frame_path(source.run_id, 23)),
     ]
     assert launched == [("account-b", 90), ("account-b", 90)]
+    assert minimum_counts[-2:] == [0, 0]
+
+    launched.clear()
+    minimum_counts.clear()
+    HybridCaptureService(store, factory).capture_final_single_profile_preview(
+        source,
+        [23, 24],
+        mode,
+        resolution,
+        fresh_session_per_frame=True,
+        minimum_event_count=1,
+    )
+    assert launched == [("account-b", 90), ("account-b", 90)]
+    assert minimum_counts == [1, 1]

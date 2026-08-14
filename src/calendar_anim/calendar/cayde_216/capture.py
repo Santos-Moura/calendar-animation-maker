@@ -188,6 +188,7 @@ def capture_cayde_216_preview_command(
             mode,
             output_resolution,
             fresh_session_per_frame=True,
+            minimum_event_count=1,
         )
         contact_sheet = _build_contact_sheet(store, report)
         _record_contact_sheet(store, report, contact_sheet)

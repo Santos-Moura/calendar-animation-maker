@@ -529,6 +529,7 @@ class HybridCaptureService:
         resolution: tuple[int, int],
         *,
         fresh_session_per_frame: bool = False,
+        minimum_event_count: int = 0,
     ) -> SingleProfilePreviewReport:
         """Capture isolated frames through the exact final composition code, without state."""
 
@@ -571,6 +572,7 @@ class HybridCaptureService:
                 mode,
                 resolution,
                 debug,
+                minimum_event_count=minimum_event_count,
             )
             write_atomic(debug / "metrics.json", json.dumps(metrics, indent=2) + "\n")
             results.append(_preview_frame_result(frame, output, metrics, resolution))
@@ -923,6 +925,8 @@ class HybridCaptureService:
         mode: HybridOutputMode,
         resolution: tuple[int, int],
         debug_directory: Path,
+        *,
+        minimum_event_count: int = 0,
     ) -> dict[str, object]:
         errors = []
         for occupancy_attempt in range(1, 4):
@@ -933,6 +937,7 @@ class HybridCaptureService:
                 logical,
                 header=header,
                 debug_directory=debug_directory,
+                minimum_event_count=minimum_event_count,
             )
             composition = compose_output_mode(
                 logical,
@@ -1161,6 +1166,7 @@ class HybridCaptureService:
         header: Path | None = None,
         debug_directory: Path | None = None,
         capture_context: dict[str, object] | None = None,
+        minimum_event_count: int = 0,
     ) -> dict[str, object]:
         errors: list[str] = []
         diagnostics: list[Path] = []
@@ -1179,9 +1185,9 @@ class HybridCaptureService:
             try:
                 if attempt == 1:
                     gateway.open_week(frame.week_start)
-                    gateway.wait_until_ready(frame.week_start, 0)
+                    gateway.wait_until_ready(frame.week_start, minimum_event_count)
                 else:
-                    gateway.reload_current_week(frame.week_start, 0)
+                    gateway.reload_current_week(frame.week_start, minimum_event_count)
                 gateway.wait_for_animation_events(frame.expected_occurrences)
                 gateway.capture_viewport(raw)
                 metrics = gateway.capture_logical_event_grid(logical)
