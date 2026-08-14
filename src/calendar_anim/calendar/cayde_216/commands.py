@@ -39,6 +39,10 @@ from calendar_anim.calendar.cayde_216.planner import (
 from calendar_anim.calendar.cayde_216.single_frame_validation import (
     register_single_frame_validation_commands,
 )
+from calendar_anim.calendar.cayde_216.toolbar_composition import (
+    preview_cayde_216_calendar_toolbar_command,
+    recompose_final_cayde_216_calendar_toolbar_command,
+)
 from calendar_anim.calendar.cayde_216.upload import upload_cayde_216_recurrence_command
 from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
 from calendar_anim.calendar.hybrid_capture.artifacts import parse_output_resolution
@@ -474,4 +478,8 @@ def register_cayde_216_commands(app: typer.Typer) -> None:
     app.command("upload-cayde-216-recurrence")(upload_cayde_216_recurrence_command)
     app.command("capture-cayde-216-preview")(capture_cayde_216_preview_command)
     app.command("capture-final-cayde-216")(capture_final_cayde_216_command)
+    app.command("preview-cayde-216-calendar-toolbar")(preview_cayde_216_calendar_toolbar_command)
+    app.command("recompose-final-cayde-216-calendar-toolbar")(
+        recompose_final_cayde_216_calendar_toolbar_command
+    )
     register_single_frame_validation_commands(app)

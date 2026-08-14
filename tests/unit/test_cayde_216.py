@@ -25,6 +25,9 @@ from calendar_anim.calendar.cayde_216.planner import (
     RUN_ID,
     SOURCE_RUN_ID,
 )
+from calendar_anim.calendar.cayde_216.toolbar_composition import (
+    compose_calendar_toolbar_frame,
+)
 from calendar_anim.calendar.cayde_216.upload import UPLOAD_ARTIFACT_NAMES, upload_store
 from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
 from calendar_anim.calendar.frame_mapping.colors import calendar_palette_color, contrast_ratio
@@ -386,3 +389,45 @@ def test_cayde_216_upload_store_is_namespaced_and_requires_final_gate_artifacts(
 
 def test_cayde_216_capture_uses_slower_calendar_visual_stabilization() -> None:
     assert CAYDE_216_STABILIZATION_SECONDS == 5.0
+
+
+def test_calendar_toolbar_composition_preserves_segments_and_final_geometry(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "raw.png"
+    header_grid = tmp_path / "header-grid.png"
+    output = tmp_path / "preview.png"
+    toolbar = tmp_path / "toolbar.png"
+    raw_image = Image.new("RGB", (1920, 1080), "#101010")
+    for y in range(58):
+        for x in range(1841):
+            raw_image.putpixel((x, y), (255, 0, 0))
+    raw_image.save(raw)
+    raw_image.close()
+    source = Image.new("RGB", (1841, 852), (255, 0, 255))
+    for y in range(75):
+        for x in range(1841):
+            source.putpixel((x, y), (0, 255, 0))
+    for y in range(75, 852):
+        for x in range(73):
+            source.putpixel((x, y), (0, 0, 255))
+    source.save(header_grid)
+    source.close()
+
+    metrics = compose_calendar_toolbar_frame(raw, header_grid, output, toolbar_artifact=toolbar)
+
+    assert metrics["native_composite_dimensions"] == [1920, 910]
+    assert metrics["output_toolbar_rect"] == [0, 0, 1512, 55]
+    assert metrics["output_week_header_rect"] == [0, 55, 1512, 71]
+    assert metrics["output_time_gutter_rect"] == [0, 126, 60, 738]
+    assert metrics["output_event_grid_rect"] == [60, 126, 1452, 738]
+    assert metrics["event_grid_resampling"] == "nearest-neighbor"
+    with Image.open(output) as image:
+        assert image.size == (1512, 864)
+        assert image.getpixel((756, 20))[0] > 240
+        assert image.getpixel((756, 90))[1] > 240
+        assert image.getpixel((20, 300))[2] > 240
+        assert image.getpixel((800, 300))[0] > 240
+        assert image.getpixel((800, 300))[2] > 240
+    with Image.open(toolbar) as image:
+        assert image.size == (1920, 58)
