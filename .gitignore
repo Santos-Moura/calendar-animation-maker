@@ -12,14 +12,15 @@ __pycache__/
 output/*
 !output/.gitkeep
 
-credentials.json
-token.json
+credentials*.json
+token*.json
 client_secret*.json
 .calendar-anim/
+.calendar-anim/profiles/
 
 .playwright-profile/
 playwright/.auth/
-
+*.jpg
 *.mp4
 *.mov
 *.mkv

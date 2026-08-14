@@ -160,7 +160,10 @@ python -m calendar_anim calendar upload-animation --run-id animation-test-01 --e
 python -m calendar_anim calendar upload-animation --run-id animation-test-01 --resume --execute
 ```
 
-`--execute` displays frame count, total events, current progress, and a confirmation defaulting to `N`. Upload is serial and reports progress every 50 attempted events. Each completed frame is checkpointed immediately and skipped on later runs.
+`--execute` displays frame count, total events, current progress, and a confirmation defaulting to
+`N`. Upload is serial and reports progress every 50 attempted events. Each completed frame is
+checkpointed immediately and skipped on later runs. Partial frames are reconciled by
+deterministic event ID; only missing drafts are submitted.
 
 The normal 1200-event guard applies independently to every frame. It is not a 1200-event limit for
 the whole animation. An explicit six-frame uncompressed full-grid baseline contains:
@@ -185,7 +188,9 @@ frame 4     -> partial, created_events=600
 frame 5+    -> remain pending
 ```
 
-A normal resume refuses to guess which individual events are missing. Explicit recovery deletes events tagged with frame 4's deterministic run ID, resets only frame 4, and recreates it:
+A normal resume lists the frame's deterministic remote event IDs, preserves matches, and creates
+only the missing events. The compatibility flag below is retained for legacy plans; scoped
+cleanup is used only when unknown legacy event IDs prevent safe reconciliation:
 
 ```powershell
 python -m calendar_anim calendar upload-animation --run-id animation-test-01 --resume --recover-partial --execute
@@ -193,7 +198,12 @@ python -m calendar_anim calendar upload-animation --run-id animation-test-01 --r
 
 The destructive recovery still requires `--execute` and confirmation. Frames 0..3 are not queried for re-upload and are never deleted. If remote events exist while local state says `pending` or `failed`, execution stops as an inconsistency instead of silently duplicating them.
 
-Ctrl+C marks the current frame `partial`; an unexpected failure before any known creation marks it `failed`. A failed frame with no remote events may be retried. There is deliberately no `--continue-on-error` in this MVP.
+Ctrl+C marks the current frame `partial`; an unexpected failure before any known creation marks it
+`failed`. A failed frame with no remote events may be retried. A confirmed Calendar
+`403 quotaExceeded` instead opens a circuit breaker immediately: the frame remains `partial`,
+created events are preserved, pause metadata is checkpointed, and the invocation stops without
+short retries or cleanup. Resume later with the normal `--resume --execute` command. There is
+deliberately no `--continue-on-error` in this MVP.
 
 ## Cleanup
 

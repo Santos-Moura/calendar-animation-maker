@@ -5,6 +5,7 @@ from calendar_anim.models.frame import AnimationFrame
 
 class SourceInfo(BaseModel):
     file_name: str
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     start_seconds: float = Field(ge=0)
     duration_seconds: float = Field(gt=0)
     source_fps: float = Field(gt=0)

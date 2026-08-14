@@ -35,6 +35,7 @@ from calendar_anim.calendar.calibration.profile import (
 )
 from calendar_anim.calendar.calibration.service import CalibrationService, CleanupMatch
 from calendar_anim.calendar.capture.commands import register_capture_commands
+from calendar_anim.calendar.cayde_216.commands import register_cayde_216_commands
 from calendar_anim.calendar.frame_mapping.artifacts import (
     write_frame_execution_result,
     write_frame_mapping_artifacts,
@@ -62,9 +63,26 @@ from calendar_anim.calendar.google_gateway import GoogleCalendarGateway
 from calendar_anim.calendar.horizontal_band_compression.commands import (
     register_horizontal_band_compression_commands,
 )
+from calendar_anim.calendar.hybrid_capture.commands import register_hybrid_capture_commands
 from calendar_anim.calendar.lab import LAB_CALENDAR_DESCRIPTION, LabCalendarService
 from calendar_anim.calendar.local_config import CalendarConfigStore
 from calendar_anim.calendar.multi_frame.commands import register_multi_frame_commands
+from calendar_anim.calendar.profiles.commands import register_profile_commands
+from calendar_anim.calendar.recurrence_compaction.commands import (
+    register_recurrence_compaction_commands,
+)
+from calendar_anim.calendar.recurrence_upload.commands import (
+    register_recurrence_upload_commands,
+)
+from calendar_anim.calendar.recurrence_upload.prefix_commands import (
+    register_prefix_recurrence_upload_commands,
+)
+from calendar_anim.calendar.recurrence_validation.commands import (
+    register_recurrence_validation_commands,
+)
+from calendar_anim.calendar.remote_recurrence_audit.commands import (
+    register_remote_recurrence_audit_commands,
+)
 from calendar_anim.calendar.subcolumn_ordering import (
     SubcolumnOrderStrategy,
     format_summary_key,
@@ -905,6 +923,14 @@ def register_calendar_commands(app: typer.Typer) -> None:
     app.command("calibration-summary")(calibration_summary_command)
     app.command("map-frame")(map_frame_command)
     register_multi_frame_commands(app)
+    register_profile_commands(app)
+    register_recurrence_compaction_commands(app)
+    register_recurrence_validation_commands(app)
+    register_recurrence_upload_commands(app)
+    register_prefix_recurrence_upload_commands(app)
+    register_remote_recurrence_audit_commands(app)
     register_capture_commands(app)
     register_vertical_compression_commands(app)
     register_horizontal_band_compression_commands(app)
+    register_hybrid_capture_commands(app)
+    register_cayde_216_commands(app)

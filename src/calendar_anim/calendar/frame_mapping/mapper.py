@@ -6,6 +6,7 @@ from calendar_anim.calendar.frame_mapping.colors import (
     DEFAULT_CALENDAR_BACKGROUND,
     calendar_palette_color,
     map_calendar_color,
+    map_calendar_color_locked,
 )
 from calendar_anim.calendar.frame_mapping.models import (
     DEFAULT_EVENT_COMPRESSION,
@@ -232,6 +233,8 @@ def map_cells_to_calendar(
     frame_index: int,
     background_hex: str,
     background_color_id: str | None = None,
+    foreground_color_ids: list[str] | None = None,
+    lock_foreground_palette: bool = False,
     subcolumn_order_strategy: str | SubcolumnOrderStrategy = SubcolumnOrderStrategy.NONE,
 ) -> tuple[list[CalendarMappedCell], list[CalendarEventDraft]]:
     columns_per_day = profile.horizontal_mapping.usable_overlap_columns_per_day
@@ -248,7 +251,7 @@ def map_cells_to_calendar(
     except ZoneInfoNotFoundError as error:
         raise CalendarAnimError(f"Unknown timezone: {timezone}") from error
 
-    allowed_colors = profile.color_mapping.preferred_color_ids
+    allowed_colors = foreground_color_ids or profile.color_mapping.preferred_color_ids
     structural_background = (
         calendar_palette_color(background_color_id) if background_color_id is not None else None
     )
@@ -286,7 +289,11 @@ def map_cells_to_calendar(
                 raise CalendarAnimError("Structural background cell has no background color ID")
             calendar_color = structural_background
         else:
-            calendar_color = map_calendar_color(cell.color_hex, allowed_colors, background_hex)
+            calendar_color = (
+                map_calendar_color_locked(cell.color_hex, allowed_colors)
+                if lock_foreground_palette
+                else map_calendar_color(cell.color_hex, allowed_colors, background_hex)
+            )
         mapped_cell = CalendarMappedCell(
             logical_x=cell.x,
             logical_y=cell.y,
@@ -439,8 +446,11 @@ def build_single_frame_plan(
     mapping_mode: FrameMappingMode = FrameMappingMode.FULL_GRID,
     event_compression: EventCompressionMode = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: str | None = None,
+    palette_preset: str | None = None,
     subcolumn_order_strategy: str | SubcolumnOrderStrategy | None = None,
 ) -> SingleFrameCalendarPlan:
+    from calendar_anim.calendar.palette_presets import resolve_palette_preset
+
     if fit != "contain":
         raise CalendarAnimError(f"Unsupported frame fit: {fit}")
     if max_execute_events <= 0:
@@ -484,6 +494,16 @@ def build_single_frame_plan(
             f"{horizontal_strategy}"
         )
 
+    resolved_preset = resolve_palette_preset(palette_preset)
+    if resolved_preset is not None:
+        if (
+            calendar_background_color_id is not None
+            and calendar_background_color_id != resolved_preset.background_color_id
+        ):
+            raise CalendarAnimError(
+                "Explicit background color conflicts with the selected palette preset"
+            )
+        calendar_background_color_id = resolved_preset.background_color_id
     background_color = calendar_palette_color(calendar_background_color_id)
     ordering_strategy = parse_subcolumn_order_strategy(
         subcolumn_order_strategy
@@ -500,6 +520,14 @@ def build_single_frame_plan(
         target_height,
         background_color.hex,
     )
+    if resolved_preset is not None and resolved_preset.source_background_hexes:
+        source_backgrounds = {value.upper() for value in resolved_preset.source_background_hexes}
+        mapping_cells = [
+            cell.model_copy(update={"cell_role": CellRole.BACKGROUND})
+            if cell.color_hex.upper() in source_backgrounds
+            else cell
+            for cell in mapping_cells
+        ]
     contrast_background = (
         background_color.hex
         if mapping_mode is FrameMappingMode.FULL_GRID
@@ -515,6 +543,8 @@ def build_single_frame_plan(
         frame_index,
         contrast_background,
         background_color.id if mapping_mode is FrameMappingMode.FULL_GRID else None,
+        list(resolved_preset.foreground_color_ids) if resolved_preset is not None else None,
+        resolved_preset is not None,
         ordering_strategy,
     )
     baseline_event_count = len(events)
@@ -564,6 +594,19 @@ def build_single_frame_plan(
             warnings.append(
                 f"Full-grid uses {ordering_strategy.value}, but the calibration profile does "
                 f"not confirm that strategy (recommended: {recommended})."
+            )
+    if resolved_preset is not None:
+        warnings.append(
+            f"Palette preset {resolved_preset.name!r} is locked: "
+            f"background colorId {resolved_preset.background_color_id}; foreground colorIds "
+            f"{', '.join(resolved_preset.foreground_color_ids)}. "
+            f"{resolved_preset.artistic_intent}"
+        )
+        if resolved_preset.source_background_hexes:
+            warnings.append(
+                "Palette preset remaps source canvas color(s) to its structural background: "
+                + ", ".join(resolved_preset.source_background_hexes)
+                + "."
             )
     else:
         warnings.append(
@@ -629,6 +672,10 @@ def build_single_frame_plan(
         event_compression=event_compression,
         background_color_id=(
             background_color.id if mapping_mode is FrameMappingMode.FULL_GRID else None
+        ),
+        palette_preset=resolved_preset.name if resolved_preset is not None else None,
+        foreground_color_ids=(
+            list(resolved_preset.foreground_color_ids) if resolved_preset is not None else []
         ),
         profile_ready=profile_ready,
         horizontal_strategy=horizontal_strategy,

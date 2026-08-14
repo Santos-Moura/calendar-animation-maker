@@ -5,11 +5,14 @@ from pathlib import Path
 import pytest
 
 from calendar_anim.browser.playwright_gateway import (
+    ManualLoginRequired,
     PlaywrightCalendarCaptureGateway,
+    ProfileAccountMismatch,
     VisibleWindowMetrics,
     calendar_week_url,
     capture_clip_for_window,
     chromium_zoom_level,
+    classify_calendar_navigation,
     configure_calendar_zoom_preference,
     native_browser_zoom_factor,
     scale_clip_for_browser_zoom,
@@ -17,7 +20,11 @@ from calendar_anim.browser.playwright_gateway import (
     week_header_clip,
 )
 from calendar_anim.calendar.capture.commands import _capture_config
-from calendar_anim.calendar.capture.models import BrowserChannel, CaptureProfile
+from calendar_anim.calendar.capture.models import (
+    BrowserChannel,
+    CalendarCaptureConfig,
+    CaptureProfile,
+)
 from calendar_anim.exceptions import CalendarAnimError
 
 pytestmark = pytest.mark.unit
@@ -42,6 +49,191 @@ def test_validation_rejects_login_or_non_week_pages() -> None:
         PlaywrightCalendarCaptureGateway._validate_week_url(
             "https://accounts.google.com/signin", date(2026, 10, 4)
         )
+
+
+def test_wrong_url_with_correct_visible_week_is_allowed() -> None:
+    expected = date(2026, 10, 4)
+
+    result = classify_calendar_navigation(
+        {
+            "url": "https://calendar.google.com/calendar/u/0/r",
+            "document_title": "Google Calendar",
+            "login_page_detected": False,
+            "calendar_shell_detected": True,
+            "week_view_detected": True,
+            "detected_accounts": [],
+            "date_markers": [{"data_datekey": "20261004"}],
+        },
+        expected,
+        profile_name="account-a",
+    )
+
+    assert result["state"] == "ready"
+    assert result["week_detection_source"] == "visible_ui"
+    assert result["current_url"] == "https://calendar.google.com/calendar/u/0/r"
+
+
+def test_month_view_is_switched_then_navigated_to_target_week() -> None:
+    expected = date(2026, 10, 4)
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "https://calendar.google.com/calendar/u/0/r/month"
+            self.visited: list[str] = []
+
+        def evaluate(self, _script: str, _argument: object) -> dict[str, object]:
+            week = "/week/2026/10/4" in self.url
+            return {
+                "url": self.url,
+                "document_title": "Google Calendar",
+                "login_page_detected": False,
+                "calendar_shell_detected": True,
+                "week_view_detected": week,
+                "route_view": "week" if week else "month",
+                "detected_accounts": [],
+                "date_markers": [{"data_datekey": "20261004"}] if week else [],
+            }
+
+        def goto(self, url: str, wait_until: str) -> None:
+            assert wait_until == "domcontentloaded"
+            self.url = url
+            self.visited.append(url)
+
+        def wait_for_load_state(self, state: str) -> None:
+            assert state == "domcontentloaded"
+
+    class RecoveringGateway(PlaywrightCalendarCaptureGateway):
+        def _switch_to_week_view(self) -> dict[str, object]:
+            before = self._require_page().url
+            self._require_page().url = calendar_week_url(expected)
+            return {
+                "url_before": before,
+                "url_after": self._require_page().url,
+                "view_before": "month",
+                "view_after": "week",
+                "action": "ui-view-menu",
+            }
+
+    page = FakePage()
+    gateway = RecoveringGateway(CalendarCaptureConfig(profile_name="account-a"))
+    gateway._page = page
+
+    result = gateway._ensure_target_week(expected)
+
+    assert result["state"] == "ready"
+    assert page.visited[-1].endswith("/week/2026/10/4")
+    assert gateway._navigation_attempts[0]["stage"] == "before-switch"
+    assert gateway._navigation_attempts[1]["stage"] == "switch-to-week"
+    assert gateway._navigation_attempts[-1]["stage"] == "after-target-week"
+
+
+def test_explicit_day_route_is_not_misclassified_as_week_view() -> None:
+    result = classify_calendar_navigation(
+        {
+            "url": "https://calendar.google.com/calendar/u/0/r/day/2028/3/19",
+            "document_title": "Google Calendar",
+            "login_page_detected": False,
+            "calendar_shell_detected": True,
+            "week_view_detected": True,
+            "route_view": "day",
+            "detected_accounts": ["expected@example.com"],
+            "visible_expected_dates": ["2028-03-19"],
+            "date_markers": [],
+        },
+        date(2028, 3, 19),
+        profile_name="account-b",
+        expected_account="expected@example.com",
+    )
+
+    assert result["state"] == "wrong_calendar_view"
+    assert result["route_view"] == "day"
+    assert result["visible_week_date"] == "2028-03-19"
+
+
+def test_switch_to_week_uses_visible_calendar_view_menu() -> None:
+    clicked: list[str] = []
+
+    class Element:
+        def __init__(self, text: str, name: str) -> None:
+            self.text = text
+            self.name = name
+
+        def is_visible(self) -> bool:
+            return True
+
+        def inner_text(self) -> str:
+            return self.text
+
+        def click(self) -> None:
+            clicked.append(self.name)
+            if self.name == "week-option":
+                page.url = "https://calendar.google.com/calendar/u/0/r/week/2028/3/19"
+
+    class Locator:
+        def __init__(self, elements: list[Element]) -> None:
+            self.elements = elements
+
+        def count(self) -> int:
+            return len(self.elements)
+
+        def nth(self, index: int) -> Element:
+            return self.elements[index]
+
+    class Page:
+        def __init__(self) -> None:
+            self.url = "https://calendar.google.com/calendar/u/0/r/day/2028/3/19"
+
+        def locator(self, selector: str) -> Locator:
+            if selector == "button":
+                return Locator([Element("Hoje", "today"), Element("Diaarrow_drop_down", "view")])
+            return Locator([Element("Semana", "week-option")])
+
+        def wait_for_timeout(self, _milliseconds: int) -> None:
+            return None
+
+    page = Page()
+    gateway = PlaywrightCalendarCaptureGateway(CalendarCaptureConfig(profile_name="account-b"))
+    gateway._page = page
+
+    result = gateway._switch_to_week_view()
+
+    assert clicked == ["view", "week-option"]
+    assert result["view_before"] == "dia"
+    assert result["view_after"] == "week"
+    assert str(result["url_after"]).endswith("/week/2028/3/19")
+
+
+def test_login_page_stops_with_explicit_profile_message() -> None:
+    gateway = PlaywrightCalendarCaptureGateway(CalendarCaptureConfig(profile_name="account-a"))
+
+    with pytest.raises(ManualLoginRequired, match=r"(?s)MANUAL LOGIN REQUIRED.*PROFILE: account-a"):
+        gateway._raise_for_session_state({"state": "manual_login_required"})
+
+
+def test_wrong_account_stops_with_profile_account_mismatch() -> None:
+    result = classify_calendar_navigation(
+        {
+            "url": "https://calendar.google.com/calendar/u/0/r/week/2026/10/4",
+            "document_title": "Google Calendar",
+            "login_page_detected": False,
+            "calendar_shell_detected": True,
+            "week_view_detected": True,
+            "detected_accounts": ["other@example.com"],
+            "date_markers": [{"data_datekey": "20261004"}],
+        },
+        date(2026, 10, 4),
+        profile_name="account-b",
+        expected_account="expected@example.com",
+    )
+    gateway = PlaywrightCalendarCaptureGateway(
+        CalendarCaptureConfig(
+            profile_name="account-b", expected_google_account="expected@example.com"
+        )
+    )
+
+    assert result["state"] == "profile_account_mismatch"
+    with pytest.raises(ProfileAccountMismatch, match="PROFILE ACCOUNT MISMATCH"):
+        gateway._raise_for_session_state(result)
 
 
 def test_capture_clip_aligns_six_to_eighteen_and_keeps_calendar_header() -> None:
@@ -125,3 +317,17 @@ def test_native_zoom_persists_exact_thirty_three_percent(tmp_path: Path) -> None
     assert scale_clip_for_browser_zoom(
         {"x": 0, "y": 300, "width": 1800, "height": 900}, 100 / 3
     ) == pytest.approx({"x": 0, "y": 100, "width": 600, "height": 300})
+
+
+def test_native_zoom_persists_account_b_ninety_percent(tmp_path: Path) -> None:
+    default = tmp_path / "Default"
+    default.mkdir()
+    preferences = default / "Preferences"
+    preferences.write_text("{}", encoding="utf-8")
+
+    configure_calendar_zoom_preference(tmp_path, 90)
+
+    saved = json.loads(preferences.read_text(encoding="utf-8"))
+    zoom = saved["partition"]["per_host_zoom_levels"]["x"]["calendar.google.com"]
+    assert native_browser_zoom_factor(90) == pytest.approx(0.9)
+    assert zoom["zoom_level"] == pytest.approx(chromium_zoom_level(90))

@@ -71,6 +71,8 @@ def build_capture_plan(
                 week_start=frame.week_start,
                 planned_events=frame.planned_events,
                 screenshot_path=f"frames/frame-{frame.frame_index:04d}.png",
+                calendar_profile=frame.calendar_profile or animation_plan.calendar_profile,
+                calendar_id=frame.calendar_id or upload_state.calendar_id,
             )
             for frame in animation_plan.frames
         ],

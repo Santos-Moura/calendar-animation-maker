@@ -106,6 +106,8 @@ class SingleFrameCalendarPlan(BaseModel):
     # Missing fields in persisted pre-compression plans retain their historical semantics.
     event_compression: EventCompressionMode = EventCompressionMode.NONE
     background_color_id: str | None = None
+    palette_preset: str | None = None
+    foreground_color_ids: list[str] = Field(default_factory=list)
     profile_ready: bool
     horizontal_strategy: str
     subcolumn_order_strategy: SubcolumnOrderStrategy = SubcolumnOrderStrategy.NONE

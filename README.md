@@ -230,12 +230,34 @@ python -m calendar_anim calendar plan-animation .\output\multi-frame-test\animat
 python -m calendar_anim calendar upload-animation --run-id animation-bands-01
 ```
 
-The second command is also a local dry-run unless `--execute` is supplied. Real uploads are serial and checkpoint every frame. Completed frames are skipped; a partial frame requires explicit `--recover-partial`, which deletes and recreates only that frame before continuing:
+The second command is also a local dry-run unless `--execute` is supplied. Real uploads are serial
+and checkpoint every frame. Completed frames are skipped; a partial frame is reconciled through
+deterministic event IDs and only missing events are created. `--recover-partial` remains a
+compatibility option for legacy plans whose remote IDs cannot be reconciled safely:
 
 ```powershell
 python -m calendar_anim calendar upload-animation --run-id animation-bands-01 --execute
 python -m calendar_anim calendar upload-animation --run-id animation-bands-01 --resume --recover-partial --execute
 ```
+
+Temporary `rateLimitExceeded` responses retain adaptive pacing, cooldown, and retry. A Calendar
+usage-limit `quotaExceeded` response opens a circuit breaker instead: it preserves the partial
+frame and checkpoints pause metadata. The approved final run automatically waits for 15 minutes,
+30 minutes, 60 minutes, 2 hours, then 4 hours between single-event deterministic recovery probes.
+It resumes automatically when the probe succeeds and stops safely after 48 continuous hours.
+
+Before migrating the remaining frames to recurring parents, the isolated
+[recurrence smallest real validation](docs/recurrence-smallest-real-validation.md) creates one
+`DTSTART + 2 RDATE` parent (three displayed recurring instances) and three standalone controls in
+six post-run weeks. Its real upload is separately confirmed, preflights clean weeks, records the
+exact insert/error counts, captures paired Playwright screenshots, and cleans up only its own
+private validation metadata.
+
+OAuth tokens and selected lab calendars can also be isolated by named
+[Google Calendar account profiles](docs/calendar-account-profiles.md). Existing artifacts and the
+legacy token/calendar remain `account-a`; the prepared `account-b` recurrence gate uses its own
+token, calendar config, Chrome profile, preflight, and cleanup boundary. No bulk recurrence upload
+is enabled by profile setup alone.
 
 Cleanup is local by default and can target one frame or the whole run:
 
@@ -303,13 +325,13 @@ Playwright uses a separate persistent profile after manual authentication, opens
 
 ## Limitations and roadmap
 
-The summary-based ordering strategy was validated on the first real full-grid frame, but Google still does not document overlap layout or its web DOM as an API contract. Multi-frame upload and resumable week capture/composition are implemented. There is no event-level upload resume, batch API, hybrid mapping, vertical block merge, or selector stability guarantee from Google.
+The summary-based ordering strategy was validated on the first real full-grid frame, but Google still does not document overlap layout or its web DOM as an API contract. Multi-frame upload, deterministic event-level recovery, and resumable week capture/composition are implemented. There is no batch API, hybrid mapping, vertical block merge, or selector stability guarantee from Google.
 
 1. **Phase 0 – calibration:** a few static events, useful resolution, event duration, zoom, and window size.
 2. **Phase 1 – local MVP:** video, frames, pixelization, GIF, manifest, and estimate (implemented).
 3. **Phase 2 – planning:** sparse/full-grid mapper, dry-run, separate calendar, metadata, and safe cleanup (implemented).
 4. **Phase 3 – fidelity:** real full-grid frame and summary ordering validation (implemented).
-5. **Phase 4 – live upload:** multi-frame planning and frame-level checkpoint/resume (implemented); batch, backoff, and event-level resume remain future work.
+5. **Phase 4 – live upload:** multi-frame planning, bounded backoff, deterministic event identity, and frame/event-level recovery (implemented); batching remains future work.
 6. **Phase 5 – capture:** persistent Playwright profile, weekly navigation, stable waits, screenshots, and composition (implemented; real-browser selector validation remains operational work).
 7. **Phase 6 – longer clips:** around 10 seconds, configurable FPS, scenes, stronger compression and resume.
 
@@ -326,4 +348,4 @@ uv run pytest tests/unit
 uv run pytest tests/integration
 ```
 
-See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [vertical compression experiment](docs/vertical-compression-experiment.md), [synchronized horizontal bands](docs/synchronized-horizontal-bands-experiment.md), [single-frame mapper](docs/single-frame-mapper.md), [multi-frame upload](docs/multi-frame-upload.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.
+See [architecture](docs/architecture.md), [pipeline](docs/pipeline.md), [Calendar plan](docs/google-calendar-plan.md), [Google setup](docs/google-calendar-setup.md), [calibration](docs/calendar-calibration.md), [vertical compression experiment](docs/vertical-compression-experiment.md), [synchronized horizontal bands](docs/synchronized-horizontal-bands-experiment.md), [single-frame mapper](docs/single-frame-mapper.md), [multi-frame upload](docs/multi-frame-upload.md), [126x72 upload benchmark](docs/cutscene-upload-benchmark.md), [final cutscene run](docs/final-cutscene-run.md), [security](docs/calendar-security.md), and [development](docs/development.md). Released under the MIT License.

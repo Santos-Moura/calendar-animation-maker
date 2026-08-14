@@ -13,6 +13,11 @@ from calendar_anim.calendar.multi_frame.models import (
     FrameUploadStatus,
     MultiFramePlan,
 )
+from calendar_anim.calendar.multi_frame.performance import (
+    UploadPerformanceReport,
+    build_performance_text,
+    initial_performance_report,
+)
 from calendar_anim.calendar.subcolumn_ordering import format_summary_key
 from calendar_anim.exceptions import CalendarAnimError
 from calendar_anim.models.animation import AnimationManifest
@@ -36,6 +41,7 @@ def initial_upload_state(plan: MultiFramePlan) -> AnimationUploadState:
     return AnimationUploadState(
         run_id=plan.run_id,
         animation_id=plan.animation_id,
+        calendar_profile=plan.calendar_profile,
         frames=[
             FrameUploadState(
                 frame_index=frame.frame_index,
@@ -62,6 +68,12 @@ class AnimationRunStore:
 
     def report_path(self, run_id: str) -> Path:
         return self.run_directory(run_id) / "animation-report.txt"
+
+    def performance_json_path(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "upload-performance.json"
+
+    def performance_text_path(self, run_id: str) -> Path:
+        return self.run_directory(run_id) / "upload-performance.txt"
 
     def save_plan(self, plan: MultiFramePlan) -> Path:
         path = self.plan_path(plan.run_id)
@@ -105,6 +117,24 @@ class AnimationRunStore:
         path.write_text(build_animation_report(plan, state), encoding="utf-8")
         return path
 
+    def save_performance(self, report: UploadPerformanceReport) -> tuple[Path, Path]:
+        json_path = self.performance_json_path(report.run_id)
+        text_path = self.performance_text_path(report.run_id)
+        _write_json_atomic(json_path, report.model_dump_json(indent=2) + "\n")
+        text_path.write_text(build_performance_text(report), encoding="utf-8")
+        return json_path, text_path
+
+    def load_performance(self, run_id: str) -> UploadPerformanceReport:
+        path = self.performance_json_path(run_id)
+        try:
+            return UploadPerformanceReport.model_validate_json(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as error:
+            raise CalendarAnimError(
+                f"Upload performance report does not exist: {run_id}"
+            ) from error
+        except (OSError, ValidationError, ValueError) as error:
+            raise CalendarAnimError(f"Invalid upload performance report: {path}") from error
+
     def frame_directory(self, plan: MultiFramePlan, frame_index: int) -> Path:
         frame = next((item for item in plan.frames if item.frame_index == frame_index), None)
         if frame is None:
@@ -141,6 +171,9 @@ def initialize_animation_run(
     _validate_state_matches_plan(plan, state)
     if not state_path.exists():
         store.save_state(state)
+    performance_path = store.performance_json_path(plan.run_id)
+    if not performance_path.exists():
+        store.save_performance(initial_performance_report(plan, state))
     for frame_summary, frame_plan in zip(plan.frames, frame_plans, strict=True):
         frame_directory = store.frame_directory(plan, frame_summary.frame_index)
         frame_plan_path = frame_directory / "frame-plan.json"
@@ -190,6 +223,17 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
         "",
         f"Animation ID: {plan.animation_id}",
         f"Run ID: {plan.run_id}",
+        f"Source: {plan.source_file or 'legacy/unspecified'}",
+        "Clip: "
+        + (
+            f"{plan.clip_start_seconds:.3f}-{plan.clip_end_seconds:.3f} seconds "
+            f"({plan.clip_duration_seconds:.3f}s at {plan.output_fps:.3f} FPS)"
+            if plan.clip_start_seconds is not None
+            and plan.clip_end_seconds is not None
+            and plan.clip_duration_seconds is not None
+            and plan.output_fps is not None
+            else "legacy/unspecified"
+        ),
         f"Frames: {plan.frame_count}",
         f"Grid: {plan.target_grid_width}x{plan.target_grid_height}",
         f"Grid profile: {plan.grid_profile}",
@@ -204,6 +248,10 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
         ),
         f"Mapping: {plan.mapping_mode.value}",
         f"Event compression: {plan.event_compression.value}",
+        f"Palette preset: {plan.palette_preset or 'none'}",
+        f"Background colorId: {plan.background_color_id or 'automatic'}",
+        "Foreground colorIds: "
+        + (", ".join(plan.foreground_color_ids) if plan.foreground_color_ids else "profile"),
         f"Ordering: {plan.subcolumn_order_strategy.value}",
         "Slot keys: "
         + (
@@ -224,11 +272,23 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
         lines.extend(
             [
                 f"Frame {frame_plan.frame_index}:",
+                "  Source timestamp: "
+                + (
+                    f"{frame_plan.source_timestamp_seconds:.6f}"
+                    if frame_plan.source_timestamp_seconds is not None
+                    else "legacy/unspecified"
+                ),
                 f"  Week: {frame_plan.week_start}",
                 f"  Run ID: {frame_plan.frame_run_id}",
                 f"  Status: {frame_state.status.value}",
                 f"  Events: {frame_state.created_events}/{frame_state.planned_events}",
                 f"  Failed events: {frame_state.failed_events}",
+                f"  Event retries: {frame_state.event_retry_count}",
+                f"  Recovery cycles: {frame_state.recovery_cycles}",
+                f"  Rate limit exceeded: {frame_state.rate_limit_exceeded_count}",
+                f"  Calendar usage quota exceeded: {frame_state.quota_exceeded_count}",
+                f"  Adaptive rate-limit cooldowns: {frame_state.adaptive_rate_limit_cooldowns}",
+                f"  Quota circuit breakers: {frame_state.quota_circuit_breaker_count}",
                 f"  Duration seconds: {_duration(frame_state.duration_seconds)}",
             ]
         )
@@ -238,8 +298,38 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
             "Upload policy",
             "-------------",
             "Frames are uploaded serially and completed frames are skipped on resume.",
-            "A partial frame must be cleaned and recreated; completed frames are preserved.",
+            "Partial frames are reconciled by deterministic event ID and only missing events "
+            "are recreated; legacy/inconsistent frames use metadata-scoped cleanup as fallback.",
+            "Retryable event failures use bounded exponential backoff with jitter.",
+            "Calendar quotaExceeded opens a circuit breaker: the current frame remains "
+            "partial and existing events are preserved.",
+            "When enabled for the run, long quota waits use one real deterministic missing "
+            "event as the recovery probe and resume automatically after success.",
             "The upload stops on the first frame failure.",
+            "",
+            "Quota wait metrics",
+            "------------------",
+            f"Entries: {state.quota_wait_entries}",
+            f"Wait seconds: {state.quota_wait_total_seconds:.2f}",
+            f"Probe attempts: {state.quota_wait_attempts}",
+            f"Recoveries: {state.quota_recoveries}",
+            f"Largest cooldown seconds: {state.largest_quota_cooldown_seconds:.2f}",
+            "Current write interval seconds: "
+            + (
+                f"{state.write_pacing.current_interval_seconds:.2f}"
+                if state.write_pacing
+                else "not persisted"
+            ),
+            "Last write interval seconds: "
+            + (
+                f"{state.write_pacing.previous_interval_seconds:.2f}"
+                if state.write_pacing and state.write_pacing.previous_interval_seconds is not None
+                else "not persisted"
+            ),
+            "",
+            "Active pause",
+            "------------",
+            _pause_text(state),
             "",
         ]
     )
@@ -248,3 +338,22 @@ def build_animation_report(plan: MultiFramePlan, state: AnimationUploadState) ->
 
 def _duration(value: float | None) -> str:
     return "pending" if value is None else f"{value:.2f}"
+
+
+def _pause_text(state: AnimationUploadState) -> str:
+    pause = state.pause
+    if pause is None:
+        return "none"
+    value = (
+        f"{pause.reason.value}; status={pause.http_status}; "
+        f"google_reason={pause.google_reason}; frame={pause.frame_index}; "
+        f"created={pause.created_before_pause}/{pause.planned_events}; "
+        f"timestamp={pause.timestamp.isoformat()}"
+    )
+    if state.quota_wait is not None:
+        value += (
+            f"; wait_stage={state.quota_wait.stage_index + 1}; "
+            f"next_retry_at={state.quota_wait.next_retry_at.isoformat()}; "
+            f"max_wait_until={state.quota_wait.max_wait_until.isoformat()}"
+        )
+    return value

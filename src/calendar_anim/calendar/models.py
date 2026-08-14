@@ -35,6 +35,7 @@ class CalendarInfo(BaseModel):
     description: str = ""
     timezone: str
     primary: bool = False
+    access_role: str | None = None
 
 
 class CalendarColor(BaseModel):
@@ -51,15 +52,52 @@ class CalendarEventInfo(BaseModel):
     private_metadata: dict[str, str]
 
 
+class CalendarRangeEvent(BaseModel):
+    """Minimal read-only event shape used for collision-free range planning."""
+
+    id: str
+    start: datetime
+    end: datetime
+
+    @model_validator(mode="after")
+    def valid_interval(self) -> "CalendarRangeEvent":
+        if self.start.tzinfo is None or self.end.tzinfo is None:
+            raise ValueError("range event datetimes must be timezone-aware")
+        if self.start >= self.end:
+            raise ValueError("range event start must be before end")
+        return self
+
+
+class CalendarWriteFailure(BaseModel):
+    event_index: int = Field(ge=0)
+    message: str
+    retryable: bool = False
+    status_code: int | None = None
+    reason: str | None = None
+
+
 class CalendarWriteResult(BaseModel):
     created_event_ids: list[str] = Field(default_factory=list)
     created_event_indexes: list[int] = Field(default_factory=list)
     failed_events: int = Field(default=0, ge=0)
     errors: list[str] = Field(default_factory=list)
+    failures: list[CalendarWriteFailure] = Field(default_factory=list)
+    rate_limit_exceeded_count: int = Field(default=0, ge=0)
+    quota_exceeded_count: int = Field(default=0, ge=0)
+    adaptive_rate_limit_cooldowns: int = Field(default=0, ge=0)
+    quota_circuit_breaker_count: int = Field(default=0, ge=0)
 
     @property
     def created_events(self) -> int:
         return len(self.created_event_ids)
+
+
+class CalendarWritePacingSnapshot(BaseModel):
+    minimum_interval_seconds: float = Field(default=0.0, ge=0)
+    current_interval_seconds: float = Field(default=0.0, ge=0)
+    previous_interval_seconds: float | None = Field(default=None, ge=0)
+    maximum_interval_seconds: float = Field(default=3.0, ge=0)
+    successful_writes_since_rate_limit: int = Field(default=0, ge=0)
 
 
 class CalendarDeleteResult(BaseModel):

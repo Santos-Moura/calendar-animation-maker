@@ -155,7 +155,7 @@ def test_plan_animation_accepts_explicit_high_detail_grid_without_changing_defau
         lambda: pytest.fail("high-detail planning must remain local"),
     )
     command = _plan_command(manifest, profile, output_root, 1)
-    command.extend(["--experimental-grid", "126x72"])
+    command.extend(["--experimental-grid", "126x72", "--max-events", "2500"])
 
     result = runner.invoke(app, command)
 
@@ -169,6 +169,68 @@ def test_plan_animation_accepts_explicit_high_detail_grid_without_changing_defau
     assert plan.subcolumn_order_strategy.value == "zero-width"
     assert plan.event_compression.value == "synchronized-horizontal-bands"
     assert plan.events_per_frame[0] <= 1200
+    assert plan.max_events_per_frame == 2500
+    assert plan.source_file == "tiny.avi"
+    assert plan.clip_start_seconds == 0
+    assert plan.clip_end_seconds == 1
+    assert plan.clip_duration_seconds == 1
+    assert plan.output_fps == 1
+    assert plan.frames[0].source_timestamp_seconds == 0
+
+
+def test_high_detail_grid_rejects_more_than_2500_events_per_frame(tmp_path: Path) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    command = _plan_command(manifest, profile, tmp_path / "runs", 1)
+    command.extend(["--experimental-grid", "126x72", "--max-events", "2501"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 1
+    assert "absolute safety limit of 2500" in result.output
+
+
+def test_final_cutscene_run_has_isolated_5200_event_safety_limit(
+    tmp_path: Path,
+) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    command = _plan_command(manifest, profile, tmp_path / "runs", 1)
+    run_id_position = command.index("cli-animation")
+    command[run_id_position] = "cayde-final-126x72-3fps-36s-01"
+    command.extend(["--experimental-grid", "126x72", "--max-events", "5200"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    plan = AnimationRunStore(tmp_path / "runs").load_plan("cayde-final-126x72-3fps-36s-01")
+    assert plan.max_events_per_frame == 5200
+
+    upload = runner.invoke(
+        app,
+        [
+            "calendar",
+            "upload-animation",
+            "--run-id",
+            plan.run_id,
+            "--output-root",
+            str(tmp_path / "runs"),
+            "--resume",
+        ],
+    )
+    assert upload.exit_code == 0, upload.output
+    assert "Write pacing: adaptive, minimum 0.75s" in upload.output
+
+
+def test_final_cutscene_run_rejects_more_than_5200_events_per_frame(tmp_path: Path) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=1)
+    command = _plan_command(manifest, profile, tmp_path / "runs", 1)
+    run_id_position = command.index("cli-animation")
+    command[run_id_position] = "cayde-final-126x72-3fps-36s-01"
+    command.extend(["--experimental-grid", "126x72", "--max-events", "5201"])
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 1
+    assert "absolute safety limit of 5200" in result.output
 
 
 def test_upload_animation_dry_run_skips_api_and_lists_actions(
@@ -198,8 +260,43 @@ def test_upload_animation_dry_run_skips_api_and_lists_actions(
 
     assert result.exit_code == 0, result.output
     assert "Execution: DRY RUN" in result.output
+    assert "Write pacing: default" in result.output
     assert "Frame 0: UPLOAD" in result.output
     assert "No authentication or Calendar API call was made" in result.output
+
+
+def test_recurrence_plan_is_local_and_expands_exactly(tmp_path: Path) -> None:
+    manifest, profile = _inputs(tmp_path, frame_count=2)
+    output_root = tmp_path / "runs"
+    artifact_directory = tmp_path / "recurrence-study"
+    assert runner.invoke(app, _plan_command(manifest, profile, output_root, 2)).exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "calendar",
+            "recurrence-plan",
+            "--run-id",
+            "cli-animation",
+            "--output-root",
+            str(output_root),
+            "--artifact-directory",
+            str(artifact_directory),
+            "--parent-chunk-size",
+            "25",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Expansion equals original: YES" in result.output
+    assert "Google Calendar writes: NO" in result.output
+    report = json.loads((artifact_directory / "recurrence-report.json").read_text(encoding="utf-8"))
+    migration = json.loads(
+        (artifact_directory / "recurrence-plan.json").read_text(encoding="utf-8")
+    )
+    assert report["rendered_instances"] == report["current_independent_inserts"]
+    assert report["expanded_full_set_equals_original"] is True
+    assert migration["expansion_equals_missing"] is True
 
 
 def test_upload_execute_requires_confirmation_before_gateway(

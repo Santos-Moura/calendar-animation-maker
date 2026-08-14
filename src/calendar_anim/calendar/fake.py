@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 
+from calendar_anim.calendar.event_identity import deterministic_event_id
 from calendar_anim.calendar.models import (
     CalendarColor,
     CalendarDeleteResult,
@@ -59,7 +60,11 @@ class FakeCalendarGateway:
         created: list[str] = []
         created_indexes: list[int] = []
         for index, draft in enumerate(events):
-            event_id = f"fake-event-{len(self.events[calendar_id]) + 1}"
+            event_id = deterministic_event_id(draft)
+            if any(existing.id == event_id for existing in self.events[calendar_id]):
+                created.append(event_id)
+                created_indexes.append(index)
+                continue
             self.events[calendar_id].append(
                 CalendarEventInfo(
                     id=event_id,

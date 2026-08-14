@@ -39,9 +39,11 @@ def build_multi_frame_plan(
     max_events_per_frame: int,
     fit: FitMode = "contain",
     calendar_name: str = "Calendar Animation Lab",
+    calendar_profile: str = "account-a",
     mapping_mode: FrameMappingMode = FrameMappingMode.FULL_GRID,
     event_compression: EventCompressionMode = DEFAULT_EVENT_COMPRESSION,
     calendar_background_color_id: str | None = None,
+    palette_preset: str | None = None,
     subcolumn_order_strategy: str | SubcolumnOrderStrategy | None = None,
     grid_profile: str = "production",
 ) -> tuple[MultiFramePlan, list[SingleFrameCalendarPlan]]:
@@ -77,6 +79,7 @@ def build_multi_frame_plan(
             mapping_mode=mapping_mode,
             event_compression=event_compression,
             calendar_background_color_id=calendar_background_color_id,
+            palette_preset=palette_preset,
             subcolumn_order_strategy=subcolumn_order_strategy,
         )
         if single.event_count > max_events_per_frame:
@@ -88,10 +91,12 @@ def build_multi_frame_plan(
         upload_frames.append(
             FrameUploadPlan(
                 frame_index=selected_index,
+                source_timestamp_seconds=manifest.frames[selected_index].timestamp_seconds,
                 week_start=single.week_start_date,
                 frame_run_id=single.run_id,
                 planned_events=single.event_count,
                 artifact_directory=f"frames/frame-{selected_index:04d}",
+                calendar_profile=calendar_profile,
             )
         )
     first = frame_plans[0]
@@ -101,12 +106,21 @@ def build_multi_frame_plan(
             animation_id=manifest.animation_id,
             run_id=run_id,
             calendar_name=calendar_name,
+            calendar_profile=calendar_profile,
             timezone=profile.calendar_ui.timezone,
+            source_file=manifest.source.file_name,
+            clip_start_seconds=manifest.source.start_seconds,
+            clip_end_seconds=manifest.source.start_seconds + manifest.source.duration_seconds,
+            clip_duration_seconds=manifest.source.duration_seconds,
+            output_fps=manifest.render.output_fps,
             start_week=start_week,
             frame_start=frame_start,
             frame_count=frame_count,
             mapping_mode=mapping_mode,
             event_compression=event_compression,
+            palette_preset=first.palette_preset,
+            background_color_id=first.background_color_id,
+            foreground_color_ids=first.foreground_color_ids,
             target_grid_width=first.target_grid_width,
             target_grid_height=first.target_grid_height,
             grid_profile=grid_profile,
