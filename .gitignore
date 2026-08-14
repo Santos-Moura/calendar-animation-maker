@@ -9,6 +9,16 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+dist/
+build/
+*.egg-info/
+*.log
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
 output/*
 !output/.gitkeep
 
@@ -16,7 +26,8 @@ credentials*.json
 token*.json
 client_secret*.json
 .calendar-anim/
-.calendar-anim/profiles/
+browser-profile/
+browser-profiles/
 
 .playwright-profile/
 playwright/.auth/
