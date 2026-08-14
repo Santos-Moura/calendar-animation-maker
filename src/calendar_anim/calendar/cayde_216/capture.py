@@ -43,6 +43,7 @@ from calendar_anim.exceptions import CalendarAnimError
 PREVIEW_HUMAN_FRAMES = (1, 54, 108, 162, 216)
 PREVIEW_FRAMES_TEXT = ",".join(str(frame) for frame in PREVIEW_HUMAN_FRAMES)
 CAPTURE_RESOLUTION = (1512, 864)
+CAYDE_216_STABILIZATION_SECONDS = 5.0
 
 
 def _fail(error: Exception) -> Never:
@@ -139,7 +140,9 @@ def capture_cayde_216_preview_command(
         HybridOutputMode.HEADER_PRESERVED_FILL
     ),
     resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
-    stabilization_seconds: Annotated[float, typer.Option("--stabilization-seconds", min=0)] = 2,
+    stabilization_seconds: Annotated[
+        float, typer.Option("--stabilization-seconds", min=0)
+    ] = CAYDE_216_STABILIZATION_SECONDS,
     ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
     execute: Annotated[bool, typer.Option("--execute")] = False,
 ) -> None:

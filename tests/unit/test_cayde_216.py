@@ -7,6 +7,7 @@ from PIL import Image
 
 from calendar_anim.calendar.capture.final_media import FFmpegTools
 from calendar_anim.calendar.cayde_216.capture import (
+    CAYDE_216_STABILIZATION_SECONDS,
     PREVIEW_HUMAN_FRAMES,
     _parse_preview_frames,
 )
@@ -272,3 +273,7 @@ def test_cayde_216_upload_store_is_namespaced_and_requires_final_gate_artifacts(
     assert store.state_path(RUN_ID) == (
         Path("output/216-runs") / RUN_ID / "account-b-upload-state.json"
     )
+
+
+def test_cayde_216_capture_uses_slower_calendar_visual_stabilization() -> None:
+    assert CAYDE_216_STABILIZATION_SECONDS == 5.0
