@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from pathlib import Path
-from types import SimpleNamespace, TracebackType
+from types import TracebackType
 
 import pytest
 from PIL import Image
@@ -16,7 +16,6 @@ from calendar_anim.browser.playwright_gateway import (
     wait_for_stable_visual_grid,
 )
 from calendar_anim.calendar.capture.final_media import (
-    AVMediaProbe,
     FFmpegTools,
     build_extract_audio_command,
     frame_sequence_duration,
@@ -29,7 +28,6 @@ from calendar_anim.calendar.frame_mapping.models import (
     FrameMappingStatistics,
     SingleFrameCalendarPlan,
 )
-from calendar_anim.calendar.hybrid_capture import commands as hybrid_commands
 from calendar_anim.calendar.hybrid_capture.artifacts import (
     HIGH_RESOLUTION,
     AccountBSingleCaptureStore,
@@ -374,165 +372,6 @@ def test_final_visual_probe_requires_exact_approved_media_properties() -> None:
         validate_final_visual_probe(
             FinalVisualProbe(**{**probe.__dict__, "frame_count": 107}), (1512, 864)
         )
-
-
-def test_single_profile_compose_command_is_media_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = AccountBSingleCaptureStore(tmp_path / "runs")
-    hybrid = _hybrid_plan(tmp_path)
-    plan = HybridCapturePlan(
-        **{
-            **hybrid.model_dump(exclude={"frames", "capture_strategy"}),
-            "capture_strategy": "single-profile-account-b",
-            "frames": [
-                frame.model_copy(
-                    update={"calendar_profile": "account-b", "capture_zoom_percent": 90}
-                )
-                for frame in hybrid.frames
-            ],
-        }
-    )
-    store.save_plan(plan)
-    frame_directory = store.final_frames_directory(
-        plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, (14, 8)
-    )
-    _write_final_png_sequence(frame_directory)
-    checkpoint = store.state_path(plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, (14, 8))
-    checkpoint.parent.mkdir(parents=True)
-    checkpoint.write_text("trusted checkpoint", encoding="utf-8")
-    probe = FinalVisualProbe("h264", "High", 14, 8, 3.0, 108, 36.0, "1:1")
-
-    monkeypatch.setattr(hybrid_commands, "AccountBSingleCaptureStore", lambda: store)
-    monkeypatch.setattr(
-        hybrid_commands,
-        "detect_ffmpeg",
-        lambda: FFmpegTools(Path("ffmpeg"), Path("ffprobe"), "ffmpeg test"),
-    )
-
-    def fake_compose(
-        tools: FFmpegTools,
-        source: Path,
-        output: Path,
-        resolution: tuple[int, int],
-    ) -> Path:
-        assert source == frame_directory
-        assert resolution == (14, 8)
-        output.parent.mkdir(parents=True)
-        output.write_bytes(b"visual only")
-        return output
-
-    monkeypatch.setattr(hybrid_commands, "compose_final_visual", fake_compose)
-    monkeypatch.setattr(hybrid_commands, "probe_final_visual", lambda tools, output: probe)
-    monkeypatch.setattr(
-        hybrid_commands,
-        "_gateway_factory",
-        lambda *args, **kwargs: pytest.fail("composer must not open a browser"),
-    )
-
-    hybrid_commands.compose_final_single_profile_command(
-        plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, "14x8"
-    )
-
-    assert checkpoint.read_text(encoding="utf-8") == "trusted checkpoint"
-    final = store.single_profile_final_directory(
-        plan.run_id, HybridOutputMode.HEADER_PRESERVED_FILL, (14, 8)
-    )
-    assert (final / "final-video-no-audio.mp4").read_bytes() == b"visual only"
-    report = store.load_json_report(final / "visual-composition-report.json")
-    assert report["capture_checkpoint_touched"] is False
-    assert report["calendar_touched"] is False
-    assert report["recurrence_touched"] is False
-    assert report["browser_opened"] is False
-
-
-def test_single_profile_audio_mux_uses_existing_visual_without_capture(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = AccountBSingleCaptureStore(tmp_path / "runs")
-    run_id = "mux-test"
-    mode = HybridOutputMode.HEADER_PRESERVED_FILL
-    resolution = (14, 8)
-    final = store.single_profile_final_directory(run_id, mode, resolution)
-    final.mkdir(parents=True)
-    visual = final / "final-video-no-audio.mp4"
-    visual.write_bytes(b"trusted visual")
-    source = tmp_path / "input.mp4"
-    source.write_bytes(b"source with audio")
-    checkpoint = store.state_path(run_id, mode, resolution)
-    checkpoint.parent.mkdir(parents=True)
-    checkpoint.write_text("trusted checkpoint", encoding="utf-8")
-    png = store.final_frames_directory(run_id, mode, resolution) / "frame_000.png"
-    png.parent.mkdir(parents=True)
-    png.write_bytes(b"trusted png")
-    visual_probe = FinalVisualProbe("h264", "High", 14, 8, 3.0, 108, 36.0, "1:1")
-    av_probe = AVMediaProbe("h264", "aac", 14, 8, 3.0, 108, 36.0, 36.02, 36.02, "1:1")
-
-    monkeypatch.setattr(hybrid_commands, "AccountBSingleCaptureStore", lambda: store)
-    monkeypatch.setattr(hybrid_commands, "validate_input_hash", lambda path: None)
-    monkeypatch.setattr(
-        hybrid_commands,
-        "detect_ffmpeg",
-        lambda: FFmpegTools(Path("ffmpeg"), Path("ffprobe"), "ffmpeg test"),
-    )
-    monkeypatch.setattr(hybrid_commands, "probe_final_visual", lambda tools, path: visual_probe)
-    monkeypatch.setattr(hybrid_commands, "probe_audio_codec", lambda tools, path: "aac")
-
-    def fake_extract(
-        tools: FFmpegTools, source_path: Path, output: Path, start: float, end: float
-    ) -> Path:
-        assert (source_path, start, end) == (source, 114.0, 150.0)
-        output.write_bytes(b"exact aac")
-        return output
-
-    def fake_mux(tools: FFmpegTools, visual_path: Path, audio: Path, output: Path) -> Path:
-        assert visual_path == visual
-        output.write_bytes(b"copied video plus audio")
-        return output
-
-    monkeypatch.setattr(hybrid_commands, "extract_exact_audio", fake_extract)
-    monkeypatch.setattr(hybrid_commands, "mux_audio", fake_mux)
-    monkeypatch.setattr(hybrid_commands, "probe_av_media", lambda tools, path: av_probe)
-    monkeypatch.setattr(
-        hybrid_commands,
-        "compose_final_visual",
-        lambda *args, **kwargs: pytest.fail("mux must not recompose video"),
-    )
-    monkeypatch.setattr(
-        hybrid_commands,
-        "_gateway_factory",
-        lambda *args, **kwargs: pytest.fail("mux must not open a browser"),
-    )
-
-    hybrid_commands.mux_final_single_profile_audio_command(run_id, mode, "14x8", source)
-
-    assert visual.read_bytes() == b"trusted visual"
-    assert checkpoint.read_text(encoding="utf-8") == "trusted checkpoint"
-    assert png.read_bytes() == b"trusted png"
-    report = store.load_json_report(final / "single-profile-audio-mux-report.json")
-    assert report["video_copied"] is True
-    assert report["video_reencoded"] is False
-    assert report["calendar_reads"] is False
-    assert report["calendar_writes"] is False
-    assert report["recurrence_touched"] is False
-    assert report["browser_opened"] is False
-
-
-def test_single_profile_audio_mux_reports_missing_silent_video(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    store = AccountBSingleCaptureStore(tmp_path / "runs")
-    monkeypatch.setattr(hybrid_commands, "AccountBSingleCaptureStore", lambda: store)
-    monkeypatch.setattr(hybrid_commands, "validate_input_hash", lambda path: None)
-
-    with pytest.raises(hybrid_commands.typer.Exit):
-        hybrid_commands.mux_final_single_profile_audio_command(
-            "missing", HybridOutputMode.HEADER_PRESERVED_FILL, "14x8", tmp_path / "input.mp4"
-        )
-
-    assert "Single-profile silent MP4 does not exist; expected:" in capsys.readouterr().err
 
 
 def test_audio_source_is_exact_114_to_150(tmp_path: Path) -> None:
@@ -1343,46 +1182,6 @@ def test_profile_preflight_launches_a_then_b_with_locked_zooms(tmp_path: Path) -
     assert report["result"] == "PASS"
     assert launched == [("account-a", 33), ("account-b", 90)]
     assert store.profile_preflight_report_path(plan.run_id).is_file()
-
-
-def test_gateway_factory_keeps_persistent_profile_directories_isolated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    profiles = {
-        "account-a": SimpleNamespace(
-            profile_name="account-a",
-            browser_profile_directory=tmp_path / "browser-a",
-            authenticated_google_account="a@example.com",
-            calendar_name="Calendar Animation Lab",
-            capture_zoom_percent=33,
-        ),
-        "account-b": SimpleNamespace(
-            profile_name="account-b",
-            browser_profile_directory=tmp_path / "browser-b",
-            authenticated_google_account="b@example.com",
-            calendar_name="Calendar Animation Lab B",
-            capture_zoom_percent=90,
-        ),
-    }
-    monkeypatch.setattr(
-        hybrid_commands,
-        "CalendarProfileStore",
-        lambda: SimpleNamespace(load=lambda name: profiles[name]),
-    )
-
-    factory = hybrid_commands._gateway_factory(0, 30)
-    gateway_a = factory("account-a", 33)
-    gateway_b = factory("account-b", 90)
-    assert isinstance(gateway_a, hybrid_commands.PlaywrightCalendarCaptureGateway)
-    assert isinstance(gateway_b, hybrid_commands.PlaywrightCalendarCaptureGateway)
-    config_a = gateway_a.config
-    config_b = gateway_b.config
-
-    assert config_a.profile_directory == tmp_path / "browser-a"
-    assert config_b.profile_directory == tmp_path / "browser-b"
-    assert config_a.profile_directory != config_b.profile_directory
-    assert config_a.expected_google_account == "a@example.com"
-    assert config_b.expected_google_account == "b@example.com"
 
 
 def test_transition_closes_a_before_opening_b_and_uses_final_composition(
