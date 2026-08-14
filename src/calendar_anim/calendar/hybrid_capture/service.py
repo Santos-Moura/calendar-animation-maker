@@ -502,6 +502,7 @@ class HybridCaptureService:
         resolution: tuple[int, int],
         *,
         minimum_event_count: int = 0,
+        fresh_session_per_frame: bool = False,
         progress_callback: Callable[[HybridFramePlan, HybridFrameStatus], None] | None = None,
     ) -> HybridCaptureState:
         if plan.capture_strategy != "single-profile-account-b":
@@ -527,6 +528,7 @@ class HybridCaptureService:
             resolution,
             (("account-b", 90),),
             minimum_event_count=minimum_event_count,
+            fresh_session_per_frame=fresh_session_per_frame,
             progress_callback=progress_callback,
         )
         self._validate_final_sequence(plan, mode, resolution)
@@ -635,6 +637,7 @@ class HybridCaptureService:
         profiles: tuple[tuple[str, int], ...],
         *,
         minimum_event_count: int = 0,
+        fresh_session_per_frame: bool = False,
         progress_callback: Callable[[HybridFramePlan, HybridFrameStatus], None] | None = None,
     ) -> None:
         for profile, zoom in profiles:
@@ -651,60 +654,65 @@ class HybridCaptureService:
             ]
             if not frames:
                 continue
-            with self.gateway_factory(profile, zoom) as gateway:
-                for frame in frames:
-                    state_frame = state.frame(frame.frame_index)
-                    output = self.store.final_frame_path(
+
+            def capture_frame(gateway: HybridBrowserGateway, frame: HybridFramePlan) -> None:
+                state_frame = state.frame(frame.frame_index)
+                output = self.store.final_frame_path(
+                    plan.run_id, frame.frame_index, mode, resolution
+                )
+                state_frame.status = HybridFrameStatus.CAPTURING
+                state_frame.started_at = datetime.now(UTC)
+                state_frame.error = None
+                self.store.save_state(state)
+                if progress_callback is not None:
+                    progress_callback(frame, HybridFrameStatus.CAPTURING)
+                try:
+                    raw = self.store.final_raw_path(
                         plan.run_id, frame.frame_index, mode, resolution
                     )
-                    if state_frame.status is HybridFrameStatus.COMPLETED and output.is_file():
-                        continue
-                    state_frame.status = HybridFrameStatus.CAPTURING
-                    state_frame.started_at = datetime.now(UTC)
-                    state_frame.error = None
-                    self.store.save_state(state)
-                    if progress_callback is not None:
-                        progress_callback(frame, HybridFrameStatus.CAPTURING)
-                    try:
-                        raw = self.store.final_raw_path(
+                    logical = self.store.final_logical_path(
+                        plan.run_id, frame.frame_index, mode, resolution
+                    )
+                    header = (
+                        self.store.final_header_path(
                             plan.run_id, frame.frame_index, mode, resolution
                         )
-                        logical = self.store.final_logical_path(
-                            plan.run_id, frame.frame_index, mode, resolution
-                        )
-                        header = (
-                            self.store.final_header_path(
-                                plan.run_id, frame.frame_index, mode, resolution
-                            )
-                            if mode.includes_header
-                            else None
-                        )
-                        self._capture_composed_frame(
-                            gateway,
-                            frame,
-                            raw,
-                            logical,
-                            header,
-                            output,
-                            mode,
-                            resolution,
-                            self.store.final_capture_failure_directory(
-                                plan.run_id, mode, resolution
-                            ),
-                            minimum_event_count=minimum_event_count,
-                        )
-                    except Exception as error:
-                        state_frame.status = HybridFrameStatus.FAILED
-                        state_frame.error = str(error)
-                        self.store.save_state(state)
-                        if progress_callback is not None:
-                            progress_callback(frame, HybridFrameStatus.FAILED)
-                        raise
-                    state_frame.status = HybridFrameStatus.COMPLETED
-                    state_frame.completed_at = datetime.now(UTC)
+                        if mode.includes_header
+                        else None
+                    )
+                    self._capture_composed_frame(
+                        gateway,
+                        frame,
+                        raw,
+                        logical,
+                        header,
+                        output,
+                        mode,
+                        resolution,
+                        self.store.final_capture_failure_directory(plan.run_id, mode, resolution),
+                        minimum_event_count=minimum_event_count,
+                    )
+                except Exception as error:
+                    state_frame.status = HybridFrameStatus.FAILED
+                    state_frame.error = str(error)
                     self.store.save_state(state)
                     if progress_callback is not None:
-                        progress_callback(frame, HybridFrameStatus.COMPLETED)
+                        progress_callback(frame, HybridFrameStatus.FAILED)
+                    raise
+                state_frame.status = HybridFrameStatus.COMPLETED
+                state_frame.completed_at = datetime.now(UTC)
+                self.store.save_state(state)
+                if progress_callback is not None:
+                    progress_callback(frame, HybridFrameStatus.COMPLETED)
+
+            if fresh_session_per_frame:
+                for frame in frames:
+                    with self.gateway_factory(profile, zoom) as gateway:
+                        capture_frame(gateway, frame)
+            else:
+                with self.gateway_factory(profile, zoom) as gateway:
+                    for frame in frames:
+                        capture_frame(gateway, frame)
 
     def check_final_capture_profiles(self, plan: HybridCapturePlan) -> dict[str, object]:
         """Read-only preflight of both persistent profiles and their first target week."""

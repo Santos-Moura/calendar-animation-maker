@@ -274,6 +274,7 @@ def capture_final_cayde_216_command(
     typer.echo(f"Mode: {mode.value}")
     typer.echo(f"Resolution: {resolution_name(output_resolution)}")
     typer.echo(f"Visual stabilization: {stabilization_seconds:g}s")
+    typer.echo("Browser session recycling: every frame")
     typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
     typer.echo(f"Checkpoint: {state_path}")
     typer.echo(f"Output: {store.final_frames_directory(run_id, mode, output_resolution)}")
@@ -306,6 +307,7 @@ def capture_final_cayde_216_command(
             mode,
             output_resolution,
             minimum_event_count=1,
+            fresh_session_per_frame=True,
             progress_callback=show_progress,
         )
     except KeyboardInterrupt:

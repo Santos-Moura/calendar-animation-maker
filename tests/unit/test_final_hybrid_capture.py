@@ -1669,12 +1669,14 @@ def test_single_profile_full_capture_forwards_visual_gate_and_progress_callback(
         profiles,
         *,
         minimum_event_count=0,
+        fresh_session_per_frame=False,
         progress_callback=None,
     ):  # type: ignore[no-untyped-def]
         received.update(
             {
                 "profiles": profiles,
                 "minimum_event_count": minimum_event_count,
+                "fresh_session_per_frame": fresh_session_per_frame,
                 "progress_callback": progress_callback,
             }
         )
@@ -1688,11 +1690,54 @@ def test_single_profile_full_capture_forwards_visual_gate_and_progress_callback(
         HybridOutputMode.HEADER_PRESERVED_FILL,
         HIGH_RESOLUTION,
         minimum_event_count=1,
+        fresh_session_per_frame=True,
         progress_callback=callback,
     )
 
     assert received == {
         "profiles": (("account-b", 90),),
         "minimum_event_count": 1,
+        "fresh_session_per_frame": True,
         "progress_callback": callback,
     }
+
+
+def test_full_capture_can_recycle_browser_session_after_every_frame(tmp_path: Path) -> None:
+    plan = _hybrid_plan(tmp_path)
+    plan.capture_strategy = "single-profile-account-b"
+    for frame in plan.frames:
+        frame.calendar_profile = "account-b"
+        frame.calendar_name = "Calendar Animation Lab B"
+        frame.capture_zoom_percent = 90
+    plan = HybridCapturePlan.model_validate(plan.model_dump())
+    store = AccountBSingleCaptureStore(tmp_path / "runs")
+    mode = HybridOutputMode.HEADER_PRESERVED_FILL
+    state = store.initialize_state(plan, mode, HIGH_RESOLUTION)
+    for item in state.frames[2:]:
+        item.status = HybridFrameStatus.COMPLETED
+        output = store.final_frame_path(plan.run_id, item.frame_index, mode, HIGH_RESOLUTION)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.touch()
+    launched: list[ReadOnlyFakeGateway] = []
+
+    def factory(profile: str, zoom: int) -> ReadOnlyFakeGateway:
+        assert (profile, zoom) == ("account-b", 90)
+        gateway = ReadOnlyFakeGateway(zoom)
+        launched.append(gateway)
+        return gateway
+
+    HybridCaptureService(store, factory)._capture_final_profiles(
+        plan,
+        state,
+        mode,
+        HIGH_RESOLUTION,
+        (("account-b", 90),),
+        minimum_event_count=1,
+        fresh_session_per_frame=True,
+    )
+
+    assert len(launched) == 2
+    assert launched[0].opened == [plan.frames[0].week_start]
+    assert launched[1].opened == [plan.frames[1].week_start]
+    assert state.frames[0].status is HybridFrameStatus.COMPLETED
+    assert state.frames[1].status is HybridFrameStatus.COMPLETED
