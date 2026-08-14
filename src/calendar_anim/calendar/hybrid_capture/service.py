@@ -503,7 +503,11 @@ class HybridCaptureService:
         *,
         minimum_event_count: int = 0,
         fresh_session_per_frame: bool = False,
+        fresh_session_attempts: int = 1,
         progress_callback: Callable[[HybridFramePlan, HybridFrameStatus], None] | None = None,
+        session_retry_callback: (
+            Callable[[HybridFramePlan, int, int, Exception], None] | None
+        ) = None,
     ) -> HybridCaptureState:
         if plan.capture_strategy != "single-profile-account-b":
             raise CalendarAnimError("Capture plan is not Account-B single-profile")
@@ -529,7 +533,9 @@ class HybridCaptureService:
             (("account-b", 90),),
             minimum_event_count=minimum_event_count,
             fresh_session_per_frame=fresh_session_per_frame,
+            fresh_session_attempts=fresh_session_attempts,
             progress_callback=progress_callback,
+            session_retry_callback=session_retry_callback,
         )
         self._validate_final_sequence(plan, mode, resolution)
         return state
@@ -638,8 +644,14 @@ class HybridCaptureService:
         *,
         minimum_event_count: int = 0,
         fresh_session_per_frame: bool = False,
+        fresh_session_attempts: int = 1,
         progress_callback: Callable[[HybridFramePlan, HybridFrameStatus], None] | None = None,
+        session_retry_callback: (
+            Callable[[HybridFramePlan, int, int, Exception], None] | None
+        ) = None,
     ) -> None:
+        if fresh_session_attempts < 1:
+            raise CalendarAnimError("Fresh-session attempts must be at least one")
         for profile, zoom in profiles:
             frames = [frame for frame in plan.frames if frame.calendar_profile == profile]
             frames = [
@@ -707,8 +719,22 @@ class HybridCaptureService:
 
             if fresh_session_per_frame:
                 for frame in frames:
-                    with self.gateway_factory(profile, zoom) as gateway:
-                        capture_frame(gateway, frame)
+                    for session_attempt in range(1, fresh_session_attempts + 1):
+                        try:
+                            with self.gateway_factory(profile, zoom) as gateway:
+                                capture_frame(gateway, frame)
+                        except Exception as error:
+                            if session_attempt >= fresh_session_attempts:
+                                raise
+                            if session_retry_callback is not None:
+                                session_retry_callback(
+                                    frame,
+                                    session_attempt,
+                                    fresh_session_attempts,
+                                    error,
+                                )
+                            continue
+                        break
             else:
                 with self.gateway_factory(profile, zoom) as gateway:
                     for frame in frames:

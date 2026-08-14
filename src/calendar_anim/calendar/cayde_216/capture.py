@@ -275,6 +275,7 @@ def capture_final_cayde_216_command(
     typer.echo(f"Resolution: {resolution_name(output_resolution)}")
     typer.echo(f"Visual stabilization: {stabilization_seconds:g}s")
     typer.echo("Browser session recycling: every frame")
+    typer.echo("Fresh-session attempts per frame: 3")
     typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
     typer.echo(f"Checkpoint: {state_path}")
     typer.echo(f"Output: {store.final_frames_directory(run_id, mode, output_resolution)}")
@@ -299,6 +300,18 @@ def capture_final_cayde_216_command(
             else:
                 typer.secho(f"Frame {frame.human_frame}/{FRAME_COUNT}: {status.value}", fg="red")
 
+        def show_session_retry(
+            frame: HybridFramePlan,
+            failed_attempt: int,
+            total_attempts: int,
+            error: Exception,
+        ) -> None:
+            typer.secho(
+                f"Frame {frame.human_frame}/{FRAME_COUNT}: session attempt "
+                f"{failed_attempt}/{total_attempts} failed; reopening Chrome and retrying",
+                fg="yellow",
+            )
+
         state = HybridCaptureService(
             store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
         ).capture_final_single_profile(
@@ -308,7 +321,9 @@ def capture_final_cayde_216_command(
             output_resolution,
             minimum_event_count=1,
             fresh_session_per_frame=True,
+            fresh_session_attempts=3,
             progress_callback=show_progress,
+            session_retry_callback=show_session_retry,
         )
     except KeyboardInterrupt:
         typer.secho("Capture interrupted; atomic frame checkpoint was preserved.", fg="yellow")

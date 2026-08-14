@@ -1660,6 +1660,9 @@ def test_single_profile_full_capture_forwards_visual_gate_and_progress_callback(
     def callback(*_: object) -> None:
         return None
 
+    def retry_callback(*_: object) -> None:
+        return None
+
     def capture_profiles(
         self,
         selected_plan,
@@ -1670,14 +1673,18 @@ def test_single_profile_full_capture_forwards_visual_gate_and_progress_callback(
         *,
         minimum_event_count=0,
         fresh_session_per_frame=False,
+        fresh_session_attempts=1,
         progress_callback=None,
+        session_retry_callback=None,
     ):  # type: ignore[no-untyped-def]
         received.update(
             {
                 "profiles": profiles,
                 "minimum_event_count": minimum_event_count,
                 "fresh_session_per_frame": fresh_session_per_frame,
+                "fresh_session_attempts": fresh_session_attempts,
                 "progress_callback": progress_callback,
+                "session_retry_callback": session_retry_callback,
             }
         )
 
@@ -1691,14 +1698,18 @@ def test_single_profile_full_capture_forwards_visual_gate_and_progress_callback(
         HIGH_RESOLUTION,
         minimum_event_count=1,
         fresh_session_per_frame=True,
+        fresh_session_attempts=3,
         progress_callback=callback,
+        session_retry_callback=retry_callback,
     )
 
     assert received == {
         "profiles": (("account-b", 90),),
         "minimum_event_count": 1,
         "fresh_session_per_frame": True,
+        "fresh_session_attempts": 3,
         "progress_callback": callback,
+        "session_retry_callback": retry_callback,
     }
 
 
@@ -1741,3 +1752,75 @@ def test_full_capture_can_recycle_browser_session_after_every_frame(tmp_path: Pa
     assert launched[1].opened == [plan.frames[1].week_start]
     assert state.frames[0].status is HybridFrameStatus.COMPLETED
     assert state.frames[1].status is HybridFrameStatus.COMPLETED
+
+
+def test_full_capture_retries_failed_frame_in_a_new_browser_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    plan.capture_strategy = "single-profile-account-b"
+    for frame in plan.frames:
+        frame.calendar_profile = "account-b"
+        frame.calendar_name = "Calendar Animation Lab B"
+        frame.capture_zoom_percent = 90
+    plan = HybridCapturePlan.model_validate(plan.model_dump())
+    store = AccountBSingleCaptureStore(tmp_path / "runs")
+    mode = HybridOutputMode.HEADER_PRESERVED_FILL
+    state = store.initialize_state(plan, mode, HIGH_RESOLUTION)
+    for item in state.frames[1:]:
+        item.status = HybridFrameStatus.COMPLETED
+        output = store.final_frame_path(plan.run_id, item.frame_index, mode, HIGH_RESOLUTION)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.touch()
+    launched: list[ReadOnlyFakeGateway] = []
+    captures = 0
+    retries: list[tuple[int, int, int]] = []
+
+    def factory(profile: str, zoom: int) -> ReadOnlyFakeGateway:
+        assert (profile, zoom) == ("account-b", 90)
+        gateway = ReadOnlyFakeGateway(zoom)
+        launched.append(gateway)
+        return gateway
+
+    service = HybridCaptureService(store, factory)
+
+    def capture_frame(
+        gateway,
+        frame,
+        raw,
+        logical,
+        header,
+        output,
+        selected_mode,
+        resolution,
+        debug_directory,
+        *,
+        minimum_event_count=0,
+    ):  # type: ignore[no-untyped-def]
+        nonlocal captures
+        captures += 1
+        if captures == 1:
+            raise CalendarAnimError("transient empty Calendar grid")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", resolution, "black").save(output)
+        return {}
+
+    monkeypatch.setattr(service, "_capture_composed_frame", capture_frame)
+
+    service._capture_final_profiles(
+        plan,
+        state,
+        mode,
+        HIGH_RESOLUTION,
+        (("account-b", 90),),
+        fresh_session_per_frame=True,
+        fresh_session_attempts=3,
+        session_retry_callback=lambda frame, attempt, total, error: retries.append(
+            (frame.frame_index, attempt, total)
+        ),
+    )
+
+    assert captures == 2
+    assert len(launched) == 2
+    assert retries == [(0, 1, 3)]
+    assert state.frames[0].status is HybridFrameStatus.COMPLETED
