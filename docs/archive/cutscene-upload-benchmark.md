@@ -1,4 +1,4 @@
-# 126x72 cutscene upload benchmark
+# Archived: 126x72 cutscene upload benchmark
 
 This experiment measures the existing serial uploader without changing its batching, retry,
 rate-limit, checkpoint, or resume behavior. Its fixed source is `input.mp4`, clipped from 115 to

@@ -1,4 +1,4 @@
-# Final cutscene run preparation
+# Archived: Final cutscene run preparation
 
 The final candidate uses the source clip `114.0 -> 150.0` seconds at `126x72`. Every new
 render records the source SHA-256 in `animation.json`, so plans cannot silently reuse the

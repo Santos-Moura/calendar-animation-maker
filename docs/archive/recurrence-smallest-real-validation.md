@@ -1,4 +1,4 @@
-# Recurrence smallest real validation
+# Archived: Recurrence smallest real validation
 
 This experiment compares three rendered instances from one recurring parent against three
 standalone controls without changing the existing animation run. The source visual signature is

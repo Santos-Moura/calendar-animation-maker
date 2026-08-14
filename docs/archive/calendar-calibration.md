@@ -1,4 +1,4 @@
-# Calendar visual calibration
+# Archived: Calendar visual calibration
 
 Google Calendar controls event height, overlap, colors, borders, padding, and text visibility. The mapper must therefore use measurements from the real Calendar UI instead of assuming that a local pixel grid maps directly to events.
 

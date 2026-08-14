@@ -1,14 +1,16 @@
 # Processing pipeline
 
-1. **Inspect:** validate the extension and use OpenCV for dimensions, FPS, frame count, duration, and FOURCC codec. Audio is ignored.
-2. **Select:** validate non-negative start and positive duration/count. Requests beyond the end are clamped with a warning.
-3. **Sample:** `numpy.linspace` selects uniform frame indices over the effective interval. OpenCV seeks and reads only those frames.
-4. **Crop:** use the full image by default; an explicit rectangle must fit entirely inside it.
-5. **Resize:** `contain` letterboxes with black, `cover` center-crops, and `stretch` ignores aspect ratio.
-6. **Palette:** nearest-color Euclidean distance maps RGB pixels deterministically to grayscale or the central Calendar-inspired palette.
-7. **Background:** before quantization, pixels within the configured Euclidean RGB tolerance are empty. Without a background option, none are removed.
-8. **Blocks:** each row is scanned left-to-right and adjacent non-empty pixels of one color become a width-N, height-1 block. The algorithm can later be replaced by rectangular merging.
-9. **Preview:** processed grids are enlarged with nearest-neighbor and saved as PNG plus an animated GIF. Transparent PNG pixels represent ignored background.
-10. **Manifest:** schema `1.0` records safe relative paths, timestamps, parameters, blocks, and statistics. `source-info.json` preserves inspected metadata.
+1. Inspect the video and validate clip bounds.
+2. Sample source frames uniformly without loading the complete video.
+3. Crop and fit each frame using `contain`, `cover`, or `stretch`.
+4. Quantize deterministically to the selected Calendar palette.
+5. Convert pixels to logical cells and synchronized horizontal bands.
+6. Assign one frame to one Calendar week.
+7. Compact equivalent events across weeks into recurrence parents with bounded RDATE chunks.
+8. Preflight the target account, calendar, date range, and immutable plan hashes.
+9. Upload with deterministic IDs, atomic checkpoints, resume, and quota-aware pacing.
+10. Capture each week through a persistent browser profile and stable structural grid bounds.
+11. Recompose the approved Calendar UI regions, encode H.264, and mux the source audio.
 
-Preview FPS defaults to selected frame count divided by effective clip duration, with a minimum of 1 FPS. The preview enables approval before any future Calendar operation.
+Local previews and manifests allow visual approval before any remote write. See
+[workflow.md](workflow.md) for the supported commands.

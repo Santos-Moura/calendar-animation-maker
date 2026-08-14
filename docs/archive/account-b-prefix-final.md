@@ -1,4 +1,4 @@
-# Account-B final prefix
+# Archived: Account-B final prefix
 
 The final visual capture uses one persistent browser profile: `account-b` at 90% Chrome zoom.
 The already uploaded Account-B recurrence bulk remains immutable:

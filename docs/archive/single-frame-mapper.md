@@ -1,4 +1,4 @@
-# Single Frame Calendar Mapper
+# Archived: Single-frame Calendar mapper
 
 The single-frame experiment asks whether one processed frame remains recognizable after it is translated into normal Google Calendar events. It does not upload an animation: one selected manifest frame becomes one planned Calendar week.
 

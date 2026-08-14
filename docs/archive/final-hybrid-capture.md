@@ -1,4 +1,4 @@
-# Final hybrid Calendar capture
+# Archived: Final hybrid Calendar capture
 
 This workflow validates the completed Account-B recurrence upload visually before
 capturing or composing the final animation. Every browser operation is read-only;

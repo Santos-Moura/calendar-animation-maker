@@ -1,4 +1,4 @@
-# Google Calendar integration plan
+# Archived: Google Calendar integration plan
 
 The target representation uses real events in a dedicated calendar. A local OAuth client now supports small calibration runs only; future code may batch animation events. Events remain in the user's account after the program closes and do not animate natively. Each future animation frame is stored in a consecutive week, and later Playwright navigation creates the illusion of playback.
 

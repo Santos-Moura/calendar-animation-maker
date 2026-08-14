@@ -1,4 +1,4 @@
-# Final hybrid recurrence upload
+# Archived: Final hybrid recurrence upload
 
 The final Account-B uploader consumes the already-approved artifacts for
 `cayde-final-hybrid-rdate-126x72-3fps-36s-01`. It does not regenerate the video,

@@ -1,4 +1,4 @@
-# High-detail 126x72 animation validation
+# Archived: High-detail 126x72 animation validation
 
 This workflow is an explicit validation candidate. It does not change the production 42x24
 default. It reuses the production zero-width ordering, synchronized horizontal-band compression,

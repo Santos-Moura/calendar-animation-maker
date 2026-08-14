@@ -1,4 +1,4 @@
-# Recurrence/RDATE compaction study
+# Archived: Recurrence/RDATE compaction study
 
 This experiment is local-only. It does not modify the immutable animation plan, upload state,
 or any Google Calendar event. Run it with:
