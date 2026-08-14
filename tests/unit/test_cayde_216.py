@@ -6,6 +6,10 @@ import pytest
 from PIL import Image
 
 from calendar_anim.calendar.capture.final_media import FFmpegTools
+from calendar_anim.calendar.cayde_216.capture import (
+    PREVIEW_HUMAN_FRAMES,
+    _parse_preview_frames,
+)
 from calendar_anim.calendar.cayde_216.models import (
     Cayde216SizingReport,
     FrameOccurrenceStatistics,
@@ -28,6 +32,7 @@ from calendar_anim.calendar.hybrid_capture.media import (
     inspect_final_frames,
     validate_final_visual_probe,
 )
+from calendar_anim.calendar.hybrid_capture.models import HybridCapturePlan, HybridFramePlan
 from calendar_anim.calendar.models import CalendarRangeEvent
 from calendar_anim.calendar.palette_presets import CAYDE_216_CANDIDATES, CAYDE_FINAL
 from calendar_anim.calendar.recurrence_compaction.planner import _parent_id
@@ -109,6 +114,51 @@ def test_cayde_216_timing_and_week_mapping_are_exact() -> None:
     assert RUN_ID == "cayde-final-216f-6fps-cyan-magenta-rdate-126x72-36s-01"
     assert SOURCE_RUN_ID == "cayde-final-216f-6fps-rdate-126x72-36s-01"
     assert RUN_ID != SOURCE_RUN_ID
+
+
+def test_cayde_216_single_profile_capture_contract_accepts_all_216_frames() -> None:
+    frames = [
+        HybridFramePlan(
+            frame_index=index,
+            human_frame=index + 1,
+            week_start=FIRST_WEEK + timedelta(weeks=index),
+            calendar_profile="account-b",
+            calendar_name="Calendar Animation Lab B",
+            capture_zoom_percent=90,
+            expected_occurrences=1,
+            source_frame_plan=f"frame-{index:04d}.json",
+        )
+        for index in range(216)
+    ]
+
+    plan = HybridCapturePlan(
+        capture_strategy="single-profile-account-b",
+        run_id=RUN_ID,
+        source_run_id=SOURCE_RUN_ID,
+        source_sha256="a" * 64,
+        frame_count=216,
+        fps=6,
+        frames=frames,
+    )
+
+    assert plan.frame_count == 216
+    assert plan.frames[-1].human_frame == 216
+    with pytest.raises(ValueError, match="hybrid profile capture remains locked"):
+        HybridCapturePlan(
+            capture_strategy="hybrid",
+            run_id=RUN_ID,
+            source_run_id=SOURCE_RUN_ID,
+            source_sha256="a" * 64,
+            frame_count=216,
+            fps=6,
+            frames=frames,
+        )
+
+
+def test_cayde_216_preview_frames_are_locked_to_five_approved_samples() -> None:
+    assert _parse_preview_frames("1,54,108,162,216") == list(PREVIEW_HUMAN_FRAMES)
+    with pytest.raises(CalendarAnimError, match="sanity frames"):
+        _parse_preview_frames("1,54,108,216")
 
 
 def test_cayde_216_report_rejects_overlap_collision_or_expansion_difference() -> None:
