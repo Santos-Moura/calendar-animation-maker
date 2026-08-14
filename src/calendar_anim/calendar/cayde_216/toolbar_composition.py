@@ -7,12 +7,28 @@ from typing import Annotated, Never
 import typer
 from PIL import Image, ImageDraw
 
+from calendar_anim.calendar.capture.final_media import (
+    build_exact_audio_extract_command,
+    build_mux_command,
+    detect_ffmpeg,
+    extract_exact_audio,
+    mux_audio,
+    probe_av_media,
+    validate_av_media,
+)
 from calendar_anim.calendar.cayde_216.artifacts import write_atomic
 from calendar_anim.calendar.cayde_216.planner import FIRST_WEEK, FRAME_COUNT, RUN_ID
 from calendar_anim.calendar.hybrid_capture.artifacts import (
     HybridCaptureStore,
     parse_output_resolution,
     resolution_name,
+)
+from calendar_anim.calendar.hybrid_capture.media import (
+    build_final_visual_command,
+    compose_final_visual,
+    inspect_final_frames,
+    probe_final_visual,
+    validate_final_visual_probe,
 )
 from calendar_anim.calendar.hybrid_capture.models import (
     HybridFrameStatus,
@@ -347,6 +363,157 @@ def recompose_final_cayde_216_calendar_toolbar_command(
     typer.echo("Protected capture artifacts changed: NO")
     typer.echo("Browser opened: NO")
     typer.echo("Google Calendar reads/writes: NO")
+
+
+def compose_final_cayde_216_calendar_toolbar_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
+    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
+        HybridOutputMode.HEADER_PRESERVED_FILL
+    ),
+    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
+) -> None:
+    """Compose the approved Calendar-toolbar frame sequence at 6 FPS."""
+
+    try:
+        output_resolution = _validate_final_toolbar_options(run_id, mode, resolution)
+        runtime = Path("output/216-runs") / run_id
+        frames = (
+            runtime
+            / "final-frames-calendar-toolbar"
+            / mode.directory_name
+            / resolution_name(output_resolution)
+        )
+        sequence = inspect_final_frames(frames, output_resolution, frame_count=FRAME_COUNT)
+        tools = detect_ffmpeg()
+        final = _toolbar_final_directory(runtime, mode, output_resolution)
+        output = final / "final-video-no-audio.mp4"
+        command = build_final_visual_command(tools, frames, output, frame_count=FRAME_COUNT, fps=6)
+        compose_final_visual(
+            tools,
+            frames,
+            output,
+            output_resolution,
+            frame_count=FRAME_COUNT,
+            fps=6,
+        )
+        probe = probe_final_visual(tools, output)
+        validate_final_visual_probe(
+            probe,
+            output_resolution,
+            expected_frame_count=FRAME_COUNT,
+            expected_fps=6,
+            expected_duration_seconds=36,
+        )
+        report = {
+            "layout": "calendar-toolbar",
+            "input_directory": str(frames),
+            "count": sequence.count,
+            "first": sequence.first.name,
+            "last": sequence.last.name,
+            "fps": 6,
+            "duration_seconds": probe.duration_seconds,
+            "resolution": list(output_resolution),
+            "ffmpeg_command": command,
+            "output": str(output),
+            "validation": "PASS",
+            "browser_opened": False,
+            "google_calendar_reads": False,
+            "google_calendar_writes": False,
+        }
+        write_atomic(final / "visual-composition-report.json", json.dumps(report, indent=2) + "\n")
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    typer.echo("CAYDE 216 CALENDAR TOOLBAR VIDEO")
+    typer.echo(f"Frames: {sequence.count}; {sequence.first.name} -> {sequence.last.name}")
+    typer.echo("FPS/duration: 6 / 36.000000s")
+    typer.echo(f"Visual MP4: {output}")
+    typer.echo("Audio muxed: NO")
+    typer.echo("Google Calendar reads/writes: NO")
+
+
+def mux_final_cayde_216_calendar_toolbar_audio_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
+    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
+        HybridOutputMode.HEADER_PRESERVED_FILL
+    ),
+    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
+    source_video: Annotated[Path, typer.Option("--source-video")] = Path("input.mp4"),
+) -> None:
+    """Mux the exact 114-150s audio clip into the Calendar-toolbar video."""
+
+    try:
+        output_resolution = _validate_final_toolbar_options(run_id, mode, resolution)
+        if not source_video.is_file():
+            raise CalendarAnimError(f"Source video does not exist: {source_video}")
+        runtime = Path("output/216-runs") / run_id
+        final = _toolbar_final_directory(runtime, mode, output_resolution)
+        visual = final / "final-video-no-audio.mp4"
+        if not visual.is_file():
+            raise CalendarAnimError(f"Calendar-toolbar silent MP4 does not exist: {visual}")
+        tools = detect_ffmpeg()
+        audio = final / "cutscene-audio-114s-150s.m4a"
+        audio_command = build_exact_audio_extract_command(tools, source_video, audio, 114.0, 150.0)
+        extract_exact_audio(tools, source_video, audio, 114.0, 150.0)
+        output = final / "final-with-audio.mp4"
+        mux_command = build_mux_command(tools, visual, audio, output)
+        mux_audio(tools, visual, audio, output)
+        probe = probe_av_media(tools, output)
+        validate_av_media(
+            probe,
+            output_resolution,
+            expected_duration_seconds=36,
+            expected_fps=6,
+            expected_video_frame_count=FRAME_COUNT,
+        )
+        report = {
+            "layout": "calendar-toolbar",
+            "visual": str(visual),
+            "source": str(source_video),
+            "clip": [114.0, 150.0],
+            "audio_extract_command": audio_command,
+            "mux_command": mux_command,
+            "video_copied": True,
+            "audio_reencoded": True,
+            "video_duration": probe.video_duration_seconds,
+            "audio_duration": probe.audio_duration_seconds,
+            "av_delta": probe.av_delta_seconds,
+            "output": str(output),
+            "validation": "PASS",
+            "browser_opened": False,
+            "google_calendar_reads": False,
+            "google_calendar_writes": False,
+        }
+        write_atomic(final / "audio-mux-report.json", json.dumps(report, indent=2) + "\n")
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    typer.echo("CAYDE 216 CALENDAR TOOLBAR AUDIO")
+    typer.echo(f"Final with audio: {output}")
+    typer.echo(f"A/V delta: {probe.av_delta_seconds:.6f}s")
+    typer.echo("Video copied: YES")
+    typer.echo("Google Calendar reads/writes: NO")
+
+
+def _validate_final_toolbar_options(
+    run_id: str,
+    mode: HybridOutputMode,
+    resolution: str,
+) -> tuple[int, int]:
+    if run_id != RUN_ID or mode is not HybridOutputMode.HEADER_PRESERVED_FILL:
+        raise CalendarAnimError("Calendar-toolbar media is locked to its run and final mode")
+    output_resolution = parse_output_resolution(resolution)
+    if output_resolution != CAPTURE_RESOLUTION:
+        raise CalendarAnimError("Calendar-toolbar media requires resolution 1512x864")
+    return output_resolution
+
+
+def _toolbar_final_directory(
+    runtime: Path,
+    mode: HybridOutputMode,
+    resolution: tuple[int, int],
+) -> Path:
+    return (
+        runtime / "final" / "calendar-toolbar" / mode.directory_name / resolution_name(resolution)
+    )
 
 
 def _build_before_after(before: Path, after: Path, output: Path) -> Path:

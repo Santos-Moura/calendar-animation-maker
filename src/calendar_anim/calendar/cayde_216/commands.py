@@ -40,6 +40,8 @@ from calendar_anim.calendar.cayde_216.single_frame_validation import (
     register_single_frame_validation_commands,
 )
 from calendar_anim.calendar.cayde_216.toolbar_composition import (
+    compose_final_cayde_216_calendar_toolbar_command,
+    mux_final_cayde_216_calendar_toolbar_audio_command,
     preview_cayde_216_calendar_toolbar_command,
     recompose_final_cayde_216_calendar_toolbar_command,
 )
@@ -481,5 +483,11 @@ def register_cayde_216_commands(app: typer.Typer) -> None:
     app.command("preview-cayde-216-calendar-toolbar")(preview_cayde_216_calendar_toolbar_command)
     app.command("recompose-final-cayde-216-calendar-toolbar")(
         recompose_final_cayde_216_calendar_toolbar_command
+    )
+    app.command("compose-final-cayde-216-calendar-toolbar")(
+        compose_final_cayde_216_calendar_toolbar_command
+    )
+    app.command("mux-final-cayde-216-calendar-toolbar-audio")(
+        mux_final_cayde_216_calendar_toolbar_audio_command
     )
     register_single_frame_validation_commands(app)
