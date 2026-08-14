@@ -536,8 +536,8 @@ class HybridCaptureService:
             raise CalendarAnimError("Preview requires the Account-B single-profile plan")
         if not human_frames or len(human_frames) != len(set(human_frames)):
             raise CalendarAnimError("Preview frames must be non-empty and unique")
-        if any(frame < 1 or frame > 108 for frame in human_frames):
-            raise CalendarAnimError("Preview frames must be between 1 and 108")
+        if any(frame < 1 or frame > plan.frame_count for frame in human_frames):
+            raise CalendarAnimError(f"Preview frames must be between 1 and {plan.frame_count}")
         if mode is not HybridOutputMode.HEADER_PRESERVED_FILL or resolution != (1512, 864):
             raise CalendarAnimError("Preview must match final header_preserved_fill at 1512x864")
         selected = [plan.frames[human_frame - 1] for human_frame in human_frames]

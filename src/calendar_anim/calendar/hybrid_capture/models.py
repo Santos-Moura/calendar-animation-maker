@@ -30,8 +30,8 @@ class HybridFrameStatus(StrEnum):
 
 
 class HybridFramePlan(BaseModel):
-    frame_index: int = Field(ge=0, le=107)
-    human_frame: int = Field(ge=1, le=108)
+    frame_index: int = Field(ge=0, le=215)
+    human_frame: int = Field(ge=1, le=216)
     week_start: date
     calendar_profile: str
     calendar_name: str
@@ -59,11 +59,15 @@ class HybridCapturePlan(BaseModel):
     @model_validator(mode="after")
     def exact_sequence(self) -> "HybridCapturePlan":
         indexes = [frame.frame_index for frame in self.frames]
-        if indexes != list(range(108)):
-            raise ValueError("hybrid capture must account for frame indices 0-107 exactly once")
-        if [frame.human_frame for frame in self.frames] != list(range(1, 109)):
-            raise ValueError("hybrid human frames must be 1-108 exactly once")
+        if self.frame_count not in {108, 216}:
+            raise ValueError("final capture frame count must be 108 or 216")
+        if indexes != list(range(self.frame_count)):
+            raise ValueError("final capture must account for every frame index exactly once")
+        if [frame.human_frame for frame in self.frames] != list(range(1, self.frame_count + 1)):
+            raise ValueError("final capture human frames must form an exact sequence")
         if self.capture_strategy == "hybrid":
+            if self.frame_count != 108:
+                raise ValueError("hybrid profile capture remains locked to 108 frames")
             for frame in self.frames:
                 expected_profile = "account-a" if frame.frame_index <= 22 else "account-b"
                 expected_zoom = 33 if frame.frame_index <= 22 else 90
@@ -230,8 +234,8 @@ class HybridSeamReport(BaseModel):
 
 
 class SingleProfilePreviewFrameResult(BaseModel):
-    human_frame: int = Field(ge=1, le=108)
-    frame_index: int = Field(ge=0, le=107)
+    human_frame: int = Field(ge=1, le=216)
+    frame_index: int = Field(ge=0, le=215)
     expected_week: date
     visible_week: date | None = None
     week_validation: str
