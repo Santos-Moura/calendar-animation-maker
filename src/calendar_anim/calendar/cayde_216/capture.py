@@ -182,7 +182,13 @@ def capture_cayde_216_preview_command(
     try:
         report = HybridCaptureService(
             store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
-        ).capture_final_single_profile_preview(plan, selected, mode, output_resolution)
+        ).capture_final_single_profile_preview(
+            plan,
+            selected,
+            mode,
+            output_resolution,
+            fresh_session_per_frame=True,
+        )
         contact_sheet = _build_contact_sheet(store, report)
         _record_contact_sheet(store, report, contact_sheet)
     except KeyboardInterrupt:

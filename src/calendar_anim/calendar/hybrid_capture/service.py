@@ -527,11 +527,14 @@ class HybridCaptureService:
         human_frames: Sequence[int],
         mode: HybridOutputMode,
         resolution: tuple[int, int],
+        *,
+        fresh_session_per_frame: bool = False,
     ) -> SingleProfilePreviewReport:
         """Capture isolated frames through the exact final composition code, without state."""
 
         if not isinstance(self.store, AccountBSingleCaptureStore):
             raise CalendarAnimError("Single-profile preview requires isolated preview storage")
+        preview_store = self.store
         if plan.capture_strategy != "single-profile-account-b":
             raise CalendarAnimError("Preview requires the Account-B single-profile plan")
         if not human_frames or len(human_frames) != len(set(human_frames)):
@@ -547,30 +550,39 @@ class HybridCaptureService:
         ):
             raise CalendarAnimError("Preview may open only Account B at zoom 90%")
         results: list[SingleProfilePreviewFrameResult] = []
-        with self.gateway_factory("account-b", 90) as gateway:
+
+        def capture_frame(gateway: HybridBrowserGateway, frame: HybridFramePlan) -> None:
+            output = preview_store.preview_frame_path(plan.run_id, frame.frame_index)
+            raw = preview_store.preview_component_path(plan.run_id, frame.frame_index, "raw")
+            logical = preview_store.preview_component_path(
+                plan.run_id, frame.frame_index, "logical"
+            )
+            header = preview_store.preview_component_path(
+                plan.run_id, frame.frame_index, "native-header-grid"
+            )
+            debug = preview_store.preview_debug_directory(plan.run_id, frame.frame_index)
+            metrics = self._capture_composed_frame(
+                gateway,
+                frame,
+                raw,
+                logical,
+                header,
+                output,
+                mode,
+                resolution,
+                debug,
+            )
+            write_atomic(debug / "metrics.json", json.dumps(metrics, indent=2) + "\n")
+            results.append(_preview_frame_result(frame, output, metrics, resolution))
+
+        if fresh_session_per_frame:
             for frame in selected:
-                output = self.store.preview_frame_path(plan.run_id, frame.frame_index)
-                raw = self.store.preview_component_path(plan.run_id, frame.frame_index, "raw")
-                logical = self.store.preview_component_path(
-                    plan.run_id, frame.frame_index, "logical"
-                )
-                header = self.store.preview_component_path(
-                    plan.run_id, frame.frame_index, "native-header-grid"
-                )
-                debug = self.store.preview_debug_directory(plan.run_id, frame.frame_index)
-                metrics = self._capture_composed_frame(
-                    gateway,
-                    frame,
-                    raw,
-                    logical,
-                    header,
-                    output,
-                    mode,
-                    resolution,
-                    debug,
-                )
-                write_atomic(debug / "metrics.json", json.dumps(metrics, indent=2) + "\n")
-                results.append(_preview_frame_result(frame, output, metrics, resolution))
+                with self.gateway_factory("account-b", 90) as gateway:
+                    capture_frame(gateway, frame)
+        else:
+            with self.gateway_factory("account-b", 90) as gateway:
+                for frame in selected:
+                    capture_frame(gateway, frame)
         signatures = [_preview_geometry_signature(result) for result in results]
         geometry_consistent = len(set(signatures)) <= 1
         selected_numbers = {result.human_frame for result in results}

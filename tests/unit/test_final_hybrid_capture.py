@@ -1607,3 +1607,18 @@ def test_single_profile_preview_uses_final_capture_code_and_never_mutates_state(
     assert store.state_path(source.run_id, mode, resolution).read_bytes() == state_before
     assert all(item.status is HybridFrameStatus.PENDING for item in state.frames)
     assert not store.final_frame_path(source.run_id, 22, mode, resolution).exists()
+
+    launched.clear()
+    calls.clear()
+    HybridCaptureService(store, factory).capture_final_single_profile_preview(
+        source,
+        [23, 24],
+        mode,
+        resolution,
+        fresh_session_per_frame=True,
+    )
+    assert calls == [
+        (22, store.preview_frame_path(source.run_id, 22)),
+        (23, store.preview_frame_path(source.run_id, 23)),
+    ]
+    assert launched == [("account-b", 90), ("account-b", 90)]
