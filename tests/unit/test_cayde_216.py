@@ -10,6 +10,7 @@ from calendar_anim.calendar.cayde_216.capture import (
     CAYDE_216_STABILIZATION_SECONDS,
     PREVIEW_HUMAN_FRAMES,
     _parse_preview_frames,
+    _validate_cayde_216_preview_gate,
 )
 from calendar_anim.calendar.cayde_216.models import (
     Cayde216SizingReport,
@@ -27,13 +28,24 @@ from calendar_anim.calendar.cayde_216.planner import (
 from calendar_anim.calendar.cayde_216.upload import UPLOAD_ARTIFACT_NAMES, upload_store
 from calendar_anim.calendar.cayde_216.window_search import find_clean_windows
 from calendar_anim.calendar.frame_mapping.colors import calendar_palette_color, contrast_ratio
+from calendar_anim.calendar.hybrid_capture.artifacts import (
+    AccountBSingleCaptureStore,
+    HybridCaptureStore,
+)
 from calendar_anim.calendar.hybrid_capture.media import (
     FinalVisualProbe,
     build_final_visual_command,
     inspect_final_frames,
     validate_final_visual_probe,
 )
-from calendar_anim.calendar.hybrid_capture.models import HybridCapturePlan, HybridFramePlan
+from calendar_anim.calendar.hybrid_capture.models import (
+    HybridCapturePlan,
+    HybridFramePlan,
+    HybridOutputMode,
+    SingleProfilePreviewFrameResult,
+    SingleProfilePreviewReport,
+)
+from calendar_anim.calendar.hybrid_capture.service import HybridCaptureService
 from calendar_anim.calendar.models import CalendarRangeEvent
 from calendar_anim.calendar.palette_presets import CAYDE_216_CANDIDATES, CAYDE_FINAL
 from calendar_anim.calendar.recurrence_compaction.planner import _parent_id
@@ -154,6 +166,103 @@ def test_cayde_216_single_profile_capture_contract_accepts_all_216_frames() -> N
             fps=6,
             frames=frames,
         )
+
+
+def test_cayde_216_final_sequence_validates_all_216_files(tmp_path: Path) -> None:
+    frames = [
+        HybridFramePlan(
+            frame_index=index,
+            human_frame=index + 1,
+            week_start=FIRST_WEEK + timedelta(weeks=index),
+            calendar_profile="account-b",
+            calendar_name="Calendar Animation Lab B",
+            capture_zoom_percent=90,
+            expected_occurrences=1,
+            source_frame_plan=f"frame-{index:04d}.json",
+        )
+        for index in range(FRAME_COUNT)
+    ]
+    plan = HybridCapturePlan(
+        capture_strategy="single-profile-account-b",
+        run_id=RUN_ID,
+        source_run_id=SOURCE_RUN_ID,
+        source_sha256="a" * 64,
+        frame_count=FRAME_COUNT,
+        fps=FPS,
+        frames=frames,
+    )
+    store = HybridCaptureStore(tmp_path / "216-runs")
+    resolution = (1, 1)
+    for frame in frames:
+        path = store.final_frame_path(
+            RUN_ID, frame.frame_index, HybridOutputMode.HEADER_PRESERVED_FILL, resolution
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", resolution, "black").save(path)
+
+    HybridCaptureService(store, lambda *_: None)._validate_final_sequence(
+        plan, HybridOutputMode.HEADER_PRESERVED_FILL, resolution
+    )
+
+    store.final_frame_path(
+        RUN_ID, FRAME_COUNT - 1, HybridOutputMode.HEADER_PRESERVED_FILL, resolution
+    ).unlink()
+    with pytest.raises(CalendarAnimError, match="gap or duplicate"):
+        HybridCaptureService(store, lambda *_: None)._validate_final_sequence(
+            plan, HybridOutputMode.HEADER_PRESERVED_FILL, resolution
+        )
+
+
+def test_cayde_216_full_capture_requires_passed_five_frame_preview(tmp_path: Path) -> None:
+    store = AccountBSingleCaptureStore(tmp_path / "216-runs")
+    results = []
+    for human_frame in PREVIEW_HUMAN_FRAMES:
+        frame_index = human_frame - 1
+        output = store.preview_frame_path(RUN_ID, frame_index)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (1512, 864), "black").save(output)
+        week = FIRST_WEEK + timedelta(weeks=frame_index)
+        results.append(
+            SingleProfilePreviewFrameResult(
+                human_frame=human_frame,
+                frame_index=frame_index,
+                expected_week=week,
+                visible_week=week,
+                week_validation="PASS",
+                output=str(output),
+                output_size=(1512, 864),
+                header_present=True,
+                left_time_gutter_present=True,
+                timezone_label_present=True,
+                create_button_excluded=True,
+                pre_06_blank_gap_present=False,
+                vertical_interval="06:00-00:00",
+                capture="PASS",
+                native_browser_viewport={},
+                native_composed_crop_dimensions=(1512, 864),
+                header_source_rect=[0, 0, 1, 1],
+                time_gutter_source_rect=[0, 0, 1, 1],
+                grid_source_rect=[0, 0, 1, 1],
+                header_output_rect=[0, 0, 1, 1],
+                time_gutter_output_rect=[0, 0, 1, 1],
+                grid_output_rect=[0, 0, 1, 1],
+            )
+        )
+    report = SingleProfilePreviewReport(
+        run_id=RUN_ID,
+        frames=results,
+        geometry_consistent=True,
+        preview="PASS",
+    )
+    report_path = store.preview_report_path(RUN_ID)
+    report_path.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+    assert _validate_cayde_216_preview_gate(store, RUN_ID) == report
+
+    report.geometry_consistent = False
+    report_path.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CalendarAnimError, match="preview gate is not PASS"):
+        _validate_cayde_216_preview_gate(store, RUN_ID)
 
 
 def test_cayde_216_preview_frames_are_locked_to_five_approved_samples() -> None:

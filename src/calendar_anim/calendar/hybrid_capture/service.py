@@ -500,6 +500,9 @@ class HybridCaptureService:
         state: HybridCaptureState,
         mode: HybridOutputMode,
         resolution: tuple[int, int],
+        *,
+        minimum_event_count: int = 0,
+        progress_callback: Callable[[HybridFramePlan, HybridFrameStatus], None] | None = None,
     ) -> HybridCaptureState:
         if plan.capture_strategy != "single-profile-account-b":
             raise CalendarAnimError("Capture plan is not Account-B single-profile")
@@ -517,7 +520,15 @@ class HybridCaptureService:
             for frame in plan.frames
         ):
             raise CalendarAnimError("Single-profile capture must use Account B at zoom 90%")
-        self._capture_final_profiles(plan, state, mode, resolution, (("account-b", 90),))
+        self._capture_final_profiles(
+            plan,
+            state,
+            mode,
+            resolution,
+            (("account-b", 90),),
+            minimum_event_count=minimum_event_count,
+            progress_callback=progress_callback,
+        )
         self._validate_final_sequence(plan, mode, resolution)
         return state
 
@@ -622,6 +633,9 @@ class HybridCaptureService:
         mode: HybridOutputMode,
         resolution: tuple[int, int],
         profiles: tuple[tuple[str, int], ...],
+        *,
+        minimum_event_count: int = 0,
+        progress_callback: Callable[[HybridFramePlan, HybridFrameStatus], None] | None = None,
     ) -> None:
         for profile, zoom in profiles:
             frames = [frame for frame in plan.frames if frame.calendar_profile == profile]
@@ -649,6 +663,8 @@ class HybridCaptureService:
                     state_frame.started_at = datetime.now(UTC)
                     state_frame.error = None
                     self.store.save_state(state)
+                    if progress_callback is not None:
+                        progress_callback(frame, HybridFrameStatus.CAPTURING)
                     try:
                         raw = self.store.final_raw_path(
                             plan.run_id, frame.frame_index, mode, resolution
@@ -675,15 +691,20 @@ class HybridCaptureService:
                             self.store.final_capture_failure_directory(
                                 plan.run_id, mode, resolution
                             ),
+                            minimum_event_count=minimum_event_count,
                         )
                     except Exception as error:
                         state_frame.status = HybridFrameStatus.FAILED
                         state_frame.error = str(error)
                         self.store.save_state(state)
+                        if progress_callback is not None:
+                            progress_callback(frame, HybridFrameStatus.FAILED)
                         raise
                     state_frame.status = HybridFrameStatus.COMPLETED
                     state_frame.completed_at = datetime.now(UTC)
                     self.store.save_state(state)
+                    if progress_callback is not None:
+                        progress_callback(frame, HybridFrameStatus.COMPLETED)
 
     def check_final_capture_profiles(self, plan: HybridCapturePlan) -> dict[str, object]:
         """Read-only preflight of both persistent profiles and their first target week."""
@@ -1282,7 +1303,7 @@ class HybridCaptureService:
     ) -> None:
         paths = [
             self.store.final_frame_path(plan.run_id, index, mode, resolution)
-            for index in range(108)
+            for index in range(plan.frame_count)
         ]
         if len(paths) != len(set(paths)) or any(not path.is_file() for path in paths):
             raise CalendarAnimError("Final hybrid frames contain a gap or duplicate")

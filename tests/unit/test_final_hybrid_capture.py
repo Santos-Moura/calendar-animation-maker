@@ -1641,3 +1641,58 @@ def test_single_profile_preview_uses_final_capture_code_and_never_mutates_state(
     )
     assert launched == [("account-b", 90), ("account-b", 90)]
     assert minimum_counts == [1, 1]
+
+
+def test_single_profile_full_capture_forwards_visual_gate_and_progress_callback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _hybrid_plan(tmp_path)
+    plan.capture_strategy = "single-profile-account-b"
+    for frame in plan.frames:
+        frame.calendar_profile = "account-b"
+        frame.calendar_name = "Calendar Animation Lab B"
+        frame.capture_zoom_percent = 90
+    plan = HybridCapturePlan.model_validate(plan.model_dump())
+    store = AccountBSingleCaptureStore(tmp_path / "runs")
+    state = store.initialize_state(plan, HybridOutputMode.HEADER_PRESERVED_FILL, HIGH_RESOLUTION)
+    received: dict[str, object] = {}
+
+    def callback(*_: object) -> None:
+        return None
+
+    def capture_profiles(
+        self,
+        selected_plan,
+        selected_state,
+        mode,
+        resolution,
+        profiles,
+        *,
+        minimum_event_count=0,
+        progress_callback=None,
+    ):  # type: ignore[no-untyped-def]
+        received.update(
+            {
+                "profiles": profiles,
+                "minimum_event_count": minimum_event_count,
+                "progress_callback": progress_callback,
+            }
+        )
+
+    monkeypatch.setattr(HybridCaptureService, "_capture_final_profiles", capture_profiles)
+    monkeypatch.setattr(HybridCaptureService, "_validate_final_sequence", lambda *args: None)
+
+    HybridCaptureService(store, lambda *_: None).capture_final_single_profile(
+        plan,
+        state,
+        HybridOutputMode.HEADER_PRESERVED_FILL,
+        HIGH_RESOLUTION,
+        minimum_event_count=1,
+        progress_callback=callback,
+    )
+
+    assert received == {
+        "profiles": (("account-b", 90),),
+        "minimum_event_count": 1,
+        "progress_callback": callback,
+    }

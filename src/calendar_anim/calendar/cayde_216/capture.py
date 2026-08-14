@@ -24,12 +24,14 @@ from calendar_anim.calendar.cayde_216.upload import (
 )
 from calendar_anim.calendar.hybrid_capture.artifacts import (
     AccountBSingleCaptureStore,
+    HybridCaptureStore,
     parse_output_resolution,
     resolution_name,
 )
 from calendar_anim.calendar.hybrid_capture.models import (
     HybridCapturePlan,
     HybridFramePlan,
+    HybridFrameStatus,
     HybridOutputMode,
     SingleProfilePreviewReport,
 )
@@ -44,6 +46,7 @@ PREVIEW_HUMAN_FRAMES = (1, 54, 108, 162, 216)
 PREVIEW_FRAMES_TEXT = ",".join(str(frame) for frame in PREVIEW_HUMAN_FRAMES)
 CAPTURE_RESOLUTION = (1512, 864)
 CAYDE_216_STABILIZATION_SECONDS = 5.0
+FINAL_FRAMES_TEXT = "1-216"
 
 
 def _fail(error: Exception) -> Never:
@@ -212,6 +215,140 @@ def capture_cayde_216_preview_command(
     typer.echo(f"Report: {store.preview_report_path(run_id)}")
     typer.echo("Full capture checkpoint: NOT TOUCHED")
     typer.echo("Google Calendar writes: NO")
+
+
+def capture_final_cayde_216_command(
+    run_id: Annotated[str, typer.Option("--run-id")] = RUN_ID,
+    profile: Annotated[str, typer.Option("--profile")] = "account-b",
+    frames: Annotated[str, typer.Option("--frames")] = FINAL_FRAMES_TEXT,
+    mode: Annotated[HybridOutputMode, typer.Option("--mode")] = (
+        HybridOutputMode.HEADER_PRESERVED_FILL
+    ),
+    resolution: Annotated[str, typer.Option("--resolution")] = "1512x864",
+    stabilization_seconds: Annotated[
+        float, typer.Option("--stabilization-seconds", min=0)
+    ] = CAYDE_216_STABILIZATION_SECONDS,
+    ready_timeout_seconds: Annotated[float, typer.Option("--ready-timeout-seconds", min=1)] = 90,
+    resume: Annotated[bool, typer.Option("--resume")] = False,
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+) -> None:
+    """Capture all 216 Cayde weeks read-only with atomic per-frame resume."""
+
+    try:
+        if run_id != RUN_ID or profile != "account-b" or frames != FINAL_FRAMES_TEXT:
+            raise CalendarAnimError(
+                "Final Cayde 216 capture is locked to its final run, account-b, and frames 1-216"
+            )
+        if mode is not HybridOutputMode.HEADER_PRESERVED_FILL:
+            raise CalendarAnimError("Final Cayde 216 capture requires header_preserved_fill")
+        output_resolution = parse_output_resolution(resolution)
+        if output_resolution != CAPTURE_RESOLUTION:
+            raise CalendarAnimError("Final Cayde 216 capture requires resolution 1512x864")
+        validate_cayde_216_upload(run_id, Path("input.mp4"))
+        upload_state = upload_store().load_state(run_id)
+        if (
+            upload_state.completed_count != len(upload_state.parents)
+            or len(upload_state.parents) != 43_781
+        ):
+            raise CalendarAnimError("Cayde 216 bulk upload is not complete at 43781/43781")
+        plan = build_cayde_216_capture_plan()
+        preview_store = AccountBSingleCaptureStore(Path("output/216-runs"))
+        store = HybridCaptureStore(Path("output/216-runs"))
+        store.save_plan(plan)
+        state_path = store.state_path(run_id, mode, output_resolution)
+        if execute:
+            _validate_cayde_216_preview_gate(preview_store, run_id)
+            if state_path.exists() and not resume:
+                raise CalendarAnimError(
+                    "A Cayde 216 capture checkpoint already exists; rerun with --resume"
+                )
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+
+    typer.echo("CAYDE 216 FINAL CAPTURE")
+    typer.echo(f"Run: {run_id}")
+    typer.echo("Profile: account-b only")
+    typer.echo("Zoom: 90%")
+    typer.echo("Frames: 1-216")
+    typer.echo("Weeks: 2030-05-05 -> 2034-06-18")
+    typer.echo(f"Mode: {mode.value}")
+    typer.echo(f"Resolution: {resolution_name(output_resolution)}")
+    typer.echo(f"Visual stabilization: {stabilization_seconds:g}s")
+    typer.echo(f"Execution: {'READ-ONLY BROWSER' if execute else 'DRY RUN'}")
+    typer.echo(f"Checkpoint: {state_path}")
+    typer.echo(f"Output: {store.final_frames_directory(run_id, mode, output_resolution)}")
+    if not execute:
+        typer.echo("Five-frame preview gate will be checked before execution.")
+        typer.echo("Browser opened: NO")
+        typer.echo("Google Calendar writes: NO")
+        return
+
+    try:
+        state = store.initialize_state(plan, mode, output_resolution)
+        completed_before = sum(item.status is HybridFrameStatus.COMPLETED for item in state.frames)
+        typer.echo(f"Checkpoint progress: {completed_before}/{FRAME_COUNT} completed")
+
+        def show_progress(frame: HybridFramePlan, status: HybridFrameStatus) -> None:
+            if status is HybridFrameStatus.CAPTURING:
+                typer.echo(
+                    f"Frame {frame.human_frame}/{FRAME_COUNT}: capturing week {frame.week_start}"
+                )
+            elif status is HybridFrameStatus.COMPLETED:
+                typer.echo(f"Frame {frame.human_frame}/{FRAME_COUNT}: completed")
+            else:
+                typer.secho(f"Frame {frame.human_frame}/{FRAME_COUNT}: {status.value}", fg="red")
+
+        state = HybridCaptureService(
+            store, _gateway_factory(stabilization_seconds, ready_timeout_seconds)
+        ).capture_final_single_profile(
+            plan,
+            state,
+            mode,
+            output_resolution,
+            minimum_event_count=1,
+            progress_callback=show_progress,
+        )
+    except KeyboardInterrupt:
+        typer.secho("Capture interrupted; atomic frame checkpoint was preserved.", fg="yellow")
+        raise typer.Exit(code=130) from None
+    except (CalendarAnimError, OSError, RuntimeError, ValueError) as error:
+        _fail(error)
+    completed = sum(item.status is HybridFrameStatus.COMPLETED for item in state.frames)
+    typer.echo(f"Completed: {completed}/{FRAME_COUNT}")
+    typer.echo("Google Calendar writes: NO")
+
+
+def _validate_cayde_216_preview_gate(
+    store: AccountBSingleCaptureStore, run_id: str
+) -> SingleProfilePreviewReport:
+    try:
+        report = SingleProfilePreviewReport.model_validate_json(
+            store.preview_report_path(run_id).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as error:
+        raise CalendarAnimError("Cayde 216 five-frame preview gate is missing") from error
+    expected = list(PREVIEW_HUMAN_FRAMES)
+    actual = [frame.human_frame for frame in report.frames]
+    valid = (
+        report.run_id == run_id
+        and report.preview == "PASS"
+        and report.geometry_consistent
+        and actual == expected
+        and all(
+            frame.capture == "PASS"
+            and frame.week_validation == "PASS"
+            and frame.output_size == CAPTURE_RESOLUTION
+            and frame.header_present
+            and frame.left_time_gutter_present
+            and frame.timezone_label_present
+            and not frame.pre_06_blank_gap_present
+            and Path(frame.output).is_file()
+            for frame in report.frames
+        )
+    )
+    if not valid:
+        raise CalendarAnimError("Cayde 216 five-frame preview gate is not PASS")
+    return report
 
 
 def _parse_preview_frames(value: str) -> list[int]:
