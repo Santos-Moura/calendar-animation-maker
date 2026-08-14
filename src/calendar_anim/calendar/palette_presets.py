@@ -34,9 +34,7 @@ CAYDE_CYAN_MAGENTA: Final = CalendarPalettePreset(
     source_background_hexes=("#7986CB",),
 )
 
-PALETTE_PRESETS: Final = {
-    preset.name: preset for preset in (CAYDE_FINAL, CAYDE_CYAN_MAGENTA)
-}
+PALETTE_PRESETS: Final = {preset.name: preset for preset in (CAYDE_FINAL, CAYDE_CYAN_MAGENTA)}
 
 
 def resolve_palette_preset(name: str | None) -> CalendarPalettePreset | None:
